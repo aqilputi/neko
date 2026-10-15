@@ -130,7 +130,9 @@ type runResult struct {
 // the tool's raw result.
 func run(cfg Config, tool, instruction string) (runResult, error) {
 	var r runResult
-	args := []string{"-p", "--model", cfg.Model, "--output-format", "stream-json", "--verbose",
+	// --no-session-persistence: these calls are neko's plumbing, not sessions
+	// of yours to list.
+	args := []string{"-p", "--no-session-persistence", "--model", cfg.Model, "--output-format", "stream-json", "--verbose",
 		"--max-budget-usd", fmt.Sprint(cfg.MaxBudgetUSD), "--tools", "",
 		"--allowedTools=" + toolPrefix + tool, instruction}
 	cmd := exec.Command(claudeBin(), args...)

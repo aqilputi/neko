@@ -45,7 +45,7 @@ func TestDispatchPermissionModes(t *testing.T) {
 	if msg := cmd().(dispatchedMsg); msg.err != nil || msg.id != "abcd1234" {
 		t.Fatalf("dispatch: %+v", msg)
 	}
-	if b, _ := os.ReadFile(log); !strings.Contains(string(b), "--bg --allow-dangerously-skip-permissions --permission-mode acceptEdits oi") {
+	if b, _ := os.ReadFile(log); !strings.Contains(string(b), "--bg --allow-dangerously-skip-permissions --name oi --permission-mode acceptEdits oi") {
 		t.Fatalf("args: %s", b)
 	}
 	if m.perm != 0 {

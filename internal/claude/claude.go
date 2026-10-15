@@ -58,7 +58,12 @@ func ListAgents() ([]Agent, error) {
 var shortIDRe = regexp.MustCompile(`\b([0-9a-f]{8})\b`)
 
 // Dispatch starts a background session in dir and returns its short id.
+// With no name it is named after the prompt, so it never shows as an id;
+// the title Claude gives it later takes over (see store.Session.Label).
 func Dispatch(dir, name, prompt string, extra ...string) (string, error) {
+	if name == "" {
+		name = PromptName(prompt)
+	}
 	args := []string{"--bg", AllowBypass}
 	if name != "" {
 		args = append(args, "--name", name)

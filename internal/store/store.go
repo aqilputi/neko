@@ -53,6 +53,7 @@ type Session struct {
 	CostToday   float64
 	Tokens      int64
 	LastUser    string
+	FirstUser   string
 	LastText    string
 	LastTool    string
 	WaitingTool string
@@ -92,18 +93,24 @@ func (s Session) Label() string {
 	}
 	// Names Claude derives on its own say nothing: "<dir>-3b" for interactive
 	// sessions, or the session's own id for one resumed in the background.
-	derived := s.Name == "" || strings.HasPrefix(s.Name, filepath.Base(s.Cwd)+"-") ||
-		s.Name == s.ShortID || strings.HasPrefix(s.SessionID, s.Name)
-	if s.Title != "" && derived {
+	// The name neko gives a new session from its prompt is a placeholder
+	// until Claude titles it.
+	isID := s.Name == "" || s.Name == s.ShortID || (len(s.Name) >= 8 && strings.HasPrefix(s.SessionID, s.Name))
+	derived := isID || strings.HasPrefix(s.Name, filepath.Base(s.Cwd)+"-") ||
+		(s.FirstUser != "" && s.Name == claude.PromptName(s.FirstUser))
+	switch {
+	case s.Title != "" && derived:
 		return s.Title
-	}
-	if s.Name != "" {
+	case !derived:
 		return s.Name
+	case s.FirstUser != "":
+		return claude.PromptName(s.FirstUser)
+	case !isID:
+		return s.Name
+	case s.Kind == "background":
+		return "sessão nova em " + filepath.Base(s.Cwd) // no transcript yet
 	}
-	if s.Title != "" {
-		return s.Title
-	}
-	return s.SessionID[:min(8, len(s.SessionID))]
+	return "conversa vazia em " + filepath.Base(s.Cwd)
 }
 
 // Attachable reports whether the session can be opened in the embedded pane
@@ -286,7 +293,7 @@ func (s *Store) Refresh() Snapshot {
 				continue
 			}
 			t := s.transcript(p)
-			if t.Requests == 0 || t.Cwd == "" {
+			if t.Requests == 0 || t.Cwd == "" || claude.NekoInternal(t.FirstUser) {
 				continue
 			}
 			sess := Session{SessionID: sid, Cwd: t.Cwd, Kind: "history", State: "history", Started: t.Started}
@@ -361,6 +368,7 @@ func fill(sess *Session, t *claude.Transcript, window time.Time) {
 	sess.Model, sess.Cost, sess.Tokens = t.Model, t.TotalCost(), t.Tokens
 	sess.CostToday = t.CostByDay[time.Now().Format("2006-01-02")]
 	sess.LastUser, sess.LastText, sess.LastTool, sess.WaitingTool = t.LastUser, t.LastText, t.LastTool, t.WaitingTool
+	sess.FirstUser = t.FirstUser
 	sess.LastAt = t.LastAt
 	if sess.LastAt.IsZero() {
 		sess.LastAt = sess.Started

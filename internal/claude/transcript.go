@@ -53,6 +53,7 @@ type Transcript struct {
 	Tokens      int64 // output tokens
 	Requests    int
 	LastUser    string
+	FirstUser   string // the first real request: names a session with no title
 	LastText    string // last assistant text block
 	LastTool    string // last tool_use name (+ a hint of its input)
 	LastAt      time.Time
@@ -292,6 +293,7 @@ func (t *Transcript) apply(r record, m *message, price Pricer) {
 		if s != "" && !strings.HasPrefix(s, "<") {
 			t.LastUser = oneLine(s, 200)
 			t.WaitingTool = ""
+			t.noteFirst(s)
 		}
 		for _, b := range bs {
 			switch b.Type {
@@ -303,10 +305,51 @@ func (t *Transcript) apply(r record, m *message, price Pricer) {
 			case "text":
 				if !strings.HasPrefix(b.Text, "<") && strings.TrimSpace(b.Text) != "" {
 					t.LastUser = oneLine(b.Text, 200)
+					t.noteFirst(b.Text)
 				}
 			}
 		}
 	}
+}
+
+// noteFirst keeps the first user text that is a request, not a skill's
+// preamble or an interruption notice.
+func (t *Transcript) noteFirst(s string) {
+	if t.FirstUser != "" {
+		return
+	}
+	s = strings.TrimSpace(s)
+	for _, p := range []string{"Base directory for this skill:", "[Request interrupted", "Caveat:", "[structured-output"} {
+		if strings.HasPrefix(s, p) {
+			return
+		}
+	}
+	t.FirstUser = oneLine(s, 200)
+}
+
+// PromptName turns a request into a short session name: its first line,
+// cut at a word boundary.
+func PromptName(s string) string {
+	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
+	s = strings.Join(strings.Fields(s), " ")
+	const n = 48
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	cut := string(r[:n])
+	if i := strings.LastIndex(cut, " "); i > n/2 {
+		cut = cut[:i]
+	}
+	return strings.TrimRight(cut, " ,.;:-") + "…"
+}
+
+// NekoInternal reports whether a request is one of neko's own headless calls
+// (the Jira tool calls), which are not sessions of yours.
+func NekoInternal(firstUser string) bool {
+	return strings.HasPrefix(firstUser, "Chame ") && strings.Contains(firstUser, " exatamente uma vez com ") ||
+		strings.HasPrefix(firstUser, "Use searchJiraIssuesUsingJql no site") // early versions
+
 }
 
 type subMeta struct {
@@ -349,6 +392,18 @@ func (t *Transcript) refreshSubagents(price Pricer) {
 		_ = t.tail(p, &st.off, &st.partial, func(r record, m *message) {
 			if ts := parseTime(r.Timestamp); ts.After(s.LastAt) {
 				s.LastAt = ts
+			}
+			if r.Type == "user" && m != nil && s.Description == "" {
+				// no description in the meta: name it after the task it got
+				bs, str := blocks(m.Content)
+				for _, b := range bs {
+					if str == "" && b.Type == "text" {
+						str = b.Text
+					}
+				}
+				if str = strings.TrimSpace(str); str != "" && !strings.HasPrefix(str, "<") {
+					s.Description = PromptName(str)
+				}
 			}
 			if r.Type != "assistant" || m == nil {
 				return
