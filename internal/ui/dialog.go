@@ -12,9 +12,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 
-	"github.com/fakio/neko/internal/config"
-	"github.com/fakio/neko/internal/store"
-	"github.com/fakio/neko/internal/theme"
+	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/neko/internal/store"
+	"github.com/aqilputi/neko/internal/theme"
 )
 
 // dialog is a box drawn over the UI. While one is open every key goes to

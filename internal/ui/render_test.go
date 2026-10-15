@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/fakio/neko/internal/config"
+	"github.com/aqilputi/neko/internal/config"
 )
 
 // TestRenderSnapshot renders one frame with real data (NEKO_RENDER=1) to

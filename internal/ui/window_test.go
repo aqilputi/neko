@@ -3,9 +3,9 @@ package ui
 import (
 	"testing"
 
-	"github.com/fakio/neko/internal/claude"
-	"github.com/fakio/neko/internal/config"
-	"github.com/fakio/neko/internal/store"
+	"github.com/aqilputi/neko/internal/claude"
+	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/neko/internal/store"
 )
 
 // The window's % is split by what each session consumed in the window.

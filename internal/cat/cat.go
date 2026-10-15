@@ -8,7 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/fakio/neko/internal/theme"
+	"github.com/aqilputi/neko/internal/theme"
 )
 
 type Model struct {

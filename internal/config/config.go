@@ -10,7 +10,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/fakio/neko/internal/jira"
+	"github.com/aqilputi/neko/internal/jira"
 )
 
 // Rule maps sessions whose cwd matches Match (a regexp on the cwd with ~

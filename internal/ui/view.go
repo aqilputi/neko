@@ -11,10 +11,10 @@ import (
 	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 
-	"github.com/fakio/neko/internal/config"
-	"github.com/fakio/neko/internal/jira"
-	"github.com/fakio/neko/internal/store"
-	"github.com/fakio/neko/internal/theme"
+	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/neko/internal/jira"
+	"github.com/aqilputi/neko/internal/store"
+	"github.com/aqilputi/neko/internal/theme"
 )
 
 func lipglossWidth(s string) int { return lipgloss.Width(s) }

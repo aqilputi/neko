@@ -8,8 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/fakio/neko/internal/config"
-	"github.com/fakio/neko/internal/term"
+	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/neko/internal/term"
 )
 
 // The pane's cells must land inside the right panel's border.

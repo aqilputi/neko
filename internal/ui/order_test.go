@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fakio/neko/internal/config"
-	"github.com/fakio/neko/internal/store"
+	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/neko/internal/store"
 )
 
 func sessOrder(m *Model) []string {

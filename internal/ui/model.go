@@ -15,15 +15,15 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 
-	"github.com/fakio/neko/internal/cat"
-	"github.com/fakio/neko/internal/claude"
-	"github.com/fakio/neko/internal/config"
-	"github.com/fakio/neko/internal/events"
-	"github.com/fakio/neko/internal/jira"
-	"github.com/fakio/neko/internal/store"
-	"github.com/fakio/neko/internal/term"
-	"github.com/fakio/neko/internal/theme"
-	"github.com/fakio/neko/internal/todo"
+	"github.com/aqilputi/neko/internal/cat"
+	"github.com/aqilputi/neko/internal/claude"
+	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/neko/internal/events"
+	"github.com/aqilputi/neko/internal/jira"
+	"github.com/aqilputi/neko/internal/store"
+	"github.com/aqilputi/neko/internal/term"
+	"github.com/aqilputi/neko/internal/theme"
+	"github.com/aqilputi/neko/internal/todo"
 )
 
 type tab int

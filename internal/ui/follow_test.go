@@ -3,9 +3,9 @@ package ui
 import (
 	"testing"
 
-	"github.com/fakio/neko/internal/config"
-	"github.com/fakio/neko/internal/store"
-	"github.com/fakio/neko/internal/term"
+	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/neko/internal/store"
+	"github.com/aqilputi/neko/internal/term"
 )
 
 // The right side follows the selection: the pane shows only on its own

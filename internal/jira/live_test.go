@@ -5,12 +5,17 @@ import (
 	"testing"
 )
 
-// TestLiveFetch hits Jira through claude -p (costs ~$0.1). NEKO_JIRA_LIVE=1.
+// TestLiveFetch hits Jira through claude -p (costs ~$0.1).
+// NEKO_JIRA_LIVE=1 NEKO_JIRA_SITE=acme.atlassian.net [NEKO_JIRA_CLOUD_ID=<uuid>].
 func TestLiveFetch(t *testing.T) {
 	if os.Getenv("NEKO_JIRA_LIVE") == "" {
 		t.Skip("set NEKO_JIRA_LIVE=1")
 	}
-	c, err := Fetch(Config{Site: "visio-ai.atlassian.net", CloudID: "099502f7-be3e-4a49-9c78-30e413a6170d"})
+	site := os.Getenv("NEKO_JIRA_SITE")
+	if site == "" {
+		t.Skip("set NEKO_JIRA_SITE")
+	}
+	c, err := Fetch(Config{Site: site, CloudID: os.Getenv("NEKO_JIRA_CLOUD_ID")}.WithDefaults())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,7 +24,7 @@ import (
 
 type Config struct {
 	Enabled        bool     `toml:"enabled"`
-	Site           string   `toml:"site"`     // visio-ai.atlassian.net
+	Site           string   `toml:"site"`     // e.g. acme.atlassian.net
 	CloudID        string   `toml:"cloud_id"` // UUID or site
 	AccountID      string   `toml:"account_id"`
 	Projects       []string `toml:"projects"`
@@ -58,9 +58,6 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.CloudID == "" {
 		c.CloudID = c.Site
-	}
-	if c.ApproveHint == "" {
-		c.ApproveHint = "! python3 ~/.claude/skills/visio-dev-integrations-guarded-access/scripts/guarded-access.py approve-writes jira --minutes 30"
 	}
 	return c
 }

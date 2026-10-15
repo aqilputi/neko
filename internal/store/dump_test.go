@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fakio/neko/internal/config"
+	"github.com/aqilputi/neko/internal/config"
 )
 
 // TestDump prints the live session list (NEKO_DUMP=1).

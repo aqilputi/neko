@@ -17,7 +17,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/fakio/neko/internal/term"
+	"github.com/aqilputi/neko/internal/term"
 )
 
 func main() {

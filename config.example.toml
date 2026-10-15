@@ -11,16 +11,16 @@ show_history_days = 2        # também lista sessões fechadas dos últimos N di
 
 # @contexto da skill todo → diretório onde o agent da tarefa começa
 [todo_repos]
-"@ai_registry" = "~/visio/dev/ai_registry"
+"@meu-repo" = "~/dev/meu-repo"
 "@maquina-local" = "~"
 
-repo_roots = ["~/visio/dev", "~/dev", "~"]   # onde procurar @contexto não mapeado
+repo_roots = ["~/work", "~/dev", "~"]   # onde procurar @contexto não mapeado
 
 # Regras de contexto: a primeira que casar com o cwd (com ~) vence. Se definir
 # alguma, as padrão deixam de valer — copie as que quiser manter.
 # [[context]]
-# match = '^~/visio/dev/([^/]+)'
-# name = "visio · $1"
+# match = '^~/work/([^/]+)'
+# name = "trabalho · $1"
 
 # Preços (USD/MTok). Linhas suas vêm antes das padrão; a primeira que casar vence.
 # [[price]]
@@ -32,11 +32,12 @@ repo_roots = ["~/visio/dev", "~/dev", "~"]   # onde procurar @contexto não mape
 
 [jira]                       # via claude -p + conector Atlassian; sem token
 enabled = true
-site = "visio-ai.atlassian.net"
+site = "acme.atlassian.net"
 cloud_id = "<uuid do site>"
 account_id = "<seu accountId>"   # assignee das issues criadas
-default_project = "VISRES"
+default_project = "PROJ"
 default_type = "Task"
-agent_dir = "~/visio/dev"
+agent_dir = "~/work"
 cache_minutes = 30
+# approve_hint = "<comando que libera a escrita, se um hook bloquear>"
 # jql = "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC"

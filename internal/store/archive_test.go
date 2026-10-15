@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fakio/neko/internal/config"
+	"github.com/aqilputi/neko/internal/config"
 )
 
 // fakeAgents makes `claude agents --json` report two background sessions

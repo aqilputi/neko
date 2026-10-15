@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fakio/neko/internal/claude"
-	"github.com/fakio/neko/internal/config"
+	"github.com/aqilputi/neko/internal/claude"
+	"github.com/aqilputi/neko/internal/config"
 )
 
 // Attention ranks why a session needs the user. Lower is more urgent.

@@ -10,14 +10,14 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/fakio/neko/internal/claude"
-	"github.com/fakio/neko/internal/config"
-	"github.com/fakio/neko/internal/events"
-	"github.com/fakio/neko/internal/jira"
-	"github.com/fakio/neko/internal/store"
-	"github.com/fakio/neko/internal/term"
-	"github.com/fakio/neko/internal/theme"
-	"github.com/fakio/neko/internal/todo"
+	"github.com/aqilputi/neko/internal/claude"
+	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/neko/internal/events"
+	"github.com/aqilputi/neko/internal/jira"
+	"github.com/aqilputi/neko/internal/store"
+	"github.com/aqilputi/neko/internal/term"
+	"github.com/aqilputi/neko/internal/theme"
+	"github.com/aqilputi/neko/internal/todo"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -142,6 +142,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 
 	case jiraCreatedMsg:
 		if errors.Is(msg.err, jira.ErrNeedsApproval) {
+			if m.cfg.Jira.ApproveHint == "" {
+				return stickyToast("um hook bloqueou a escrita no Jira — libere a escrita e aperte J de novo")
+			}
 			return stickyToast("o guard bloqueou a escrita no Jira — rode no Claude Code:  " + m.cfg.Jira.ApproveHint + "  e aperte J de novo")
 		}
 		if msg.err != nil {

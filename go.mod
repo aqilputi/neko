@@ -1,4 +1,4 @@
-module github.com/fakio/neko
+module github.com/aqilputi/neko
 
 go 1.27.2
 
