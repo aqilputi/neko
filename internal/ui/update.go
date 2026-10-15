@@ -142,14 +142,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return toastCmd(fmt.Sprintf("jira: %d issues (custou $%.2f)", len(m.jira.Issues), m.jira.CostUSD), false)
 
 	case jiraCreatedMsg:
-		if errors.Is(msg.err, jira.ErrNeedsApproval) {
-			if m.cfg.Jira.ApproveHint == "" {
-				return stickyToast("um hook bloqueou a escrita no Jira — libere a escrita e aperte J de novo")
-			}
-			return stickyToast("o guard bloqueou a escrita no Jira — rode no Claude Code:  " + m.cfg.Jira.ApproveHint + "  e aperte J de novo")
+		var denied jira.DeniedError
+		if errors.As(msg.err, &denied) && m.cfg.Jira.ApproveHint != "" {
+			return stickyToast("jira: " + denied.Error() + "  — se for o seu hook, rode:  " + m.cfg.Jira.ApproveHint + "  e aperte J de novo")
 		}
 		if msg.err != nil {
-			return stickyToast("jira: " + msg.err.Error())
+			return stickyToast("jira: " + msg.err.Error() + "  (log: ~/.cache/neko/jira-last.jsonl)")
 		}
 		id, key := msg.task, msg.key
 		return tea.Batch(

@@ -29,10 +29,15 @@ respondeu `[]` sem ter carregado o conector. Se a ferramenta não foi chamada, o
 - `enter` numa issue dispara um agent em `agent_dir` com a instrução de ler a issue completa primeiro.
 - O cache fica em `~/.cache/neko/jira.json` e vale `cache_minutes`.
 
-## Escrita bloqueada por hook
+## Permissões e escrita negada
 
-Se um hook `PreToolUse` seu bloquear a escrita no Jira, o neko mostra um aviso fixo. Com `approve_hint`
-configurado, o aviso inclui o comando que libera a escrita.
+O `claude -p` roda com `--permission-mode default`: só a ferramenta do `--allowedTools` passa, mesmo que o seu
+`defaultMode` seja `auto`. Sem isso, o classificador do auto mode negava toda criação de issue ("External System
+Writes") depois de você já ter confirmado no neko. Os hooks `PreToolUse` do seu settings continuam valendo.
+
+Quando o claude nega uma chamada (regra de permissão ou hook), o neko mostra um aviso fixo com o motivo que ele
+deu. Com `approve_hint` configurado, o aviso inclui também o comando que libera a escrita. Essas chamadas não
+deixam transcript (`--no-session-persistence`); o `stream-json` da última fica em `~/.cache/neko/jira-last.jsonl`.
 
 **Estado:** criar issue pelo neko ainda não foi testado de ponta a ponta (por isso `status: draft`).
 
