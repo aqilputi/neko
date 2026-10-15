@@ -55,6 +55,9 @@ const (
 	inNewPrompt
 	inDispatchDir
 	inFilter
+	inRename    // draftDir = sessionId
+	inRenameCtx // draftDir = the context as shown
+	inMove      // draftDir = sessionId
 )
 
 // row is one line of the flattened tree.

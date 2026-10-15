@@ -24,6 +24,8 @@ são geradas a partir dele.
 | `H` | mostra/esconde sessões paradas (> `stale_days`) e arquivadas |
 | `S` | ordem: atividade → custo → nome |
 | `X` | arquiva / desarquiva a sessão (some do inbox e da árvore) |
+| `n` | renomeia a sessão; no cabeçalho de um contexto, renomeia a seção inteira (vazio desfaz) |
+| `m` | muda a sessão de contexto (vazio volta à regra do diretório) |
 | `enter` | abre a sessão no painel e foca (INSERT) |
 | `o` / `O` | abre sem focar / tela cheia (`←` dentro do claude volta) |
 | `i` / `ctrl+]` | entra / sai do INSERT (as teclas vão pro claude) |

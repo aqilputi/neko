@@ -11,7 +11,7 @@ type keyMap struct {
 	Up, Down, Top, Bottom, HalfDown, HalfUp, PageDown, PageUp     key.Binding
 	Collapse, Expand, Toggle, NextAttn, PrevAttn                  key.Binding
 	TabSessions, TabInbox, TabTodos, TabArchive, NextTab, PrevTab key.Binding
-	Filter, ShowAll, Sort, Archive                                key.Binding
+	Filter, ShowAll, Sort, Archive, Rename, Move                  key.Binding
 
 	Open, Preview, Full, Insert, Reply, New, Stop, Remove, Close, Zoom key.Binding
 
@@ -53,6 +53,8 @@ var keys = keyMap{
 	ShowAll: kb(ks("H"), "H", "mostra paradas/arquivadas/subagents concluídos"),
 	Sort:    kb(ks("S"), "S", "ordem: atividade/custo/nome"),
 	Archive: kb(ks("X"), "X", "arquiva/restaura (no contexto: todas)"),
+	Rename:  kb(ks("n"), "n", "renomeia sessão (no contexto: a seção)"),
+	Move:    kb(ks("m"), "m", "muda a sessão de contexto"),
 
 	Open:    kb(ks("enter"), "enter", "abre e foca"),
 	Preview: kb(ks("o"), "o", "abre sem focar"),
@@ -105,13 +107,13 @@ func (m *Model) shortHelp() []key.Binding {
 	case tabTodos:
 		b = append(b, k.Dispatch, k.Jira, k.Start, k.Done, k.JiraFetch, k.OpenURL)
 	case tabInbox:
-		b = append(b, k.Reply, k.Open, k.Archive, k.Full)
+		b = append(b, k.Reply, k.Open, k.Archive, k.Rename, k.Full)
 	case tabArchive:
 		r := k.Archive
 		r.SetHelp("X", "restaura (no contexto: todas)")
 		b = append(b, r, k.Open, k.Filter)
 	default:
-		b = append(b, k.Open, k.Reply, k.Archive, k.NextAttn, k.New, k.Filter, k.ShowAll, k.Sort)
+		b = append(b, k.Open, k.Reply, k.Archive, k.Rename, k.NextAttn, k.New, k.Move, k.Filter, k.ShowAll, k.Sort)
 	}
 	b = append(b, k.Switch, k.Palette, k.Usage)
 	// short labels for the bar; ctrl+/ shows the full descriptions
@@ -130,7 +132,8 @@ var barLabels = map[string]string{
 	"ordem: atividade/custo/nome": "ordem", "ir p/ chat rodando/esperando": "chats vivos", "comandos": "comandos",
 	"uso (/usage)": "uso", "INSERT no painel": "foca painel", "fecha painel": "fecha", "zoom do painel": "zoom",
 	"dispara agent": "agent", "todo↔jira": "jira", "busca jira": "busca jira", "abre no browser": "browser",
-	"tela cheia": "tela cheia",
+	"tela cheia": "tela cheia", "renomeia sessão (no contexto: a seção)": "renomeia",
+	"muda a sessão de contexto": "contexto",
 }
 
 // fullHelp is the help dialog, in columns.
@@ -139,7 +142,7 @@ func fullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Down, k.Up, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Collapse, k.Expand, k.Toggle, k.NextAttn, k.PrevAttn},
 		{k.Open, k.Preview, k.Full, k.Insert, leaveInsert, k.Reply, k.New, k.Stop, k.Remove, k.Close, k.Zoom},
-		{k.TabSessions, k.TabInbox, k.TabTodos, k.TabArchive, k.NextTab, k.Filter, k.ShowAll, k.Sort, k.Archive},
+		{k.TabSessions, k.TabInbox, k.TabTodos, k.TabArchive, k.NextTab, k.Filter, k.ShowAll, k.Sort, k.Archive, k.Rename, k.Move},
 		{k.Dispatch, k.Start, k.Done, k.Jira, k.JiraFetch, k.OpenURL, k.Switch, k.Palette, k.Usage, k.Theme, k.Refresh, k.Help, k.Quit},
 	}
 }

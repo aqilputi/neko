@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -469,6 +470,21 @@ func (m *Model) keyNormal(k tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, m.toggleArchive()
 	case key.Matches(k, km.TabArchive):
 		m.tab = tabArchive
+	case !todos && key.Matches(k, km.Rename):
+		if r := m.cur(); m.tab != tabInbox && r != nil && r.kind == "ctx" {
+			m.draftDir = r.ctx
+			return true, m.ask(inRenameCtx, "renomeia a seção \""+truncate(r.ctx, 30)+"\" (vazio desfaz) › ", r.ctx)
+		}
+		if sel := m.selected(); sel != nil {
+			m.draftDir = sel.SessionID
+			return true, m.ask(inRename, "renomeia (vazio volta ao nome do claude) › ", sel.Label())
+		}
+	case !todos && key.Matches(k, km.Move):
+		if sel := m.selected(); sel != nil {
+			m.draftDir = sel.SessionID
+			hint := strings.Join(m.contextNames(), " · ")
+			return true, m.ask(inMove, "contexto ("+truncate(hint, 50)+"; vazio volta à regra do diretório) › ", sel.Context)
+		}
 	case todos && key.Matches(k, km.Jira):
 		return true, m.jiraAction()
 	case todos && key.Matches(k, km.JiraFetch):
@@ -706,8 +722,50 @@ func (m *Model) submitInput() tea.Cmd {
 			return nil
 		}
 		return m.dispatch(m.draftDir, "", val, nil)
+	case inRename:
+		m.store.Rename(m.draftDir, val)
+		return m.afterOverride("renomeada")
+	case inMove:
+		m.store.SetContext(m.draftDir, val)
+		if val == "" {
+			return m.afterOverride("contexto volta à regra do diretório")
+		}
+		return m.afterOverride("movida para " + val)
+	case inRenameCtx:
+		if val == m.draftDir {
+			return nil
+		}
+		m.store.RenameContext(m.draftDir, val)
+		if m.ctxColor != nil {
+			if c, ok := m.ctxColor[m.draftDir]; ok && val != "" {
+				m.ctxColor[val] = c // keep the section's color
+			}
+		}
+		return m.afterOverride("seção renomeada")
 	}
 	return nil
+}
+
+// afterOverride shows a name/context change right away, without waiting
+// for the next refresh.
+func (m *Model) afterOverride(msg string) tea.Cmd {
+	m.store.Reapply(m.snap.Sessions)
+	m.rebuild()
+	return tea.Batch(toastCmd(msg, false), m.refresh())
+}
+
+// contextNames lists the contexts in the current snapshot, for the move prompt.
+func (m *Model) contextNames() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range m.snap.Sessions {
+		if !seen[s.Context] {
+			seen[s.Context] = true
+			out = append(out, s.Context)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (m *Model) curRow() *todoRow {

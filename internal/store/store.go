@@ -78,10 +78,18 @@ type Session struct {
 	// seen. Both are hidden like stale ones.
 	Ended    bool
 	Finished bool
+
+	// Set by hand (n / m): a name of your own, and a context that overrides
+	// the cwd rule.
+	CustomName string
+	ContextSet bool
 }
 
 // Label is the best human name for the session.
 func (s Session) Label() string {
+	if s.CustomName != "" {
+		return s.CustomName
+	}
 	// Names Claude derives on its own say nothing: "<dir>-3b" for interactive
 	// sessions, or the session's own id for one resumed in the background.
 	derived := s.Name == "" || strings.HasPrefix(s.Name, filepath.Base(s.Cwd)+"-") ||
@@ -117,14 +125,16 @@ type Store struct {
 
 	windowStart time.Time // start of the current 5-hour window (from /usage)
 
-	mu       sync.Mutex           // guards seen/archived/windowStart: written by the UI, read by Refresh
+	mu       sync.Mutex           // guards seen/archived/ov/windowStart: written by the UI, read by Refresh
 	seen     map[string]time.Time // sessionId → LastAt the user has looked at
 	archived map[string]time.Time // sessionId → when it was archived by hand
+	ov       overrides            // names and contexts set by hand
 }
 
 func New(cfg config.Config) *Store {
 	s := &Store{cfg: cfg, trans: map[string]*claude.Transcript{}, seen: map[string]time.Time{}, archived: map[string]time.Time{}}
 	s.loadSeen()
+	s.loadOverrides()
 	return s
 }
 
@@ -288,6 +298,7 @@ func (s *Store) Refresh() Snapshot {
 	for i := range snap.Sessions {
 		ss := &snap.Sessions[i]
 		ss.Context = s.cfg.ContextFor(ss.Cwd)
+		s.applyOverrides(ss)
 		if ss.LastAt.IsZero() { // no transcript yet: its start is its last activity
 			ss.LastAt = ss.Started
 		}
