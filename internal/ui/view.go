@@ -26,7 +26,8 @@ func (m *Model) layout() (int, int, int) {
 	if m.zoom && m.active != "" {
 		return 0, m.w, max(bodyH, 5)
 	}
-	left := max(m.w*45/100, 44)
+	// the list gets a third, the panel (the claude session) two thirds
+	left := max(m.w/3, 36)
 	if left > m.w-30 {
 		left = m.w / 2
 	}
@@ -411,7 +412,7 @@ func (m *Model) treeView(t theme.Theme, w, h int) string {
 	frame := m.catFrame()
 	start, end := scroll(m.cursor, len(m.rows), h)
 	var lines []string
-	barW := 8
+	barW := 4 // 8 levels per cell: 1–2% still shows
 	for i := start; i < end; i++ {
 		r := m.rows[i]
 		sel := i == m.cursor
@@ -514,6 +515,10 @@ func stripFirst(s string) string {
 
 func shortModel(m string) string {
 	m = strings.TrimPrefix(m, "claude-")
+	// drop the snapshot date: haiku-4-5-20251001 → haiku-4-5
+	if i := strings.LastIndex(m, "-"); i > 0 && len(m)-i == 9 && strings.Trim(m[i+1:], "0123456789") == "" {
+		m = m[:i]
+	}
 	if m == "" {
 		return "?"
 	}
