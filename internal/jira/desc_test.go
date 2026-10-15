@@ -7,9 +7,9 @@ import (
 
 func TestCleanDesc(t *testing.T) {
 	cases := map[string]string{
-		`null`:           "",
-		`{"type":"doc"}`: "",
-		`"* \\[x\\] feito \\~16:30\n\n\n\nfim"`:            "* [x] feito ~16:30\n\nfim",
+		`null`:                                  "",
+		`{"type":"doc"}`:                        "",
+		`"* \\[x\\] feito \\~16:30\n\n\n\nfim"`: "* [x] feito ~16:30\n\nfim",
 		`"antes ![](blob:https://x/?a=b&url=null) depois"`: "antes [imagem] depois",
 		`"\u200c\n## Título"`:                              "## Título",
 	}

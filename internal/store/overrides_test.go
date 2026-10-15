@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fakio/neko/internal/config"
+	"github.com/aqilputi/neko/internal/config"
 )
 
 func TestOverrides(t *testing.T) {

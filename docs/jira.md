@@ -26,6 +26,7 @@ respondeu `[]` sem ter carregado o conector. Se a ferramenta não foi chamada, o
 - Aba Todos: `F` busca suas issues (~$0,05–0,12 por busca), `o` abre a issue no browser, `J` numa issue a
   transforma em todo e `J` num todo cria a issue, com confirmação.
 - O vínculo entre todo e issue é feito com `--ref jira:KEY` mais a tag `jira`.
+- A busca traz também a descrição (markdown) de cada issue: ela aparece no detalhe e vai no prompt do agent.
 - `enter` numa issue dispara um agent em `agent_dir` com a instrução de ler a issue completa primeiro.
 - O cache fica em `~/.cache/neko/jira.json` e vale `cache_minutes`.
 

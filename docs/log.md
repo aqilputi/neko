@@ -4,6 +4,12 @@ Histórico de decisões e progresso. Entradas mais recentes no topo.
 
 ## 2026-10-15
 
+- **correção:** `J` num todo não criava a issue. Com `defaultMode: auto`, o classificador negava o
+  `createJiraIssue` ("External System Writes") e o neko atribuía a negação ao guard. O `claude -p` agora roda com
+  `--permission-mode default`, a negação mostra o motivo real e a última chamada fica em
+  `~/.cache/neko/jira-last.jsonl` ([jira.md](jira.md#permissões-e-escrita-negada)).
+- **progresso:** renomear sessão/seção (`n`) e mudar sessão de contexto (`m`); nomes nunca mostram hash; layout
+  1/3 lista · 2/3 painel; descrições das issues do Jira no detalhe e no prompt do agent.
 - **publicação:** repositório público em github.com/aqilputi/neko, documentação reorganizada como
   bundle OKF 0.2 em `docs/`, licença MIT. Módulo renomeado para `github.com/aqilputi/neko`.
   O `.gitignore` ignorava `cmd/neko/` por engano (padrão `neko` sem âncora) e foi corrigido para `/neko`.
