@@ -71,6 +71,7 @@ type Issue struct {
 	Priority  string `json:"priority"`
 	Updated   string `json:"updated"`
 	URL       string `json:"url"`
+	Desc      string `json:"desc,omitempty"` // markdown
 }
 
 func (i Issue) UpdatedAt() time.Time {
@@ -192,6 +193,7 @@ func run(cfg Config, tool, instruction string) (runResult, error) {
 			r.cost, r.final, r.denied = ev.TotalCost, ev.Result, len(ev.Denials) > 0
 		}
 	}
+	r.toolText = spilled(r.toolText)
 	if r.toolText == "" {
 		if r.denied {
 			return r, ErrNeedsApproval
@@ -206,6 +208,24 @@ func run(cfg Config, tool, instruction string) (runResult, error) {
 		return r, fmt.Errorf("%s: %s", tool, oneLine(r.toolText, 200))
 	}
 	return r, nil
+}
+
+var spilledRe = regexp.MustCompile(`^Error: result \(.*\) exceeds maximum allowed tokens\. Output has been saved to (\S+?\.txt)`)
+
+// spilled follows Claude Code's "output too large" notice to the file it
+// saved the full tool result in, so big results (e.g. issues with their
+// descriptions) reach neko without the model ingesting them.
+func spilled(text string) string {
+	m := spilledRe.FindStringSubmatch(text)
+	if m == nil {
+		return text
+	}
+	b, err := os.ReadFile(m[1])
+	if err != nil {
+		return text
+	}
+	_ = os.Remove(m[1])
+	return string(b)
 }
 
 func claudeBin() string {
@@ -244,7 +264,8 @@ func oneLine(s string, n int) string {
 func Fetch(cfg Config) (Cache, error) {
 	cfg = cfg.WithDefaults()
 	instr := fmt.Sprintf("Chame searchJiraIssuesUsingJql exatamente uma vez com cloudId=%q, jql=%q, "+
-		"fields=[\"summary\",\"status\",\"issuetype\",\"priority\",\"updated\"], maxResults=100. Depois responda apenas 'ok'.",
+		"fields=[\"summary\",\"description\",\"status\",\"issuetype\",\"priority\",\"updated\"], "+
+		"responseContentFormat=\"markdown\", maxResults=100. Depois responda apenas 'ok'.",
 		cfg.CloudID, cfg.JQL)
 	r, err := run(cfg, "searchJiraIssuesUsingJql", instr)
 	if err != nil {
@@ -256,8 +277,9 @@ func Fetch(cfg Config) (Cache, error) {
 				Key    string `json:"key"`
 				WebURL string `json:"webUrl"`
 				Fields struct {
-					Summary string `json:"summary"`
-					Updated string `json:"updated"`
+					Summary string          `json:"summary"`
+					Desc    json.RawMessage `json:"description"`
+					Updated string          `json:"updated"`
 					Status  struct {
 						Name string `json:"name"`
 						Cat  struct {
@@ -275,7 +297,7 @@ func Fetch(cfg Config) (Cache, error) {
 		} `json:"issues"`
 	}
 	if err := json.Unmarshal([]byte(r.toolText), &res); err != nil {
-		return Cache{}, fmt.Errorf("resposta do Jira inesperada: %v", err)
+		return Cache{}, fmt.Errorf("resposta do Jira inesperada: %v: %s", err, oneLine(r.toolText, 300))
 	}
 	c := Cache{FetchedAt: time.Now(), CostUSD: r.cost}
 	for _, n := range res.Issues.Nodes {
@@ -286,10 +308,32 @@ func Fetch(cfg Config) (Cache, error) {
 		c.Issues = append(c.Issues, Issue{
 			Key: n.Key, Summary: n.Fields.Summary, Status: n.Fields.Status.Name, StatusCat: n.Fields.Status.Cat.Key,
 			Type: n.Fields.Type.Name, Priority: n.Fields.Priority.Name, Updated: n.Fields.Updated, URL: url,
+			Desc: cleanDesc(n.Fields.Desc),
 		})
 	}
 	saveCache(c)
 	return c, nil
+}
+
+var (
+	mdEscapeRe = regexp.MustCompile(`\\([\\\[\]~*_#+\-.!|{}()<>` + "`" + `])`)
+	blobImgRe  = regexp.MustCompile(`!\[[^\]]*\]\(blob:[^)]*\)`)
+	blankRunRe = regexp.MustCompile(`\n{3,}`)
+)
+
+// cleanDesc turns the markdown description into something readable in a
+// terminal: no backslash escapes, no blob: image links (they only resolve in
+// the browser). A null or ADF (non-string) description becomes "".
+func cleanDesc(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	s = blobImgRe.ReplaceAllString(s, "[imagem]")
+	s = mdEscapeRe.ReplaceAllString(s, "$1")
+	s = strings.ReplaceAll(s, "\u200c", "")
+	s = blankRunRe.ReplaceAllString(s, "\n\n")
+	return strings.TrimSpace(s)
 }
 
 var keyRe = regexp.MustCompile(`\b([A-Z][A-Z0-9]+-\d+)\b`)
@@ -337,8 +381,12 @@ func Create(cfg Config, n NewIssue) (string, float64, error) {
 
 // AgentPrompt is the prompt for an agent dispatched to work on an issue.
 func AgentPrompt(i Issue) string {
-	return fmt.Sprintf("Trabalhe na issue %s do Jira: %s\nLink: %s\n"+
-		"Leia a issue completa (descrição e comentários) com as ferramentas do Atlassian antes de começar. "+
+	desc := ""
+	if i.Desc != "" {
+		desc = "Descrição (cache do neko, pode estar desatualizada):\n" + i.Desc + "\n\n"
+	}
+	return fmt.Sprintf("Trabalhe na issue %s do Jira: %s\nLink: %s\n\n%s"+
+		"Leia a issue atual (descrição e comentários) com as ferramentas do Atlassian antes de começar. "+
 		"Antes de qualquer ação irreversível ou externa (merge, push, deploy, comentário ou transição no Jira), pare e me pergunte.",
-		i.Key, i.Summary, i.URL)
+		i.Key, i.Summary, i.URL, desc)
 }

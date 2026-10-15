@@ -691,7 +691,7 @@ func (m *Model) right(t theme.Theme, w, h int) string {
 		return panel(t, w, h, m.mode == modeInsert, title, "")
 	}
 	if m.tab == tabTodos {
-		return panel(t, w, h, false, "tarefa", m.todoDetail(t, w-4))
+		return panel(t, w, h, false, "tarefa", m.todoDetail(t, w-4, h-2))
 	}
 	s := m.selected()
 	if s == nil {
@@ -843,7 +843,32 @@ func (m *Model) ctxDetail(t theme.Theme, ctx string, w int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *Model) todoDetail(t theme.Theme, w int) string {
+// clipLines keeps at most n lines of s, marking the cut with "…".
+func clipLines(s string, n int) string {
+	ls := strings.Split(s, "\n")
+	if n <= 0 {
+		return ""
+	}
+	if len(ls) > n {
+		ls = append(ls[:n-1], "…")
+	}
+	return strings.Join(ls, "\n")
+}
+
+// withDesc puts a wrapped description between the fields and the hint,
+// clipped so the hint stays visible in a panel h lines tall.
+func withDesc(t theme.Theme, lines []string, desc, hint string, w, h int) string {
+	b := lipgloss.NewStyle().Background(t.Bg)
+	if desc != "" {
+		if d := clipLines(wrap(t, desc, w, t.Text, false), h-len(lines)-3); d != "" {
+			lines = append(lines, "", d)
+		}
+	}
+	lines = append(lines, "", b.Foreground(t.Muted).Italic(true).Render(hint))
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) todoDetail(t theme.Theme, w, h int) string {
 	b := lipgloss.NewStyle().Background(t.Bg)
 	if r := m.curRow(); r != nil && r.issue != nil {
 		is := r.issue
@@ -859,8 +884,7 @@ func (m *Model) todoDetail(t theme.Theme, w int) string {
 		if tk := m.todoForKey(is.Key); tk != nil {
 			lines = append(lines, kv(t, "todo", fmt.Sprintf("#%d %s", tk.ID, truncate(tk.Title, w-14)), t.Done))
 		}
-		lines = append(lines, "", b.Foreground(t.Muted).Italic(true).Render("enter dispara agent · J vira todo · o abre no browser · F atualiza"))
-		return strings.Join(lines, "\n")
+		return withDesc(t, lines, is.Desc, "enter dispara agent · J vira todo · o abre no browser · F atualiza", w, h)
 	}
 	tk := m.curTodo()
 	if tk == nil {
@@ -884,6 +908,10 @@ func (m *Model) todoDetail(t theme.Theme, w int) string {
 	if tk.Desc != "" {
 		lines = append(lines, "", wrap(t, tk.Desc, w, t.Text, false))
 	}
+	var issueDesc string
+	if is := m.issueForKey(tk.JiraKey()); is != nil {
+		issueDesc = is.Desc
+	}
 	for _, r := range tk.Refs {
 		lines = append(lines, kv(t, r.Kind, truncate(r.Value+"  "+r.URL, w-12), t.Accent))
 	}
@@ -897,8 +925,7 @@ func (m *Model) todoDetail(t theme.Theme, w int) string {
 	if tk.JiraKey() != "" {
 		hint = "enter dispara um agent · s start · D done"
 	}
-	lines = append(lines, "", b.Foreground(t.Muted).Italic(true).Render(hint))
-	return strings.Join(lines, "\n")
+	return withDesc(t, lines, issueDesc, hint, w, h)
 }
 
 // ---- status line ----

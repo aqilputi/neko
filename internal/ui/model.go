@@ -476,6 +476,19 @@ func (m *Model) todoForKey(key string) *todo.Task {
 	return nil
 }
 
+// issueForKey is the cached Jira issue with that key, if any.
+func (m *Model) issueForKey(key string) *jira.Issue {
+	if key == "" {
+		return nil
+	}
+	for i := range m.jira.Issues {
+		if m.jira.Issues[i].Key == key {
+			return &m.jira.Issues[i]
+		}
+	}
+	return nil
+}
+
 // sortInbox: most urgent first, then the tree's frozen order (stable).
 func sortInbox(xs []*store.Session, order map[string]int) {
 	sort.SliceStable(xs, func(i, j int) bool {
