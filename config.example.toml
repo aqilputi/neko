@@ -1,0 +1,42 @@
+# ~/.config/neko/config.toml — tudo é opcional; o que faltar usa o padrão.
+
+stale_days = 3               # paradas há mais que isso saem do inbox e ficam ocultas (H mostra)
+sort = "atividade"           # atividade | custo | nome
+permission_mode = ""         # modo inicial ao disparar: "" (o do Claude) | acceptEdits | auto | plan | bypassPermissions
+theme = ""                   # vazio = segue o terminal; ou catppuccin-mocha | tokyo-night | gruvbox | dracula | rose-pine-dawn (T troca)
+bar_max_usd = 20             # custo que enche a barrinha de uma sessão
+daily_budget_usd = 100       # mostra o medidor "hoje" no topo (0 esconde)
+refresh_seconds = 2
+show_history_days = 2        # também lista sessões fechadas dos últimos N dias
+
+# @contexto da skill todo → diretório onde o agent da tarefa começa
+[todo_repos]
+"@ai_registry" = "~/visio/dev/ai_registry"
+"@maquina-local" = "~"
+
+repo_roots = ["~/visio/dev", "~/dev", "~"]   # onde procurar @contexto não mapeado
+
+# Regras de contexto: a primeira que casar com o cwd (com ~) vence. Se definir
+# alguma, as padrão deixam de valer — copie as que quiser manter.
+# [[context]]
+# match = '^~/visio/dev/([^/]+)'
+# name = "visio · $1"
+
+# Preços (USD/MTok). Linhas suas vêm antes das padrão; a primeira que casar vence.
+# [[price]]
+# match = "opus-5-5"
+# input = 4
+# output = 20
+# cache_write = 5
+# cache_read = 0.2
+
+[jira]                       # via claude -p + conector Atlassian; sem token
+enabled = true
+site = "visio-ai.atlassian.net"
+cloud_id = "<uuid do site>"
+account_id = "<seu accountId>"   # assignee das issues criadas
+default_project = "VISRES"
+default_type = "Task"
+agent_dir = "~/visio/dev"
+cache_minutes = 30
+# jql = "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC"
