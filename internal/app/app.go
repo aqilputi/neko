@@ -104,11 +104,22 @@ func (a *App) Ports() Ports          { return a.ports }
 func (a *App) Clock() Clock          { return a.clock }
 func (a *App) Registry() *Registry   { return a.reg }
 
-// Snapshot is the last snapshot Refresh took (zero before the first).
+// Snapshot is a copy of the last snapshot Refresh took (zero before the
+// first): session commands change the core's own sessions under a.mu, so a
+// client must never hold that slice (it would race and change under it).
 func (a *App) Snapshot() store.Snapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.snap
+	return copySnapshot(a.snap)
+}
+
+// copySnapshot copies the session slice; the sessions' own slices (subagents,
+// questions, links) are only ever replaced by a refresh, never edited.
+func copySnapshot(s store.Snapshot) store.Snapshot {
+	if s.Sessions != nil {
+		s.Sessions = append([]store.Session(nil), s.Sessions...)
+	}
+	return s
 }
 
 // Refresh is RefreshNotices for a caller that does not draw the notices
@@ -123,14 +134,14 @@ func (a *App) Refresh() store.Snapshot {
 // snapshot.changed; then it watches the state transitions (ObserveSessions:
 // session.state, and a notice for the sessions that came back to the user)
 // and keeps the group members' names in step (SyncGroupNames). The notices
-// go back to the caller, which draws them. The snapshot's session slice is
-// shared with the core, not copied: session commands (archive, rename…)
-// update it in place, so a client holding it shows them at once. Safe to
-// call off the client's UI goroutine.
+// go back to the caller, which draws them. The caller gets its own copy of
+// the snapshot (see Snapshot); after a session command (archive, rename…) it
+// reads Snapshot again to show the change. Safe to call off the client's UI
+// goroutine.
 func (a *App) RefreshNotices() (store.Snapshot, []Notice) {
 	snap := a.ports.Sessions.Refresh()
 	a.mu.Lock()
-	a.snap = snap
+	a.snap = copySnapshot(snap) // the core's own; snap stays the caller's
 	a.mu.Unlock()
 	d := SnapshotChanged{At: snap.At, Sessions: len(snap.Sessions)}
 	if snap.Err != nil {

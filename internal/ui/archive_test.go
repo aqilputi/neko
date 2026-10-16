@@ -36,9 +36,11 @@ func TestArchiveTabAndContextArchive(t *testing.T) {
 	}
 	m.key(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	// the store now has a and b archived; simulate the refresh result
-	for i := range m.snap.Sessions {
-		m.snap.Sessions[i].Archived, m.snap.Sessions[i].Stale = true, true
-	}
+	setSnap(&m, store.Snapshot{Sessions: []store.Session{
+		{SessionID: "a", Context: "ctx1", Archived: true, Stale: true},
+		{SessionID: "b", Context: "ctx1", Archived: true, Stale: true},
+		{SessionID: "c", Context: "ctx2", Archived: true, Stale: true},
+	}})
 	m.keyNormal(keyPress("4"))
 	m.rebuild()
 	if got := sessOrder(&m); len(got) != 3 {

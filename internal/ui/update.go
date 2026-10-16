@@ -740,6 +740,7 @@ func (m *Model) commandResult(name string, res app.Result, err error) tea.Cmd {
 		for _, id := range d.ClosePanes {
 			m.closePane(id)
 		}
+		m.pullSnap() // the command changed the core's sessions: show it now
 		if d.Refresh {
 			cmds = append(cmds, m.refresh())
 		}

@@ -45,7 +45,7 @@ func (m *Model) toggleArchive() tea.Cmd {
 		return m.sessionResult(res, err, false)
 	}
 	res, err := m.app.ToggleArchive(app.Context{SessionID: r.Sess.SessionID}, "")
-	m.rebuild()
+	m.pullSnap()
 	return m.sessionResult(res, err, false)
 }
 
@@ -76,6 +76,13 @@ func (m *Model) stop() {
 	}
 }
 
+// pullSnap shows what a session command just changed: the TUI's snapshot is
+// its own copy (app.Snapshot), so it reads the core's again and redraws.
+func (m *Model) pullSnap() {
+	m.snap = m.app.Snapshot()
+	m.rebuild()
+}
+
 // selectedCtx is the selection for a session command.
 func (m *Model) selectedCtx() app.Context {
 	if sel := m.selected(); sel != nil {
@@ -95,6 +102,7 @@ func (m *Model) sessionResult(res app.Result, err error, async bool) tea.Cmd {
 		m.askApp(res, async)
 		return nil
 	}
+	m.pullSnap()
 	var cmds []tea.Cmd
 	if res.Toast != "" {
 		cmds = append(cmds, toastCmd(res.Toast, res.Err))
@@ -145,14 +153,14 @@ func confirmedMsg(res app.Result, err error) tea.Msg {
 // submitRename applies the session name typed at R (empty: back to claude's).
 func (m *Model) submitRename(val string) tea.Cmd {
 	res, err := m.app.Rename(m.draftDir, val)
-	m.rebuild()
+	m.pullSnap()
 	return m.sessionResult(res, err, false)
 }
 
 // submitMove applies the context typed at m (empty: back to the directory rule).
 func (m *Model) submitMove(val string) tea.Cmd {
 	res, err := m.app.Move(m.draftDir, val)
-	m.rebuild()
+	m.pullSnap()
 	return m.sessionResult(res, err, false)
 }
 
@@ -167,7 +175,7 @@ func (m *Model) submitRenameCtx(val string) tea.Cmd {
 		}
 	}
 	res, err := m.app.RenameContext(m.draftDir, val)
-	m.rebuild()
+	m.pullSnap()
 	return m.sessionResult(res, err, false)
 }
 

@@ -35,11 +35,18 @@ func TestKeysReachProgram(t *testing.T) {
 	for _, c := range cases {
 		out := t.TempDir() + "/got"
 		n := len(c.want)
-		p, err := Start("t", "t", "/", 20, 5, "sh", "-c", "stty raw -echo; head -c "+itoa(n)+" > "+out)
+		// "ready" is printed only after stty: a key sent before that would hit
+		// the cooked line discipline (which eats a backspace) — a fixed sleep
+		// was flaky under load
+		p, err := Start("t", "t", "/", 20, 5, "sh", "-c", "stty raw -echo; printf ready; head -c "+itoa(n)+" > "+out)
 		if err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(150 * time.Millisecond)
+		for deadline := time.Now().Add(5 * time.Second); !strings.Contains(p.Render(), "ready"); time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: shell never became ready", c.name)
+			}
+		}
 		p.SendKey(c.k)
 		got := ""
 		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
