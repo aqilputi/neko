@@ -237,7 +237,7 @@ make ci           # vet + lint + cover-check, o mesmo que roda no GitHub Actions
 
 ```text
 cmd/
-  nekuroddo/   entrada: nk (TUI), nk hook, nk hook-context
+  nekuroddo/   entrada: nk (TUI; --listen também serve por RPC), nk serve, nk run, nk hook, nk hook-context
   vtprobe/     diagnóstico do painel embutido
 internal/
   claude/      fala com o CLI (agents, --bg, stop, rm, /usage) e lê transcripts e estado
@@ -245,7 +245,13 @@ internal/
   events/      grava e lê events.jsonl (nk hook) e reconhece mensagens entre sessões
   groups/      grupos de agents: groups.json, notas do :notify e o nk hook-context
   term/        PTY + x/vt, filtro de OSC e codificação de teclas
-  ui/          modelo Bubble Tea v2: árvore, inbox, todos, paleta, diálogos, mouse, render
+  core/        domínio puro: árvore, inbox, comandos e eventos como dados; sem I/O
+  app/         casos de uso, registro de comandos, barramento de eventos, confirmações; só portas
+  wire/        raiz de composição: liga claude, store, term, groups… às portas de app
+  tui/         a TUI Bubble Tea v2: teclas → comandos de app; árvore, inbox, todos, paleta, painéis
+  rpc/         servidor opcional (nk serve, nk --listen): HTTP+SSE+WS sobre Unix socket
+  lua/         runtime gopher-lua (init.lua, plugins/, API nk.*)
+  archtest/    testes da regra de dependência entre pacotes
   theme/       os 5 temas e a escolha claro/escuro
   cat/         o gatinho ᓚᘏᗢ
   config/      TOML, padrões e a migração dos diretórios do neko
@@ -258,7 +264,7 @@ Arquitetura e fluxo de dados em [docs/arquitetura.md](docs/arquitetura.md).
 
 ### Roadmap
 
-Em planejamento: separar o domínio de `internal/ui` num core headless (`internal/core` + `internal/app`),
+Em andamento: separar o domínio da TUI (`internal/tui`) num core headless (`internal/core` + `internal/app`),
 servido localmente como opcional; um GUI com gatinhos 3D low-poly que embute os terminais reais do Claude
 Code; e scripts de automação em Lua, na TUI e no GUI. Nada disso existe em código ainda — a TUI atual e todos
 os atalhos continuam funcionando do mesmo jeito enquanto a refatoração avança. Plano completo em

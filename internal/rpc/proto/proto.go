@@ -42,7 +42,6 @@ const (
 	CodeUnknownToken   = "unknown_token"
 	CodeExpired        = "expired"
 	CodeNotImplemented = "not_implemented"
-	CodeConflict       = "conflict"
 )
 
 // Error is the body of every non-2xx answer.

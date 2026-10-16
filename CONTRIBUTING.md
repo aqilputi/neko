@@ -44,7 +44,7 @@ Rode `make ci` antes de abrir o PR.
 - **Comentários no código em inglês**; **textos da interface em pt-BR** (rótulos, toasts, ajuda, mensagens
   do gato). A documentação em `docs/` é em pt-BR.
 - `gofmt`/`goimports` via `make fmt`. O lint segue o `.golangci.yml`.
-- Teclas novas entram em `internal/ui/keys.go`: é a fonte única da barra de status, da ajuda e da paleta.
+- Teclas novas entram em `internal/tui/keys.go`: é a fonte única da barra de status, da ajuda e da paleta.
   Atualize também [docs/teclas.md](docs/teclas.md).
 - Os hooks (`nk hook`, `nk hook-context`) **nunca podem falhar para o Claude Code**: sem saída de erro, código
   de saída 0, poucos milissegundos. Nada de imports pesados nesse caminho.
@@ -61,7 +61,7 @@ O projeto é validado por testes, escritos **antes** do código:
 3. Refatore com os testes verdes.
 
 - Teste comportamento, não implementação: tabelas de casos (`[]struct{...}`), entradas e saídas observáveis.
-  Na `internal/ui`, dirija o `Model` por teclas/mensagens e confira o estado ou a tela sem ANSI (`ansi.Strip`).
+  Na `internal/tui`, dirija o `Model` por teclas/mensagens e confira o estado ou a tela sem ANSI (`ansi.Strip`).
 - **Cobertura mínima de 80%** do total, travada no CI (`scripts/coverage-gate.sh`; o `cmd/vtprobe`, ferramenta de
   depuração, fica de fora). PR que derruba a cobertura abaixo disso não passa.
 - Bug encontrado sem correção ainda: deixe o teste que o reproduz com `t.Skip("BUG: …")` e abra uma issue.

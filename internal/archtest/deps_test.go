@@ -48,7 +48,7 @@ var forbiddenForDomain = []string{
 	"github.com/charmbracelet/lipgloss/...", "github.com/charmbracelet/ultraviolet/...",
 	"github.com/charmbracelet/x/vt/...", "github.com/creack/pty/...",
 	"os/exec", "net", "net/http/...",
-	module + "/internal/term/...", module + "/internal/tui/...", module + "/internal/ui/...",
+	module + "/internal/term/...", module + "/internal/tui/...",
 	module + "/internal/rpc/...", module + "/internal/lua/...", module + "/internal/wire/...",
 }
 
@@ -276,8 +276,8 @@ func TestViolations(t *testing.T) {
 			pkg{ImportPath: "net/url", Standard: true, DepOnly: true},
 		), []string{core + " → net", core + " → net/http/httptest"}},
 		{"other internal package", g(
-			pkg{ImportPath: core, Imports: []string{module + "/internal/theme", module + "/internal/ui"}},
-		), []string{core + " → " + module + "/internal/theme (not an allowed internal package)", core + " → " + module + "/internal/ui"}},
+			pkg{ImportPath: core, Imports: []string{module + "/internal/theme", module + "/internal/tui"}},
+		), []string{core + " → " + module + "/internal/theme (not an allowed internal package)", core + " → " + module + "/internal/tui"}},
 		{"forbidden reached through stdlib dep", g(
 			pkg{ImportPath: core, Imports: []string{"log"}},
 			pkg{ImportPath: "log", Standard: true, DepOnly: true, Imports: []string{"os/exec"}},

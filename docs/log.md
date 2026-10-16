@@ -5,6 +5,15 @@ e as entradas antigas mantêm o nome da época.
 
 ## 2026-10-16
 
+- **documentação:** onda 3 (WP-3.5): [protocolo.md](protocolo.md) (HTTP+JSON, SSE e WebSocket de
+  `internal/rpc`, erros e `nk serve`/`--listen`/`run`), [lua.md](lua.md) (API `nk.*` de `internal/lua`,
+  eventos, orçamentos, sandbox, reload) e [comandos.md](comandos.md) (todo comando do registro, com escopo,
+  teclas e argumentos), escritos a partir do código das ondas 2 e 3 (`internal/rpc`, `internal/lua`,
+  `internal/app`), não só do plano. Achados: `internal/rpc` e `internal/lua` já estão ligados de verdade em
+  `cmd/nekuroddo` (`nk serve`, `nk --listen`, `nk run`, `lua.Load()` no arranque) — mais adiantado que a fase 1
+  do plano previa —, mas nenhum host ainda declara `Options.Caps` do Lua (toda `nk.ui.*` continua sem efeito) e
+  `POST /v1/lua/eval` segue `501` (só `:lua` local na TUI). `proto.CodeConflict` está declarado e nunca emitido
+  (`ErrUnavailable` vira `409` com `code: "unavailable"`, não `"conflict"`).
 - **pesquisa + plano:** arquitetura alvo para separar o domínio de `internal/ui` em `internal/core` (regras
   puras, sem I/O) e `internal/app` (casos de uso, fala só por portas), com um registro de comandos e um
   barramento de eventos comuns à TUI, a um GUI novo (three.js + xterm.js num shell Wails v3, gatinhos 3D

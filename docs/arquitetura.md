@@ -25,7 +25,7 @@ nativo do Claude Code; o nekuroddo só apresenta os pares e mostra as mensagens.
 
 | pacote | responsabilidade |
 |---|---|
-| `cmd/nekuroddo` | entrada: `nk` (TUI), `nk hook` (registrador de eventos) e `nk hook-context` (grupos); ver [hooks.md](hooks.md) |
+| `cmd/nekuroddo` | entrada e raiz de composição (monta `app` + `wire` + Lua): `nk` (TUI; com `--listen`, também o servidor RPC no mesmo core), `nk serve` (core sem TUI, servido por RPC), `nk run` (roda um comando num core servido), `nk hook` (registrador de eventos) e `nk hook-context` (grupos); ver [hooks.md](hooks.md) |
 | `cmd/vtprobe` | diagnóstico do painel embutido |
 | `internal/claude` | fala com o CLI (`agents`, `--bg`, `stop`, `rm`, `-p /usage`) e lê transcripts, estado e uso (ver [fontes-de-dados.md](fontes-de-dados.md)) |
 | `internal/store` | junta CLI e transcripts num `Snapshot` imutável: sessões, subagents, atenção, custo, arquivadas, overrides |
@@ -35,7 +35,7 @@ nativo do Claude Code; o nekuroddo só apresenta os pares e mostra as mensagens.
 | `internal/core` | domínio puro, sem I/O: árvore e inbox (`BuildTree`), helpers, comando/evento/confirmação como dados |
 | `internal/app` | o core: casos de uso por fatia, registro de comandos, barramento de eventos, confirmação por token e o estado de domínio (snapshot, grupos, ✉, painéis, avisos, `/usage`, todos, Jira); fala com o mundo só por portas |
 | `internal/wire` | raiz de composição: adaptadores finos que ligam `claude`, `store`, `term`, `groups`, `events`, `jira`, `todo`, `notify-send` e `xdg-open` às portas de `app` |
-| `internal/ui` | a TUI Bubble Tea v2, um tradutor: teclas e mensagens viram chamadas a `app`; desenha árvore, inbox, todos, diálogos, paleta, painéis e o gato |
+| `internal/tui` | a TUI Bubble Tea v2, um tradutor: teclas e mensagens viram chamadas a `app`; desenha árvore, inbox, todos, diálogos, paleta, painéis e o gato |
 | `internal/archtest` | testes que falham se a regra de dependência (abaixo) for violada |
 | `internal/theme` | 5 temas e a escolha automática claro/escuro |
 | `internal/cat` | o gatinho `ᓚᘏᗢ` no canto inferior direito |
@@ -49,7 +49,7 @@ nativo do Claude Code; o nekuroddo só apresenta os pares e mostra as mensagens.
 ```
 claude agents --json --all ─┐
 ~/.claude/sessions/*.json  ─┤
-~/.claude/jobs/*/state.json ─┼─► store.Refresh ─► app.RefreshNotices ─► ui.Model ─► uv.ScreenBuffer
+~/.claude/jobs/*/state.json ─┼─► store.Refresh ─► app.RefreshNotices ─► tui.Model ─► uv.ScreenBuffer
 ~/.claude/projects/**.jsonl ─┤   (goroutine própria: Snapshot,  ▲         ▲
 events.jsonl (nk hook) ──────┘    transições, nomes dos grupos)  │         │
 groups.json ─────────────────────────────────────► app (grupos) ─┘         │
@@ -75,12 +75,12 @@ groups.json ──────────────────────�
 ## Grupos de agents
 
 ```
-ui (:group / :ungroup) ─► app ─► groups.json ◄── app.SyncGroupNames (a cada refresh: renomeações do Claude)
-ui (:notify) ──► app ────────► mail/<sid>.jsonl
+tui (:group / :ungroup) ─► app ─► groups.json ◄── app.SyncGroupNames (a cada refresh: renomeações do Claude)
+tui (:notify) ─► app ────────► mail/<sid>.jsonl
                                 │
 nk hook-context ◄───────────────┘  (SessionStart · UserPromptSubmit · PostToolUse)
    └─► additionalContext na sessão: pares + combinado + notas
-sessão A ──SendMessage──► sessão B ──UserPromptSubmit──► nk hook ──► events.jsonl (type=peer) ──► app.OnPeer ──► ui (miau)
+sessão A ──SendMessage──► sessão B ──UserPromptSubmit──► nk hook ──► events.jsonl (type=peer) ──► app.OnPeer ──► tui (miau)
 ```
 
 - `groups.json` é escrito de forma atômica (arquivo temporário + `rename`), porque o hook pode lê-lo a qualquer
@@ -122,7 +122,7 @@ fica **opcional**: o `nk` continua um processo só, sem socket.
   por `RegisterBuiltins`) e confirmações por token (`Ask`/`Confirm`/`Cancel`). Todo o estado de domínio é
   campo do `App`, uma fatia por arquivo:
 
-  | fatia | `internal/app` | `internal/ui` (só traduz e desenha) | comandos | eventos |
+  | fatia | `internal/app` | `internal/tui` (só traduz e desenha) | comandos | eventos |
   |---|---|---|---|---|
   | sessões | `sessions.go` | `sessions.go` | `session.archive/stop/remove/rename/move`, `sessions.archive_stale/remove_ended` | `snapshot.changed` |
   | disparo | `dispatch.go`, `confirm.go` | `input.go` | `session.new` | `dispatched`, `confirm.*` |
@@ -131,18 +131,19 @@ fica **opcional**: o `nk` continua um processo só, sem socket.
   | todos e Jira | `todo.go`, `jira.go` | `todo_jira.go` | `todo.start/done`, `jira.toggle/fetch/open_url` | `todos.changed`, `jira.changed` |
   | avisos | `watch.go` | `notify.go` | — | `session.state`, `session.notification`, `notice`, `usage.updated` |
 
-- **`internal/wire`**: `wire.Default(cfg)` liga os adaptadores reais às portas; `ui.New` é o único lugar da
-  TUI que o usa (e chama `RegisterBuiltins`). `internal/app/apptest` tem fakes de todas as portas.
+- **`internal/wire`**: `wire.Default(cfg)` liga os adaptadores reais às portas; quem o usa é só
+  `cmd/nekuroddo`, que monta o `App` (e chama `RegisterBuiltins`, carrega o Lua) e o entrega à TUI
+  (`tui.New(app, cfg)`) e ao servidor. `internal/app/apptest` tem fakes de todas as portas.
 - **`internal/term`**: `Process` (PTY e fan-out de bytes, sem Bubble Tea) e `Screen` (emulador e teclas, da
   TUI).
-- **`internal/ui`** é um tradutor: teclas e mensagens viram chamadas a `app`, e a tela lê o estado por
+- **`internal/tui`** é um tradutor: teclas e mensagens viram chamadas a `app`, e a tela lê o estado por
   acessores de `app` (`Groups`, `Mail`, `Messages`, `Usage`, `LastEvent`, `HooksSeen`, `Panes()`, `Todos`,
   `JiraCache`…). Fica nela só o que é do cliente: cursor, dobras, filtro, ordem congelada, seleção com
   `space`, diálogos, o painel desenhado e o gato.
 - **`internal/archtest`**: `core` e `app` não alcançam Bubble Tea, PTY, `os/exec`, rede, `term` nem a UI;
-  `internal/ui` só importa `app`, `core`, `theme`, `cat`, `term`, `config` e os **tipos** de `store`,
-  `claude`, `events`, `groups`, `jira` e `todo` (funções só `jira.AgentPrompt` e `todo.Prompt`); `wire` só
-  dentro de `ui.New`; `os/exec` só em `ui/pane.go`, para o `tea.ExecProcess` da tela cheia que
+  `internal/tui` só importa `app`, `core`, `theme`, `cat`, `term`, `config` e os **tipos** de `store`,
+  `claude`, `events`, `groups`, `jira` e `todo` (funções só `jira.AgentPrompt` e `todo.Prompt`); nunca
+  `wire`, `rpc` nem `lua`; `os/exec` só em `tui/pane.go`, para o `tea.ExecProcess` da tela cheia que
   `app.Fullscreen` descreve.
 
 ### Próximos passos (onda 3 em diante)
@@ -152,31 +153,32 @@ fica **opcional**: o `nk` continua um processo só, sem socket.
   a TUI passa a seguir o barramento (um `tea.Cmd` sobre `app.Subscribe`).
 - **WP-3.2:** `internal/rpc` (HTTP+SSE+WS sobre Unix socket) expõe o mesmo registro e o barramento.
 - **WP-3.3:** `internal/lua` (`gopher-lua`, API `nk.*`) registra comandos e assina eventos.
-- Depois: `nk serve`/`--listen`/`run`, o rename `internal/ui` → `internal/tui` e o GUI (fases 2 a 4).
+- **WP-3.4 e WP-4.1 (feitos):** `nk serve`, `nk --listen` e `nk run`; `internal/ui` virou `internal/tui`
+  (`tui.New(app, cfg)`, com `:lua` na paleta). Depois: o GUI (fases 2 a 4).
 
 Árvore de pacotes (resumida; "futuro" ainda não existe):
 
 ```
-cmd/nekuroddo/      nk: TUI, nk hook, nk hook-context; futuro: nk serve, nk --listen, nk run <cmd>
+cmd/nekuroddo/      nk: TUI, nk --listen, nk serve, nk run <cmd>, nk hook, nk hook-context
 cmd/nekuroddo-gui/  futuro — nkg: shell Wails v3 com o frontend em gui/web/
 internal/core/      domínio puro: tipos, árvore, inbox, comando/evento como dados; sem I/O
 internal/app/       casos de uso + registro de comandos + pubsub + confirmações; fala só com portas
 internal/wire/      raiz de composição: liga claude/store/term/... às portas de internal/app
-internal/ui/        a TUI: teclas → chamadas a app, estado de app → tela (vira internal/tui na onda 4)
-internal/rpc/       futuro — servidor opcional: HTTP+SSE+WS sobre Unix socket
-internal/lua/       futuro — runtime gopher-lua, API nk.* (comandos e eventos para a TUI e o GUI)
+internal/tui/       a TUI: teclas → chamadas a app, estado de app → tela
+internal/rpc/       servidor opcional (nk serve, nk --listen): HTTP+SSE+WS sobre Unix socket
+internal/lua/       runtime gopher-lua, API nk.* (comandos e eventos para a TUI e o GUI)
 internal/{claude,store,term,groups,events,jira,todo,config,paths,theme,cat}   adaptadores por papel
 internal/archtest/  testes que falham se a regra de dependência abaixo for violada
 ```
 
 Regra de dependência: `internal/core` nunca importa Bubble Tea, PTY ou rede, só tipos de dados dos pacotes
-acima; `internal/app` só fala com o mundo por portas; os "shells" (`ui`/`tui`, `rpc`, `lua`, `guihost`) não
+acima; `internal/app` só fala com o mundo por portas; os "shells" (`tui`, `rpc`, `lua`, `guihost`) não
 chamam `claude`/`store`/`groups`/`jira`/`todo` diretamente — só por `internal/app`.
 
 ```
      cmd/nekuroddo   cmd/nekuroddo-gui
            │                │
-  internal/ui   internal/rpc  internal/lua  internal/guihost     ← shells (teclas/HTTP/Lua → comandos)
+  internal/tui  internal/rpc  internal/lua  internal/guihost     ← shells (teclas/HTTP/Lua → comandos)
            │                │              │
            └───────┬────────┴──────────────┘
                     ▼

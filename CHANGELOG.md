@@ -8,8 +8,24 @@ incompatíveis podem acontecer em versões menores e serão sempre descritas aqu
 
 ## [Não lançado]
 
+### Adicionado
+
+- `nk serve [--listen unix://…|tcp://127.0.0.1:0]`: o core sem TUI, servido por RPC (padrão: o socket
+  `$XDG_RUNTIME_DIR/nekuroddo-<uid>.sock`, 0600; em TCP grava um token 0600 ao lado). Atualiza as sessões
+  a cada `refresh` e lê os eventos dos hooks a cada 400 ms; sai limpo com SIGINT/SIGTERM.
+- `nk --listen <endereço>`: a TUI de sempre e, no mesmo processo e no mesmo core, o servidor RPC.
+- `nk run [<comando> [arg=valor …]] [--session <id>] [--yes]`: roda um comando num core servido (sem
+  comando, lista os comandos); pergunta y/N quando o comando pede confirmação. Sai 0 (ok), 1 (erro ou
+  recusado) ou 2 (uso).
+- Lua na TUI: `:lua <código>` na paleta avalia no runtime e mostra o resultado num toast; o comando
+  `lua.reload` relê o `init.lua` e os plugins; teclas que o Lua define (`nk.keymap.set/del`) valem antes das
+  nativas. Um erro no Lua é só um aviso na partida.
+
 ### Alterado
 
+- `internal/ui` passa a se chamar `internal/tui`, e `tui.New(app, cfg)` recebe o core já montado: quem monta
+  (`wire.Default`, `RegisterBuiltins`, Lua) é o `cmd/nekuroddo`; a TUI não importa mais `internal/wire`.
+  Os hooks (`nk hook`, `nk hook-context`) continuam sem montar o core.
 - **Início da refatoração de arquitetura.** Plano para separar o domínio de `internal/ui` num core headless
   (`internal/core` + `internal/app`, falando só por portas), com um GUI opcional (gatinhos 3D low-poly,
   terminais reais embutidos) e scripts em Lua, documentado em

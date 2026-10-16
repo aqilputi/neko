@@ -14,7 +14,7 @@ status: stable
 Cada tecla resolve para um **comando** com nome (`session.archive`, `nav.down`…), do mesmo registro que
 alimenta a paleta, o Lua e o protocolo do core (ver [plano-arquitetura.md](plano-arquitetura.md), §2.4 e §2.7).
 As teclas vêm dos próprios comandos (`Keys`/`Mode` de cada `core.Command`); `app.Keymap()` monta com elas o
-`core.Keymap`, e a TUI desenha a barra de status e a ajuda (`?`) a partir dele. `internal/ui/keys.go` guarda só
+`core.Keymap`, e a TUI desenha a barra de status e a ajuda (`?`) a partir dele. `internal/tui/keys.go` guarda só
 a apresentação: a ordem da barra e das colunas da ajuda e os rótulos curtos.
 
 O modo `normal.todos` vale na aba Todos: as teclas dele têm prioridade, e o resto cai no `normal`. Os

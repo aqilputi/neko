@@ -23,10 +23,13 @@ O `index.md` e o `log.md` são arquivos reservados da spec.
 |---|---|---|
 | [instalacao.md](instalacao.md) | Guide | Pré-requisitos, `go install`/`make install`, o atalho `nk`, migração do `neko` |
 | [teclas.md](teclas.md) | Reference | Todas as teclas, a paleta e o mouse |
+| [comandos.md](comandos.md) | Reference | O registro de comandos: nome, escopo, teclas, argumentos e como rodar cada um (paleta, Lua, RPC, `nk run`) |
 | [configuracao.md](configuracao.md) | Reference | `~/.config/nekuroddo/config.toml` campo a campo |
 | [grupos.md](grupos.md) | Guide | Grupos de agents: `:group`, `nk hook-context`, `SendMessage` e o ✉ |
 | [hooks.md](hooks.md) | Guide | `nk hook` (eventos em tempo real) e `nk hook-context` (grupos) |
 | [arquitetura.md](arquitetura.md) | Architecture | Pacotes, fluxo de dados, grupos, laço de atualização |
+| [protocolo.md](protocolo.md) | Reference | O protocolo v1 do `internal/rpc`: rotas HTTP, SSE, WebSocket de painel, erros e `nk serve`/`--listen`/`run` |
+| [lua.md](lua.md) | Reference | A API `nk.*` do `internal/lua`, eventos, orçamentos, sandbox e o que ainda falta (capacidades de UI) |
 | [plano-arquitetura.md](plano-arquitetura.md) | Plan | Arquitetura alvo (core headless, GUI 3D de gatinhos low-poly, Lua) e os pacotes de trabalho por fase — planejado, fase 1 em andamento |
 | [fontes-de-dados.md](fontes-de-dados.md) | Reference | O que o nekuroddo lê de `~/.claude` e como calcula custo |
 | [painel-embutido.md](painel-embutido.md) | Design Note | PTY + `x/vt` rodando `claude attach`; bugs contornados |
@@ -44,7 +47,11 @@ Fora do bundle: o [README](../README.md), o [CHANGELOG](../CHANGELOG.md) e o
 [fontes-de-dados.md](fontes-de-dados.md), embute o claude em [painel-embutido.md](painel-embutido.md)
 e recebe eventos de [hooks.md](hooks.md). Os [grupos](grupos.md) usam os dois hooks para que sessões
 parecidas se avisem. O usuário instala com [instalacao.md](instalacao.md), ajusta em
-[configuracao.md](configuracao.md) e opera com [teclas.md](teclas.md). [jira.md](jira.md) estende os todos.
+[configuracao.md](configuracao.md) e opera com [teclas.md](teclas.md), que por sua vez aponta para
+[comandos.md](comandos.md) — o registro que [teclas.md](teclas.md), o [protocolo.md](protocolo.md) e o
+[lua.md](lua.md) compartilham. [jira.md](jira.md) estende os todos.
 [plano-arquitetura.md](plano-arquitetura.md) traça para onde [arquitetura.md](arquitetura.md) está migrando
-(core headless, GUI e Lua), por fases e pacotes de trabalho ainda em andamento. As mudanças ficam registradas
-em [log.md](log.md), e cada versão tem notas em [releases/](releases/v0.1.0.md).
+(core headless, GUI e Lua), por fases e pacotes de trabalho ainda em andamento; o [protocolo.md](protocolo.md)
+(`internal/rpc`, `nk serve`/`--listen`/`run`) e o [lua.md](lua.md) (`internal/lua`, `nk.*`) documentam duas
+dessas peças já em código. As mudanças ficam registradas em [log.md](log.md), e cada versão tem notas em
+[releases/](releases/v0.1.0.md).
