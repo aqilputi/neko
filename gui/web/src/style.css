@@ -1,0 +1,70 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-monospace, 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 15px;
+  background: var(--nk-bg, #1e1e2e);
+  color: var(--nk-text, #cdd6f4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--nk-bg, #1e1e2e);
+}
+
+main {
+  padding: 16px;
+}
+
+.boot {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  color: var(--nk-subtle);
+}
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 2px solid var(--nk-border);
+}
+
+.brand {
+  color: var(--nk-accent);
+  font-weight: bold;
+}
+
+.status-open {
+  color: var(--nk-done);
+}
+.status-reconnecting,
+.status-connecting {
+  color: var(--nk-busy);
+}
+.status-error,
+.status-closed {
+  color: var(--nk-error);
+}
+
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  white-space: pre;
+}
+
+.row-ctx {
+  color: var(--nk-accent2) !important;
+  font-weight: bold;
+  margin-top: 6px;
+}
+
+.error {
+  color: var(--nk-error);
+}

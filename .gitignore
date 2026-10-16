@@ -6,3 +6,10 @@
 /bin/
 coverage.out
 coverage.html
+
+# gui/web (frontend)
+/gui/web/node_modules/
+/gui/web/dist/
+/gui/web/coverage/
+/gui/web/test-results/
+/gui/web/playwright-report/

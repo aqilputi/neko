@@ -15,6 +15,7 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/demo"
 	"github.com/aqilputi/nekuroddo/internal/lua"
 	"github.com/aqilputi/nekuroddo/internal/rpc"
+	"github.com/aqilputi/nekuroddo/internal/rpc/proto"
 	"github.com/aqilputi/nekuroddo/internal/tui"
 )
 
@@ -70,7 +71,7 @@ func newDemoHost(cfg config.Config) *host {
 	if err != nil {
 		panic(err) // only a nil app or a clash of fixed names: bugs, not conditions
 	}
-	return &host{app: a, lua: rt}
+	return &host{app: a, lua: rt, caps: []string{proto.CapDemo}}
 }
 
 // scheduleOnce returns start, which runs a's scheduler (app.RunSchedule) on

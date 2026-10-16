@@ -22,6 +22,9 @@ var hostsBuilt atomic.Int64
 type host struct {
 	app *app.App
 	lua *lua.Runtime
+	// caps are announced in hello besides "panes" and "lua" ("demo" for
+	// the scripted world)
+	caps []string
 }
 
 // The UI capabilities each host gives Lua (nk.ui.has). The TUI draws all of
@@ -91,7 +94,7 @@ func listenRPC(h *host, spec string) (*rpc.Server, string, error) {
 		return nil, "", err
 	}
 	// the host always runs the Lua runtime: clients may see Lua commands
-	o := rpc.Options{Version: version, Capabilities: []string{proto.CapLua}, Lua: h.lua}
+	o := rpc.Options{Version: version, Capabilities: append([]string{proto.CapLua}, h.caps...), Lua: h.lua}
 	addr := spec
 	if l.Addr().Network() != "unix" {
 		o.Token = rpc.NewToken()

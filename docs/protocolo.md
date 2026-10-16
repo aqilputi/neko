@@ -81,7 +81,7 @@ Tudo que um cliente precisa para desenhar a tela, num só pedido:
      "kind": "background", "state": "busy", "attention": 0, "cost": 0.42, "model": "sonnet-5", "subs": []}
   ],
   "inbox": ["ef567890"],
-  "groups": {"deploy": [{"id": "abcd1234", "name": "api"}]},
+  "groups": {"deploy": [{"session_id": "abcd1234-…", "name": "api", "label": "api gateway", "cwd": "/srv/api"}]},
   "mail": {"abcd1234": {"at": "2026-10-16T19:58:00Z", "sent": false}},
   "usage": {"limits": [{"name": "5h", "pct": 40}], "at": "2026-10-16T19:58:00Z"},
   "todos": {"groups": []},

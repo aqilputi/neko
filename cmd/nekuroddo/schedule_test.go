@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -153,6 +154,10 @@ func TestServeDemo(t *testing.T) {
 	addr := startServe(t, "--demo", "--listen", "unix://"+filepath.Join(runtimeDir(t), "d.sock"))
 	hello(t, addr, "")
 	c := dialT(t, addr)
+	// a client can tell it is looking at the fake world (docs/protocolo.md)
+	if h, err := c.Hello(ctxT(t)); err != nil || !slices.Contains(h.Capabilities, "demo") {
+		t.Fatalf("demo hello capabilities = %v, %v; want \"demo\"", h.Capabilities, err)
+	}
 	waitFor(t, func() bool {
 		s, err := c.Snapshot(ctxT(t))
 		return err == nil && len(s.Sessions) > 0

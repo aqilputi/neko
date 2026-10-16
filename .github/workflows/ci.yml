@@ -81,3 +81,38 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: go build -o /dev/null ./cmd/...
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gui/web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: gui/web/.nvmrc
+          cache: npm
+          cache-dependency-path: gui/web/package-lock.json
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Unit tests (coverage ≥ 80% lines on client/state)
+        run: npx vitest run --coverage
+      - name: Build
+        run: npx vite build
+      - name: Playwright chromium
+        run: npx playwright install --with-deps chromium
+      - name: E2E smoke (nk serve --demo)
+        run: npx playwright test
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            gui/web/playwright-report
+            gui/web/test-results
