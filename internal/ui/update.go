@@ -11,14 +11,14 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/aqilputi/neko/internal/claude"
-	"github.com/aqilputi/neko/internal/config"
-	"github.com/aqilputi/neko/internal/events"
-	"github.com/aqilputi/neko/internal/jira"
-	"github.com/aqilputi/neko/internal/store"
-	"github.com/aqilputi/neko/internal/term"
-	"github.com/aqilputi/neko/internal/theme"
-	"github.com/aqilputi/neko/internal/todo"
+	"github.com/aqilputi/nekuroddo/internal/claude"
+	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/events"
+	"github.com/aqilputi/nekuroddo/internal/jira"
+	"github.com/aqilputi/nekuroddo/internal/store"
+	"github.com/aqilputi/nekuroddo/internal/term"
+	"github.com/aqilputi/nekuroddo/internal/theme"
+	"github.com/aqilputi/nekuroddo/internal/todo"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -148,7 +148,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return stickyToast("jira: " + denied.Error() + "  — se for o seu hook, rode:  " + m.cfg.Jira.ApproveHint + "  e aperte J de novo")
 		}
 		if msg.err != nil {
-			return stickyToast("jira: " + msg.err.Error() + "  (log: ~/.cache/neko/jira-last.jsonl)")
+			return stickyToast("jira: " + msg.err.Error() + "  (log: ~/.cache/nekuroddo/jira-last.jsonl)")
 		}
 		id, key := msg.task, msg.key
 		return tea.Batch(
@@ -199,7 +199,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			if text := m.pending[msg.pane]; text != "" {
 				delete(m.pending, msg.pane)
 				p.Paste(text)
-				return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return enterMsg{msg.pane} })
+				return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return enterMsg(msg) })
 			}
 		}
 		return nil
@@ -228,7 +228,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			id := msg.id
 			cmds = append(cmds, func() tea.Msg {
 				_ = todo.Start(t.ID)
-				_ = todo.AddNote(t.ID, "neko: agent "+id+" disparado (claude attach "+id+")")
+				_ = todo.AddNote(t.ID, "nekuroddo: agent "+id+" disparado (claude attach "+id+")")
 				g, err := todo.List()
 				return todosMsg{g, err}
 			})
@@ -320,7 +320,7 @@ func (m *Model) onEvents(evs []events.Event) tea.Cmd {
 			}
 			m.cat.Meow(truncate(msg, 50))
 			if !m.focused {
-				cmds = append(cmds, tea.Raw("\a"), notifyDesktop("neko", e.Message))
+				cmds = append(cmds, tea.Raw("\a"), notifyDesktop("nekuroddo", e.Message))
 			}
 		}
 	}
@@ -346,13 +346,13 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 			m.mode = modeNormal
 			return nil
 		}
-		// ctrl+k is neko's even inside claude (claude loses its kill-line):
+		// ctrl+k is nekuroddo's even inside claude (claude loses its kill-line):
 		// jump to another live chat without leaving INSERT first.
 		if key.Matches(k, keys.Switch) {
 			return m.openSwitcher()
 		}
 		if p := m.panes[m.active]; p != nil {
-			// classic renderer: neko scrolls the scrollback (fullscreen claude
+			// classic renderer: nekuroddo scrolls the scrollback (fullscreen claude
 			// handles these keys itself)
 			if !p.WantsMouse() {
 				switch k.String() {
@@ -701,7 +701,7 @@ func (m *Model) submitInput() tea.Cmd {
 			typ = m.cfg.Jira.DefaultType
 		}
 		task := *t
-		n := jira.NewIssue{Project: proj, Type: typ, Summary: task.Title, Description: jiraDescription(task), Labels: []string{"neko"}}
+		n := jira.NewIssue{Project: proj, Type: typ, Summary: task.Title, Description: jiraDescription(task), Labels: []string{"nekuroddo"}}
 		cfg := m.cfg.Jira
 		m.confirmThen(fmt.Sprintf("criar no Jira %s/%s, atribuída a você:\n\"%s\"\n(escreve no Jira)", proj, typ, truncate(task.Title, 70)), func(*Model) tea.Cmd {
 			return tea.Batch(toastCmd("criando no Jira via claude…", false), func() tea.Msg {
@@ -834,7 +834,7 @@ func jiraDescription(t todo.Task) string {
 	for _, n := range t.Notes {
 		fmt.Fprintf(&b, "\n> %s — %s\n", n.At[:min(10, len(n.At))], n.Text)
 	}
-	b.WriteString("\n_criada pelo neko a partir do todo #" + fmt.Sprint(t.ID) + "_")
+	b.WriteString("\n_criada pelo nekuroddo a partir do todo #" + fmt.Sprint(t.ID) + "_")
 	return b.String()
 }
 
@@ -914,10 +914,12 @@ func (m *Model) collapse() {
 			m.collapsed["ctx:"+r.ctx] = true
 		}
 	case "sub":
-		m.collapsed["sess:"+r.sess.SessionID] = true
+		// r points into m.rows, which rebuild rewrites: keep the id first
+		id := r.sess.SessionID
+		m.collapsed["sess:"+id] = true
 		m.rebuild()
 		for i, x := range m.rows {
-			if x.kind == "sess" && x.sess.SessionID == r.sess.SessionID {
+			if x.kind == "sess" && x.sess.SessionID == id {
 				m.cursor = i
 			}
 		}

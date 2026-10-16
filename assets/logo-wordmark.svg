@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 220" width="880" height="220" role="img" aria-label="nekuroddo — orquestrador TUI dos seus agents do Claude Code">
+  <title>nekuroddo</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262637"/>
+      <stop offset="1" stop-color="#1e1e2e"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="876" height="216" rx="40" fill="url(#bg)" stroke="#313244" stroke-width="4"/>
+  <g transform="translate(26 14) scale(0.75)">
+  <!-- links: agents wired to the cat -->
+  <g stroke-width="5" stroke-linecap="round" fill="none" opacity="0.85">
+    <path d="M128 112 L52 58" stroke="#89b4fa"/>
+    <path d="M128 112 L204 58" stroke="#a6e3a1"/>
+    <path d="M128 140 L34 122" stroke="#f5c2e7"/>
+    <path d="M128 140 L222 122" stroke="#fab387"/>
+  </g>
+  <!-- agent nodes -->
+  <circle cx="52" cy="58" r="13" fill="#89b4fa"/>
+  <circle cx="204" cy="58" r="13" fill="#a6e3a1"/>
+  <circle cx="34" cy="122" r="13" fill="#f5c2e7"/>
+  <circle cx="222" cy="122" r="13" fill="#fab387"/>
+  <!-- cat -->
+  <g stroke="#cba6f7" stroke-width="6" stroke-linejoin="round">
+    <!-- tail (behind body) -->
+    <path d="M160 206 C 206 210, 212 186, 198 164" fill="none" stroke-linecap="round" stroke-width="20"/>
+    <path d="M160 206 C 206 210, 212 186, 198 164" fill="none" stroke="#11111b" stroke-linecap="round" stroke-width="9"/>
+    <!-- body + head silhouette -->
+    <path fill="#11111b" d="
+      M 86 86
+      L 82 44
+      L 112 70
+      Q 128 66 144 70
+      L 174 44
+      L 170 86
+      Q 178 100 172 118
+      Q 166 130 156 134
+      Q 176 160 174 196
+      Q 172 216 150 218
+      L 106 218
+      Q 84 216 82 196
+      Q 80 160 100 134
+      Q 90 130 84 118
+      Q 78 100 86 86 Z"/>
+  </g>
+  <!-- eyes -->
+  <ellipse cx="111" cy="100" rx="10" ry="11" fill="#f9e2af"/>
+  <ellipse cx="145" cy="100" rx="10" ry="11" fill="#f9e2af"/>
+  <ellipse cx="111" cy="100" rx="3" ry="8" fill="#11111b"/>
+  <ellipse cx="145" cy="100" rx="3" ry="8" fill="#11111b"/>
+  <!-- nose -->
+  <path d="M123 116 L133 116 L128 121 Z" fill="#f5c2e7"/>
+  </g>
+  <g font-family="ui-monospace, 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace" font-weight="700">
+    <text x="252" y="122" font-size="92" fill="#cdd6f4" textLength="500" lengthAdjust="spacingAndGlyphs"><tspan fill="#cba6f7">neku</tspan>roddo</text>
+  </g>
+  <rect x="766" y="58" width="34" height="66" rx="4" fill="#cba6f7" opacity="0.9"/>
+  <text x="256" y="168" font-family="ui-monospace, 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace" font-size="20" fill="#a6adc8"><tspan fill="#cba6f7" font-weight="700">❯</tspan> orquestrador TUI dos seus agents do Claude Code</text>
+</svg>

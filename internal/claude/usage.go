@@ -17,7 +17,7 @@ type Limit struct {
 }
 
 // UsageReport is `claude -p /usage`: the subscription limits Claude Code
-// itself reports (no tokens spent, no credentials read by neko).
+// itself reports (no tokens spent, no credentials read by nekuroddo).
 type UsageReport struct {
 	Limits []Limit
 	Raw    string

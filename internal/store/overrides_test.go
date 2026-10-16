@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/config"
 )
 
 func TestOverrides(t *testing.T) {

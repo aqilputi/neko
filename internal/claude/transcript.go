@@ -73,6 +73,7 @@ type Transcript struct {
 	seen    map[string]bool // requestIds already counted
 	pending map[string]string
 	subs    map[string]*Subagent
+	subRead map[string]*subState // read position per subagent file
 }
 
 // Subagent is one Agent-tool child of a session.
@@ -344,7 +345,7 @@ func PromptName(s string) string {
 	return strings.TrimRight(cut, " ,.;:-") + "…"
 }
 
-// NekoInternal reports whether a request is one of neko's own headless calls
+// NekoInternal reports whether a request is one of nekuroddo's own headless calls
 // (the Jira tool calls), which are not sessions of yours.
 func NekoInternal(firstUser string) bool {
 	return strings.HasPrefix(firstUser, "Chame ") && strings.Contains(firstUser, " exatamente uma vez com ") ||
@@ -364,8 +365,6 @@ type subState struct {
 	partial []byte
 }
 
-var subStates = map[string]*subState{}
-
 func (t *Transcript) refreshSubagents(price Pricer) {
 	dir := filepath.Join(strings.TrimSuffix(t.Path, ".jsonl"), "subagents")
 	files, _ := filepath.Glob(filepath.Join(dir, "agent-*.jsonl"))
@@ -383,10 +382,13 @@ func (t *Transcript) refreshSubagents(price Pricer) {
 			t.subs[id] = s
 			t.Subagents = append(t.Subagents, s)
 		}
-		st := subStates[p]
+		if t.subRead == nil {
+			t.subRead = map[string]*subState{}
+		}
+		st := t.subRead[p]
 		if st == nil {
 			st = &subState{}
-			subStates[p] = st
+			t.subRead[p] = st
 		}
 		seen := map[string]bool{}
 		_ = t.tail(p, &st.off, &st.partial, func(r record, m *message) {

@@ -1,11 +1,11 @@
-// Package events carries Claude Code hook events to neko in real time.
+// Package events carries Claude Code hook events to nekuroddo in real time.
 //
-// `neko hook` is installed as a Claude Code hook command (Notification,
+// `nk hook` is installed as a Claude Code hook command (Notification,
 // Stop, SubagentStop, UserPromptSubmit, SessionStart, SessionEnd). A message
 // from another session (SendMessage) arrives as a UserPromptSubmit and is
 // recorded as a "peer" event. It reads
 // the hook payload from stdin and appends one compact line to
-// ~/.local/state/neko/events.jsonl; neko tails that file and refreshes at
+// ~/.local/state/nekuroddo/events.jsonl; nekuroddo tails that file and refreshes at
 // once instead of waiting for the next poll. The hook prints nothing and
 // always exits 0, so it can never block or alter a Claude session.
 package events
@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aqilputi/nekuroddo/internal/paths"
 )
 
 type Event struct {
@@ -85,18 +87,11 @@ func PeerMessage(prompt string) (from, firstLine string, ok bool) {
 	return from, "", true
 }
 
-func Path() string {
-	dir := os.Getenv("XDG_STATE_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(dir, "neko", "events.jsonl")
-}
+func Path() string { return filepath.Join(paths.StateDir(), "events.jsonl") }
 
 const maxSize = 4 << 20
 
-// Record is the body of `neko hook`: payload in, one line out, never fails.
+// Record is the body of `nk hook`: payload in, one line out, never fails.
 func Record(stdin io.Reader) {
 	raw, _ := io.ReadAll(io.LimitReader(stdin, 1<<20))
 	var p struct {
@@ -144,7 +139,7 @@ type Tail struct {
 }
 
 // Poll returns new events. The first call skips history: only events that
-// happen while neko runs matter.
+// happen while nekuroddo runs matter.
 func (t *Tail) Poll() []Event {
 	f, err := os.Open(Path())
 	if err != nil {

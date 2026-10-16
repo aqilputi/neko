@@ -1,4 +1,4 @@
-// Package ui is neko's Bubble Tea program: a vim-driven tree of Claude Code
+// Package ui is nekuroddo's Bubble Tea program: a vim-driven tree of Claude Code
 // sessions grouped by context, an inbox of agents waiting on you, the todo
 // list, and an embedded pane running the real `claude attach`.
 package ui
@@ -15,16 +15,16 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 
-	"github.com/aqilputi/neko/internal/cat"
-	"github.com/aqilputi/neko/internal/claude"
-	"github.com/aqilputi/neko/internal/config"
-	"github.com/aqilputi/neko/internal/events"
-	"github.com/aqilputi/neko/internal/groups"
-	"github.com/aqilputi/neko/internal/jira"
-	"github.com/aqilputi/neko/internal/store"
-	"github.com/aqilputi/neko/internal/term"
-	"github.com/aqilputi/neko/internal/theme"
-	"github.com/aqilputi/neko/internal/todo"
+	"github.com/aqilputi/nekuroddo/internal/cat"
+	"github.com/aqilputi/nekuroddo/internal/claude"
+	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/events"
+	"github.com/aqilputi/nekuroddo/internal/groups"
+	"github.com/aqilputi/nekuroddo/internal/jira"
+	"github.com/aqilputi/nekuroddo/internal/store"
+	"github.com/aqilputi/nekuroddo/internal/term"
+	"github.com/aqilputi/nekuroddo/internal/theme"
+	"github.com/aqilputi/nekuroddo/internal/todo"
 )
 
 type tab int
@@ -110,7 +110,6 @@ type Model struct {
 
 	rows      []row
 	cursor    int
-	offset    int
 	collapsed map[string]bool
 	filter    string
 	showAll   bool // also show stale/archived sessions and finished subagents
@@ -174,7 +173,7 @@ type Model struct {
 	animOn  bool
 	animGen int
 
-	// Claude Code hook events (neko hook → events.jsonl)
+	// Claude Code hook events (nk hook → events.jsonl)
 	evTail       *events.Tail
 	events       map[string]events.Event // last event per session
 	hooksSeen    bool
@@ -586,15 +585,15 @@ func (m *Model) notice() tea.Cmd {
 	}
 	m.cat.Meow(truncate(msg, 50))
 	if m.focused {
-		return nil // you're looking at neko: the cat is enough
+		return nil // you're looking at nekuroddo: the cat is enough
 	}
-	return tea.Batch(tea.Raw("\a"), notifyDesktop("neko", msg))
+	return tea.Batch(tea.Raw("\a"), notifyDesktop("nekuroddo", msg))
 }
 
 func notifyDesktop(title, body string) tea.Cmd {
 	return func() tea.Msg {
 		if p, err := exec.LookPath("notify-send"); err == nil {
-			_ = exec.Command(p, "-a", "neko", title, body).Run()
+			_ = exec.Command(p, "-a", "nekuroddo", title, body).Run()
 		}
 		return nil
 	}
@@ -781,7 +780,7 @@ func truncate(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// ExitBanner reminds what keeps running after neko quits.
+// ExitBanner reminds what keeps running after nekuroddo quits.
 func (m Model) ExitBanner() string {
 	var b strings.Builder
 	for _, s := range m.snap.Sessions {

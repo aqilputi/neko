@@ -8,7 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/config"
 )
 
 // A fake claude that records its argv and prints a short id.

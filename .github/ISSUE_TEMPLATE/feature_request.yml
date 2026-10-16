@@ -1,0 +1,23 @@
+name: Ideia ou recurso
+description: Sugira uma melhoria
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Qual problema isso resolve
+      description: Conte o caso de uso real (quantas sessões, que tipo de trabalho, onde você perde tempo hoje).
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposta
+      description: Como você imagina que funcione. Teclas, comandos da paleta, o que aparece na tela.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas
+      description: O que você já tentou, ou se dá para resolver só com o CLI do Claude Code.

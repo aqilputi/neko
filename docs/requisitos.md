@@ -2,10 +2,10 @@
 type: Requirements
 title: Mapa de requisitos
 description: Requisitos MUST/SHOULD/COULD levantados do uso real e o estado de cada um.
-resource: https://github.com/aqilputi/neko
+resource: https://github.com/aqilputi/nekuroddo
 tags: [requisitos, roadmap]
-timestamp: 2026-10-15T17:00:00Z
-generated: { by: agent:claude-code/claude-opus-5-5, at: 2026-10-15T17:00:00Z }
+timestamp: 2026-10-16T12:00:00Z
+generated: { by: agent:claude-code/claude-opus-5-5, at: 2026-10-16T12:00:00Z }
 status: stable
 ---
 
@@ -31,12 +31,12 @@ pergunta ou decisão, raramente por permissão, e todas as sessões foram em pt-
 | — | todos: ver, start/done, disparar agent no repo certo | ✅ |
 | — | Jira: ver issues, issue → todo, todo → issue, agent por issue — [jira.md](jira.md) | ✅ (criar issue não testado de ponta a ponta) |
 | SHOULD | eventos via hooks com latência < 1 s — [hooks.md](hooks.md) | ✅ |
-| SHOULD | responder sessões **interativas** abertas em outro terminal | ❌ sem API pública (socket privado); alternativas: abrir pelo neko (`c`) ou kitty remote control |
+| SHOULD | responder sessões **interativas** abertas em outro terminal | ❌ sem API pública (socket privado); alternativas: abrir pelo nekuroddo (`c`) ou kitty remote control |
 | SHOULD | mensagens enfileiradas (`queue-operation`), barra de contexto (tokens/1M), `rate-limited` com countdown | ⏳ |
 | SHOULD | busca full-text (`history.jsonl`), visão semana por contexto | ⏳ |
 | SHOULD | barra de custo empilhada (cache read / write / output) | ⏳ |
 | COULD | override manual de contexto, renomear sessão, timeline/replay, modo SDK host (stream-json) | ⏳ |
-| COULD | índice persistido em `~/.cache/neko` para não reler centenas de MB na partida | ⏳ |
-| COULD | temas do usuário (`~/.config/neko/themes/*.toml`) | ⏳ |
+| COULD | índice persistido em `~/.cache/nekuroddo` para não reler centenas de MB na partida | ⏳ |
+| COULD | temas do usuário (`~/.config/nekuroddo/themes/*.toml`) | ⏳ |
 
 Histórico das decisões em [log.md](log.md).

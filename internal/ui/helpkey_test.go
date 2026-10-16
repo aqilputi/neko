@@ -7,7 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/config"
 )
 
 // ctrl+/ opens the full key list however the terminal encodes it, and the

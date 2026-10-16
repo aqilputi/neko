@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aqilputi/neko/internal/claude"
+	"github.com/aqilputi/nekuroddo/internal/claude"
 )
 
 // A session never shows as a hash: title, then its own name, then its first

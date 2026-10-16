@@ -7,8 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/aqilputi/neko/internal/config"
-	"github.com/aqilputi/neko/internal/store"
+	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/store"
 )
 
 func TestSwitcherListsLiveChatsOnly(t *testing.T) {

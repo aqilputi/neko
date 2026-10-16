@@ -10,15 +10,15 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/aqilputi/neko/internal/events"
-	"github.com/aqilputi/neko/internal/groups"
-	"github.com/aqilputi/neko/internal/store"
-	"github.com/aqilputi/neko/internal/theme"
+	"github.com/aqilputi/nekuroddo/internal/events"
+	"github.com/aqilputi/nekuroddo/internal/groups"
+	"github.com/aqilputi/nekuroddo/internal/store"
+	"github.com/aqilputi/nekuroddo/internal/theme"
 )
 
 // Groups relate sessions doing similar work: space picks sessions (as in
 // yazi), `:group <tag>` groups them, and each member learns about its peers
-// through `neko hook-context`. When one warns the others (SendMessage), the
+// through `nk hook-context`. When one warns the others (SendMessage), the
 // sender and the receivers show ✉ and the cat meows.
 
 // mailCueFor is how long the ✉ blinks; it then stays dim until mailKeep.
@@ -307,7 +307,7 @@ func (m *Model) mailBlinking() bool {
 
 // syncGroupNames refreshes the names kept in groups.json when Claude
 // renames a session (they are the SendMessage addresses), and reloads the
-// file in case another neko changed it.
+// file in case another nekuroddo changed it.
 func (m *Model) syncGroupNames() {
 	m.grp = groups.Load()
 	changed := false

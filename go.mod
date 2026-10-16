@@ -1,4 +1,4 @@
-module github.com/aqilputi/neko
+module github.com/aqilputi/nekuroddo
 
 go 1.27.2
 

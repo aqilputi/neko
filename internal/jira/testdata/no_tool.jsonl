@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "mcp_servers": [{"name": "claude.ai Atlassian Rovo", "status": "connected"}]}
+{"type": "result", "subtype": "success", "total_cost_usd": 0.0, "result": "O conector Atlassian não está disponível.", "permission_denials": []}

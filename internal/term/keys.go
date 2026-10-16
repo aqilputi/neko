@@ -29,7 +29,7 @@ func encodeKey(k tea.KeyPressMsg) (tea.KeyPressMsg, string) {
 	// xterm modifier parameter: 1 + shift(1) + alt(2) + ctrl(4) + meta/super(8)
 	mod := 1
 	if k.Mod.Contains(tea.ModShift) {
-		mod += 1
+		mod++
 	}
 	if k.Mod.Contains(tea.ModAlt) {
 		mod += 2

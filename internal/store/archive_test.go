@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/config"
 )
 
 // fakeAgents makes `claude agents --json` report two background sessions
@@ -30,8 +30,8 @@ func TestArchiveComesBackOnActivity(t *testing.T) {
 	cfg := config.Default()
 	cfg.ShowHistoryDays = 0
 	// v1 file format (sessionId → true) must still load
-	os.MkdirAll(filepath.Join(os.Getenv("XDG_STATE_HOME"), "neko"), 0o755)
-	os.WriteFile(filepath.Join(os.Getenv("XDG_STATE_HOME"), "neko", "archived.json"), []byte(`{"aaaa1111-x":true}`), 0o644)
+	os.MkdirAll(filepath.Join(os.Getenv("XDG_STATE_HOME"), "nekuroddo"), 0o755)
+	os.WriteFile(filepath.Join(os.Getenv("XDG_STATE_HOME"), "nekuroddo", "archived.json"), []byte(`{"aaaa1111-x":true}`), 0o644)
 	s := New(cfg)
 	s.archived["bbbb2222-x"] = now.Add(-time.Hour) // archived before its latest activity
 

@@ -1,11 +1,11 @@
 ---
 type: Reference
 title: Fontes de dados e cálculo de custo
-description: Arquivos e comandos do Claude Code que o neko lê (somente leitura) e a fórmula de custo por request.
-resource: https://github.com/aqilputi/neko/tree/main/internal/claude
+description: Arquivos e comandos do Claude Code que o nekuroddo lê (somente leitura) e a fórmula de custo por request.
+resource: https://github.com/aqilputi/nekuroddo/tree/main/internal/claude
 tags: [dados, custo, claude-code, transcripts]
-timestamp: 2026-10-15T17:00:00Z
-generated: { by: agent:claude-code/claude-opus-5-5, at: 2026-10-15T17:00:00Z }
+timestamp: 2026-10-16T12:00:00Z
+generated: { by: agent:claude-code/claude-opus-5-5, at: 2026-10-16T12:00:00Z }
 status: stable
 stale_after: 2027-01-15
 ---
@@ -23,9 +23,9 @@ versão, daí o `stale_after`: depois dessa data, confira esta página de novo.
 | `~/.claude/projects/<cwd>/<sid>.jsonl` | custo (usage por `requestId`, com dedup), título (`ai-title`), últimas mensagens, tool pendente |
 | `<sid>/subagents/agent-*.jsonl` + `.meta.json` | árvore de subagents: descrição, tipo, modelo, custo |
 | `todo.py list --format json` | a lista de tarefas (a escrita é só pela CLI da skill) |
-| `~/.local/state/neko/events.jsonl` | eventos dos [hooks](hooks.md) |
+| `~/.local/state/nekuroddo/events.jsonl` | eventos dos [hooks](hooks.md) |
 
-Estado próprio do neko: `~/.local/state/neko/` (eventos, arquivadas, overrides) e `~/.cache/neko/` (cache do
+Estado próprio do nekuroddo: `~/.local/state/nekuroddo/` (eventos, arquivadas, overrides) e `~/.cache/nekuroddo/` (cache do
 [Jira](jira.md)).
 
 ## Custo

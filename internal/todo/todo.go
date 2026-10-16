@@ -5,6 +5,7 @@ package todo
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -63,7 +64,7 @@ func Available() bool {
 func run(args ...string) ([]byte, error) {
 	out, err := exec.Command("python3", append([]string{script()}, args...)...).Output()
 	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
+		if ee := (*exec.ExitError)(nil); errors.As(err, &ee) {
 			return nil, fmt.Errorf("todo %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
 		}
 		return nil, err

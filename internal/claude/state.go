@@ -7,7 +7,7 @@ import (
 	"strconv"
 )
 
-// These files are written by Claude Code itself and are read-only for neko.
+// These files are written by Claude Code itself and are read-only for nekuroddo.
 // The `<pid>.<hash>.key` files next to sessions/<pid>.json are socket
 // secrets and are never opened.
 

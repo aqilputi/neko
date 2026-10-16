@@ -1,15 +1,15 @@
 ---
 type: Reference
 title: Configuração
-description: Campos do ~/.config/neko/config.toml — contextos por regex, preços, orçamento, todos e Jira.
-resource: https://github.com/aqilputi/neko/blob/main/config.example.toml
+description: Campos do ~/.config/nekuroddo/config.toml — contextos por regex, preços, orçamento, todos e Jira.
+resource: https://github.com/aqilputi/nekuroddo/blob/main/config.example.toml
 tags: [config, toml]
-timestamp: 2026-10-15T17:00:00Z
-generated: { by: agent:claude-code/claude-opus-5-5, at: 2026-10-15T17:00:00Z }
+timestamp: 2026-10-16T12:00:00Z
+generated: { by: agent:claude-code/claude-opus-5-5, at: 2026-10-16T12:00:00Z }
 status: stable
 ---
 
-# Configuração — `~/.config/neko/config.toml`
+# Configuração — `~/.config/nekuroddo/config.toml`
 
 Todos os campos são opcionais, e o que faltar usa o padrão de `internal/config/config.go`. O exemplo comentado
 é o [`config.example.toml`](../config.example.toml).
@@ -75,7 +75,7 @@ repo_roots = ["~/work", "~/dev", "~"]
 | `projects`, `default_project`, `default_type` | projetos visíveis e os padrões ao criar issue |
 | `jql` | padrão: `assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC` |
 | `model`, `max_budget_usd` | modelo e teto de custo do `claude -p` (padrão `haiku`, $0,30) |
-| `cache_minutes` | validade do cache em `~/.cache/neko/jira.json` (padrão 30) |
+| `cache_minutes` | validade do cache em `~/.cache/nekuroddo/jira.json` (padrão 30) |
 | `agent_dir` | onde começam os agents disparados para uma issue |
 | `approve_hint` | comando mostrado quando um hook bloqueia a escrita |
 

@@ -1,4 +1,4 @@
-// vtprobe drives a program inside neko's real embedded pane (term.Pane):
+// vtprobe drives a program inside nekuroddo's real embedded pane (term.Pane):
 // it types prompts, scrolls with the wheel, drags to select, and dumps the
 // screen, title, cursor and clipboard after each step. A debugging tool for
 // the embedded claude.
@@ -17,7 +17,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/aqilputi/neko/internal/term"
+	"github.com/aqilputi/nekuroddo/internal/term"
 )
 
 func main() {
@@ -35,9 +35,9 @@ func main() {
 	}
 	defer p.Close()
 	screen := func() string { return ansi.Strip(p.Render()) }
-	idle := func(d, max time.Duration) {
+	idle := func(d, limit time.Duration) {
 		start, last, prev := time.Now(), time.Now(), ""
-		for time.Since(start) < max {
+		for time.Since(start) < limit {
 			time.Sleep(250 * time.Millisecond)
 			if s := screen(); s != prev {
 				prev, last = s, time.Now()

@@ -11,8 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aqilputi/neko/internal/claude"
-	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/claude"
+	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/paths"
 )
 
 // Attention ranks why a session needs the user. Lower is more urgent.
@@ -93,7 +94,7 @@ func (s Session) Label() string {
 	}
 	// Names Claude derives on its own say nothing: "<dir>-3b" for interactive
 	// sessions, or the session's own id for one resumed in the background.
-	// The name neko gives a new session from its prompt is a placeholder
+	// The name nekuroddo gives a new session from its prompt is a placeholder
 	// until Claude titles it.
 	isID := s.Name == "" || s.Name == s.ShortID || (len(s.Name) >= 8 && strings.HasPrefix(s.SessionID, s.Name))
 	derived := isID || strings.HasPrefix(s.Name, filepath.Base(s.Cwd)+"-") ||
@@ -145,14 +146,7 @@ func New(cfg config.Config) *Store {
 	return s
 }
 
-func statePath(name string) string {
-	dir := os.Getenv("XDG_STATE_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(dir, "neko", name)
-}
+func statePath(name string) string { return filepath.Join(paths.StateDir(), name) }
 
 func (s *Store) loadSeen() {
 	if b, err := os.ReadFile(statePath("seen.json")); err == nil {

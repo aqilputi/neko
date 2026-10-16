@@ -11,10 +11,10 @@ import (
 	"charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 
-	"github.com/aqilputi/neko/internal/config"
-	"github.com/aqilputi/neko/internal/jira"
-	"github.com/aqilputi/neko/internal/store"
-	"github.com/aqilputi/neko/internal/theme"
+	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/jira"
+	"github.com/aqilputi/nekuroddo/internal/store"
+	"github.com/aqilputi/nekuroddo/internal/theme"
 )
 
 func lipglossWidth(s string) int { return lipgloss.Width(s) }
@@ -54,9 +54,9 @@ func (m Model) View() tea.View {
 	v.AltScreen = true
 	v.ReportFocus = true
 	busy, waiting, _ := m.counts()
-	v.WindowTitle = fmt.Sprintf("neko · %d esperando · %d rodando", waiting, busy)
+	v.WindowTitle = fmt.Sprintf("nekuroddo · %d esperando · %d rodando", waiting, busy)
 	// OSC 7501: terminals that support it show in the tab who is waiting.
-	ps := &tea.ProgramStatus{App: "neko", State: tea.ProgramStateIdle}
+	ps := &tea.ProgramStatus{App: "nekuroddo", State: tea.ProgramStateIdle}
 	switch {
 	case waiting > 0:
 		ps.State, ps.Kind, ps.Message = tea.ProgramStateBlocked, tea.ProgramStatusKindQuestion, fmt.Sprintf("%d te esperando", waiting)
@@ -128,7 +128,7 @@ func (m Model) counts() (busy, waiting, done int) {
 
 func (m Model) header(t theme.Theme) string {
 	base := lipgloss.NewStyle().Background(t.Surface)
-	logo := base.Render(" ") + gradient(base.Bold(true), "ᓚᘏᗢ neko", t.Accent, t.Accent2) + base.Render(" ")
+	logo := base.Render(" ") + gradient(base.Bold(true), "ᓚᘏᗢ nekuroddo", t.Accent, t.Accent2) + base.Render(" ")
 	busy, waiting, done := m.counts()
 	pill := func(c color.Color, s string) string {
 		return base.Foreground(c).Bold(true).Render(s)
@@ -161,8 +161,8 @@ func (m Model) header(t theme.Theme) string {
 	}
 	left := logo + base.Render(" ") + stats + cost
 	gap := m.w - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 0 {
-		return base.Width(m.w).MaxWidth(m.w).Render(left)
+	if gap < 0 { // cut, never wrap: a second line pushes the whole UI down
+		return base.Width(m.w).MaxHeight(1).Render(lipgloss.NewStyle().MaxWidth(m.w).Render(left))
 	}
 	return left + base.Render(strings.Repeat(" ", gap)) + right
 }
@@ -251,16 +251,6 @@ func pctBar(t theme.Theme, p float64, w int, base lipgloss.Style) string {
 		}
 	}
 	return b.String()
-}
-
-func money(v float64) string {
-	switch {
-	case v >= 100:
-		return fmt.Sprintf("$%.0f", v)
-	case v >= 10:
-		return fmt.Sprintf("$%.1f", v)
-	}
-	return fmt.Sprintf("$%.2f", v)
 }
 
 func ago(t time.Time) string {
@@ -820,10 +810,10 @@ func (m *Model) sessDetail(t theme.Theme, s *store.Session, w int) string {
 		}
 	}
 	hint := "enter abre aqui · O tela cheia · r responde"
-	switch {
-	case s.Kind == "interactive":
+	switch s.Kind {
+	case "interactive":
 		hint = fmt.Sprintf("aberta num terminal (pid %d) — só leitura aqui", s.PID)
-	case s.Kind == "history":
+	case "history":
 		hint = "enter retoma em background e abre · O retoma em tela cheia"
 	}
 	lines = append(lines, "", b.Foreground(t.Muted).Italic(true).Render(hint))

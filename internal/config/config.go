@@ -1,8 +1,9 @@
-// Package config loads ~/.config/neko/config.toml: context rules, theme,
+// Package config loads ~/.config/nekuroddo/config.toml: context rules, theme,
 // prices and the budget used to scale the cost bars.
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,7 +11,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/aqilputi/neko/internal/jira"
+	"github.com/aqilputi/nekuroddo/internal/jira"
+	"github.com/aqilputi/nekuroddo/internal/paths"
 )
 
 // Rule maps sessions whose cwd matches Match (a regexp on the cwd with ~
@@ -50,7 +52,7 @@ type Config struct {
 	StaleDays float64 `toml:"stale_days"`
 	// Sort is the initial order: atividade | custo | nome.
 	Sort string `toml:"sort"`
-	// PermissionMode is the default for agents neko dispatches: "" (Claude's
+	// PermissionMode is the default for agents nekuroddo dispatches: "" (Claude's
 	// own default), acceptEdits, auto, plan or bypassPermissions. tab cycles
 	// it in the dispatch line.
 	PermissionMode string `toml:"permission_mode"`
@@ -109,14 +111,7 @@ func Default() Config {
 	}
 }
 
-func Path() string {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".config")
-	}
-	return filepath.Join(dir, "neko", "config.toml")
-}
+func Path() string { return filepath.Join(paths.ConfigDir(), "config.toml") }
 
 // Load reads the config file over the defaults. A missing file is fine.
 func Load() (Config, error) {
@@ -135,7 +130,11 @@ func Load() (Config, error) {
 	}
 	c.Jira = c.Jira.WithDefaults()
 	for i := range c.Rules {
-		c.Rules[i].re = regexp.MustCompile(c.Rules[i].Match)
+		re, err := regexp.Compile(c.Rules[i].Match)
+		if err != nil { // a typo in the file must not crash the program
+			return Default(), fmt.Errorf("[[context]] match %q: %w", c.Rules[i].Match, err)
+		}
+		c.Rules[i].re = re
 	}
 	return c, nil
 }
@@ -166,7 +165,11 @@ func (c Config) ContextFor(cwd string) string {
 	t := Tilde(cwd)
 	for _, r := range c.Rules {
 		if r.re == nil { // rules from Default() or a literal Config
-			r.re = regexp.MustCompile(r.Match)
+			re, err := regexp.Compile(r.Match)
+			if err != nil {
+				continue
+			}
+			r.re = re
 		}
 		if m := r.re.FindStringSubmatchIndex(t); m != nil {
 			return string(r.re.ExpandString(nil, r.Name, t, m))

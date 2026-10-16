@@ -7,7 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// keyMap is the single source of neko's keys: matching, the status-line
+// keyMap is the single source of nekuroddo's keys: matching, the status-line
 // hints, the help dialog and the command palette all read from it.
 type keyMap struct {
 	Up, Down, Top, Bottom, HalfDown, HalfUp, PageDown, PageUp     key.Binding
@@ -87,9 +87,9 @@ var keys = keyMap{
 	Quit: kb(ks("q", "ctrl+c"), "q", "sai"),
 }
 
-// leaveInsert hands the keyboard back to neko while the embedded claude has
+// leaveInsert hands the keyboard back to nekuroddo while the embedded claude has
 // focus. Esc is not used: Claude Code needs it.
-var leaveInsert = kb(ks("ctrl+]"), "ctrl+]", "volta pro neko")
+var leaveInsert = kb(ks("ctrl+]"), "ctrl+]", "volta pro nekuroddo")
 
 // shortHelp is what the status line shows, by tab and mode, most useful
 // first: it is cut from the right when the terminal is narrow. Movement keys

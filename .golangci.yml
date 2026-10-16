@@ -1,0 +1,88 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - nilerr
+    - unconvert
+    - wastedassign
+    - revive
+    # misspell is off on purpose: comments and UI strings are partly pt-BR.
+  settings:
+    errcheck:
+      # Writes to a terminal/builder and best-effort cleanup are not worth checking.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (*os.File).Close
+        - os.Remove
+        - os.RemoveAll
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # struct layout churn for no real gain
+        - shadow # `if err := ...` shadowing is idiomatic here
+    staticcheck:
+      checks:
+        - all
+        - -ST1000 # package comment on every package
+        - -ST1003 # naming of initialisms: too noisy for existing code
+        - -ST1020 # comment form on exported identifiers
+        - -ST1021
+        - -ST1022
+        - -QF1008 # embedded field selector simplification
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unreachable-code
+        - name: var-declaration
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling
+    rules:
+      # Tests may ignore errors from setup helpers.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/aqilputi/nekuroddo
+  exclusions:
+    generated: lax
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -1,9 +1,9 @@
 // Package jira reads and creates Jira issues by delegating to a headless
-// `claude -p` that uses the Atlassian connector the user already has. neko
+// `claude -p` that uses the Atlassian connector the user already has. nekuroddo
 // never holds a Jira token. Writes only happen after the user confirms them in
-// neko; the hooks in ~/.claude/settings.json still run on every call.
+// nekuroddo; the hooks in ~/.claude/settings.json still run on every call.
 //
-// The model is only asked to call one tool; neko parses the tool's raw
+// The model is only asked to call one tool; nekuroddo parses the tool's raw
 // result from the stream-json output instead of trusting the model's text.
 package jira
 
@@ -18,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/aqilputi/nekuroddo/internal/paths"
 )
 
 type Config struct {
@@ -78,21 +80,14 @@ func (i Issue) UpdatedAt() time.Time {
 	return t
 }
 
-// Cache is what neko keeps between runs so opening it costs nothing.
+// Cache is what nekuroddo keeps between runs so opening it costs nothing.
 type Cache struct {
 	FetchedAt time.Time `json:"fetched_at"`
 	Issues    []Issue   `json:"issues"`
 	CostUSD   float64   `json:"cost_usd"`
 }
 
-func cachePath() string {
-	dir := os.Getenv("XDG_CACHE_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".cache")
-	}
-	return filepath.Join(dir, "neko", "jira.json")
-}
+func cachePath() string { return filepath.Join(paths.CacheDir(), "jira.json") }
 
 func LoadCache() Cache {
 	var c Cache
@@ -116,7 +111,7 @@ func saveCache(c Cache) {
 const toolPrefix = "mcp__claude_ai_Atlassian_Rovo__"
 
 // DeniedError means Claude Code refused the tool call (a permission rule or a
-// PreToolUse hook). Reason is what it said, so neko never guesses the cause.
+// PreToolUse hook). Reason is what it said, so nekuroddo never guesses the cause.
 type DeniedError struct{ Reason string }
 
 func (e DeniedError) Error() string { return "o claude negou a chamada: " + e.Reason }
@@ -133,11 +128,11 @@ type runResult struct {
 // the tool's raw result.
 func run(cfg Config, tool, instruction string) (runResult, error) {
 	var r runResult
-	// --no-session-persistence: these calls are neko's plumbing, not sessions
+	// --no-session-persistence: these calls are nekuroddo's plumbing, not sessions
 	// of yours to list.
 	// --permission-mode default: with "auto" as the settings default, the
 	// classifier denies every Jira write ("External System Writes") even after
-	// the user confirmed it in neko. In default mode -p allows exactly the one
+	// the user confirmed it in nekuroddo. In default mode -p allows exactly the one
 	// tool in --allowedTools and denies anything else.
 	args := []string{"-p", "--no-session-persistence", "--permission-mode", "default",
 		"--model", cfg.Model, "--output-format", "stream-json", "--verbose",
@@ -232,7 +227,7 @@ var spilledRe = regexp.MustCompile(`^Error: result \(.*\) exceeds maximum allowe
 
 // spilled follows Claude Code's "output too large" notice to the file it
 // saved the full tool result in, so big results (e.g. issues with their
-// descriptions) reach neko without the model ingesting them.
+// descriptions) reach nekuroddo without the model ingesting them.
 func spilled(text string) string {
 	m := spilledRe.FindStringSubmatch(text)
 	if m == nil {
@@ -315,7 +310,7 @@ func Fetch(cfg Config) (Cache, error) {
 		} `json:"issues"`
 	}
 	if err := json.Unmarshal([]byte(r.toolText), &res); err != nil {
-		return Cache{}, fmt.Errorf("resposta do Jira inesperada: %v: %s", err, oneLine(r.toolText, 300))
+		return Cache{}, fmt.Errorf("resposta do Jira inesperada: %w: %s", err, oneLine(r.toolText, 300))
 	}
 	c := Cache{FetchedAt: time.Now(), CostUSD: r.cost}
 	for _, n := range res.Issues.Nodes {
@@ -356,7 +351,7 @@ func cleanDesc(raw json.RawMessage) string {
 
 var keyRe = regexp.MustCompile(`\b([A-Z][A-Z0-9]+-\d+)\b`)
 
-// NewIssue is what the user confirmed in neko before anything is written.
+// NewIssue is what the user confirmed in nekuroddo before anything is written.
 type NewIssue struct {
 	Project     string
 	Type        string
@@ -401,7 +396,7 @@ func Create(cfg Config, n NewIssue) (string, float64, error) {
 func AgentPrompt(i Issue) string {
 	desc := ""
 	if i.Desc != "" {
-		desc = "Descrição (cache do neko, pode estar desatualizada):\n" + i.Desc + "\n\n"
+		desc = "Descrição (cache do nekuroddo, pode estar desatualizada):\n" + i.Desc + "\n\n"
 	}
 	return fmt.Sprintf("Trabalhe na issue %s do Jira: %s\nLink: %s\n\n%s"+
 		"Leia a issue atual (descrição e comentários) com as ferramentas do Atlassian antes de começar. "+

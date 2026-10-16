@@ -1,4 +1,4 @@
-// Package theme holds the color palettes neko can switch between at runtime.
+// Package theme holds the color palettes nekuroddo can switch between at runtime.
 package theme
 
 import (

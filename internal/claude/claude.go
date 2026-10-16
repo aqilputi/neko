@@ -29,7 +29,7 @@ type Agent struct {
 }
 
 // AllowBypass puts "bypass permissions" in the shift+tab cycle of every
-// session neko launches, without starting in it. There is no settings key
+// session nekuroddo launches, without starting in it. There is no settings key
 // for this in Claude Code: it has to be passed at launch.
 const AllowBypass = "--allow-dangerously-skip-permissions"
 
@@ -74,7 +74,7 @@ func Dispatch(dir, name, prompt string, extra ...string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("claude --bg: %v: %s", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("claude --bg: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	if m := shortIDRe.FindStringSubmatch(string(out)); m != nil {
 		return m[1], nil
@@ -89,7 +89,7 @@ func ResumeInBackground(dir, sessionID string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("claude --bg --resume: %v: %s", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("claude --bg --resume: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	if m := shortIDRe.FindStringSubmatch(string(out)); m != nil {
 		return m[1], nil
@@ -103,7 +103,7 @@ func Remove(id string) error { return run("rm", id) }
 func run(args ...string) error {
 	out, err := exec.Command(Bin(), args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("claude %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("claude %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

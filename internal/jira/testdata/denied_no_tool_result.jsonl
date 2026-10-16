@@ -1,0 +1,2 @@
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "vou chamar"}, {"type": "tool_use", "id": "c1", "name": "mcp__claude_ai_Atlassian_Rovo__createJiraIssue", "input": {}}]}}
+{"type": "result", "subtype": "success", "total_cost_usd": 0.01, "result": "Permission   denied\nfor createJiraIssue", "permission_denials": [{"tool_name": "mcp__claude_ai_Atlassian_Rovo__createJiraIssue"}]}

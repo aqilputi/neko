@@ -25,9 +25,9 @@ func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
 	// Over the embedded claude. When it asked for mouse reporting (Claude
 	// Code's fullscreen renderer does) every event goes to it, focused or not:
 	// it scrolls its own chat and selects text inside it (copies come back as
-	// OSC 52). Otherwise the wheel scrolls neko's view of the scrollback.
+	// OSC 52). Otherwise the wheel scrolls nekuroddo's view of the scrollback.
 	if p := m.panes[m.active]; p != nil && pt.In(r.pane) {
-		local := uv.Mouse{X: ev.X - r.pane.Min.X, Y: ev.Y - r.pane.Min.Y, Button: uv.MouseButton(ev.Button), Mod: uv.KeyMod(ev.Mod)}
+		local := uv.Mouse{X: ev.X - r.pane.Min.X, Y: ev.Y - r.pane.Min.Y, Button: ev.Button, Mod: ev.Mod}
 		wants := p.WantsMouse()
 		switch msg.(type) {
 		case tea.MouseClickMsg:
@@ -106,7 +106,7 @@ func (m *Model) clickList(y int) tea.Cmd {
 	if y < 0 || y >= h {
 		return nil
 	}
-	idx := -1
+	var idx int
 	switch m.tab {
 	case tabSessions, tabArchive:
 		start, _ := scroll(m.cursor, len(m.rows), h)

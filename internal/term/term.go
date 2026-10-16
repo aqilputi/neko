@@ -83,7 +83,7 @@ func Start(id, title, dir string, w, h int, argv ...string) (*Pane, error) {
 			if n > 0 {
 				clean := p.osc.filter(buf[:n])
 				p.drawMu.Lock()
-				p.emu.Write(clean)
+				_, _ = p.emu.Write(clean)
 				p.drawMu.Unlock()
 				p.markDirty()
 			}

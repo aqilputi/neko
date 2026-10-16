@@ -1,5 +1,5 @@
 // Package cat is the little black cat napping in the bottom-right corner of
-// neko. It sleeps (zZ) and wakes up to meow when an agent comes back. It has
+// nekuroddo. It sleeps (zZ) and wakes up to meow when an agent comes back. It has
 // no clock of its own: the UI's single animation clock advances it.
 package cat
 
@@ -8,7 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/aqilputi/neko/internal/theme"
+	"github.com/aqilputi/nekuroddo/internal/theme"
 )
 
 type Model struct {

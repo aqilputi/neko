@@ -11,7 +11,7 @@ import (
 // x/vt v0.1.0 aborts an OSC at the first non-ASCII byte and prints the rest
 // as text, so Claude Code's window title ("✳ <task summary>") showed up as
 // ghost text in the prompt box. Titles and clipboard writes (OSC 52) are
-// handled by neko; other OSCs pass through when they are plain ASCII.
+// handled by nekuroddo; other OSCs pass through when they are plain ASCII.
 // It keeps state between writes: a sequence may arrive split across reads.
 type oscFilter struct {
 	state int // 0 text, 1 after ESC, 2 inside OSC, 3 inside OSC after ESC

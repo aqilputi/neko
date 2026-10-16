@@ -12,10 +12,10 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 
-	"github.com/aqilputi/neko/internal/config"
-	"github.com/aqilputi/neko/internal/groups"
-	"github.com/aqilputi/neko/internal/store"
-	"github.com/aqilputi/neko/internal/theme"
+	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/groups"
+	"github.com/aqilputi/nekuroddo/internal/store"
+	"github.com/aqilputi/nekuroddo/internal/theme"
 )
 
 // dialog is a box drawn over the UI. While one is open every key goes to
@@ -53,7 +53,13 @@ type confirmDialog struct {
 
 func (d *confirmDialog) title() string { return "confirma?" }
 
-func (d *confirmDialog) width(m *Model) int { return min(max(lipgloss.Width(d.q)+6, 40), m.w-4) }
+// confirmFooterW is the answer line's width (" y/enter sim    qualquer outra
+// tecla: não"); the box is never narrower than it.
+var confirmFooterW = lipgloss.Width(" y/enter sim    qualquer outra tecla: não")
+
+func (d *confirmDialog) width(m *Model) int {
+	return min(max(lipgloss.Width(d.q), confirmFooterW)+6, m.w-4)
+}
 
 func (d *confirmDialog) handle(m *Model, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch k.String() {
@@ -165,9 +171,9 @@ func (m *Model) askQuit() {
 			running++
 		}
 	}
-	q := "sair do neko?"
+	q := "sair do nekuroddo?"
 	if running > 0 {
-		q = fmt.Sprintf("sair do neko? %d sessões seguem rodando em background (claude attach volta nelas)", running)
+		q = fmt.Sprintf("sair do nekuroddo? %d sessões seguem rodando em background (claude attach volta nelas)", running)
 	}
 	m.confirmThen(q, func(m *Model) tea.Cmd {
 		for id := range m.panes {
@@ -275,7 +281,7 @@ func (m *Model) paletteItems() []paletteItem {
 	}
 	for i, r := range m.todos {
 		idx := i
-		title, hint := "", ""
+		var title, hint string
 		if r.task != nil {
 			title, hint = fmt.Sprintf("todo #%d %s", r.task.ID, r.task.Title), r.group
 		} else {

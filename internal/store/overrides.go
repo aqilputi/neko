@@ -8,7 +8,7 @@ import (
 )
 
 // overrides are the user's own corrections, kept in
-// ~/.local/state/neko/overrides.json: a name per session, a context per
+// ~/.local/state/nekuroddo/overrides.json: a name per session, a context per
 // session (the cwd rule gets sessions in ~ wrong), and a display name per
 // context (renaming a whole section of the tree).
 type overrides struct {

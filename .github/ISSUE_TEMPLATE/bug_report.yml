@@ -1,0 +1,58 @@
+name: Bug
+description: Algo não funciona como deveria
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado por reportar. Não cole transcripts, tokens ou dados da sua organização.
+        Vulnerabilidades vão pelo SECURITY.md, não por aqui.
+  - type: textarea
+    id: what
+    attributes:
+      label: O que aconteceu
+      description: E o que você esperava que acontecesse.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Como reproduzir
+      placeholder: |
+        1. nk
+        2. space em duas sessões, :group teste
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versão do nekuroddo
+      description: Tag ou commit (`git describe --always`), ou "go install @latest em AAAA-MM-DD".
+    validations:
+      required: true
+  - type: input
+    id: claude
+    attributes:
+      label: Versão do Claude Code
+      description: Saída de `claude --version`.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Sistema e terminal
+      placeholder: Arch Linux, kitty 0.40, tmux 3.5
+  - type: dropdown
+    id: hooks
+    attributes:
+      label: Hooks instalados
+      options:
+        - nenhum
+        - nk hook
+        - nk hook + nk hook-context
+  - type: textarea
+    id: extra
+    attributes:
+      label: Detalhes
+      description: Captura de tela, a linha relevante de ~/.local/state/nekuroddo/events.jsonl (sem dados sensíveis), saída do vtprobe.

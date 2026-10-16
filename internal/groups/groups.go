@@ -1,12 +1,12 @@
 // Package groups relates sessions that work on the same thing (say, four
 // similar deploys) so one can warn the others.
 //
-// neko keeps the groups in ~/.local/state/neko/groups.json. `neko
+// nekuroddo keeps the groups in ~/.local/state/nekuroddo/groups.json. `nk
 // hook-context`, a synchronous Claude Code hook (SessionStart,
 // UserPromptSubmit, PostToolUse), tells each member who its peers are the
 // first time it runs after a change, and hands over notes queued with
 // `:notify`. The agents talk to each other with Claude Code's own
-// cross-session SendMessage; neko spots those messages in the hook events
+// cross-session SendMessage; nekuroddo spots those messages in the hook events
 // (see events.Record) and shows them.
 package groups
 
@@ -21,6 +21,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/aqilputi/nekuroddo/internal/paths"
 )
 
 // Member is a session in a group. Name is the address other sessions use
@@ -28,7 +30,7 @@ import (
 type Member struct {
 	SessionID string `json:"session_id"`
 	Name      string `json:"name"`
-	Label     string `json:"label,omitempty"` // what neko shows, if different
+	Label     string `json:"label,omitempty"` // what nekuroddo shows, if different
 	Cwd       string `json:"cwd,omitempty"`
 }
 
@@ -36,14 +38,7 @@ type File struct {
 	Groups map[string][]Member `json:"groups"` // tag → members
 }
 
-func dir() string {
-	d := os.Getenv("XDG_STATE_HOME")
-	if d == "" {
-		home, _ := os.UserHomeDir()
-		d = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(d, "neko")
-}
+func dir() string { return paths.StateDir() }
 
 func Path() string { return filepath.Join(dir(), "groups.json") }
 
@@ -156,7 +151,7 @@ func (f File) Context(id string) string {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("[neko] Seu usuário agrupou esta sessão com outras sessões do Claude Code nesta máquina que fazem trabalho parecido.\n")
+	b.WriteString("[nekuroddo] Seu usuário agrupou esta sessão com outras sessões do Claude Code nesta máquina que fazem trabalho parecido.\n")
 	for _, t := range tags {
 		fmt.Fprintf(&b, "\nGrupo #%s — seus pares (endereço para SendMessage, carregue a ferramenta via ToolSearch se precisar):\n", t)
 		for _, m := range f.Groups[t] {
@@ -165,7 +160,7 @@ func (f File) Context(id string) string {
 			}
 			fmt.Fprintf(&b, "- %q", m.Name)
 			if m.Label != "" && m.Label != m.Name {
-				fmt.Fprintf(&b, " (no neko: %s)", m.Label)
+				fmt.Fprintf(&b, " (no nekuroddo: %s)", m.Label)
 			}
 			if m.Cwd != "" {
 				fmt.Fprintf(&b, " em %s", m.Cwd)
@@ -188,7 +183,7 @@ func Hash(s string) string {
 	return hex.EncodeToString(h[:8])
 }
 
-// ---- notes queued from neko (:notify) ----
+// ---- notes queued from nekuroddo (:notify) ----
 
 type Note struct {
 	At   time.Time `json:"at"`
@@ -239,7 +234,7 @@ func take(id string) []Note {
 
 func stampPath(id string) string { return filepath.Join(dir(), "ctx", id) }
 
-// Hook is the body of `neko hook-context`: it prints the hook output that
+// Hook is the body of `nk hook-context`: it prints the hook output that
 // adds the group context (when it changed) and queued notes to the
 // session, and nothing otherwise. It never fails: any error means no output.
 func Hook(stdin io.Reader, stdout io.Writer) {
@@ -275,14 +270,14 @@ func hookText(id string, fresh bool) string {
 	switch {
 	case ctx == "" && len(old) > 0:
 		_ = os.Remove(stamp)
-		parts = append(parts, "[neko] Seu usuário tirou esta sessão dos grupos. Desconsidere o combinado de grupo anterior e não avise mais os antigos pares.")
+		parts = append(parts, "[nekuroddo] Seu usuário tirou esta sessão dos grupos. Desconsidere o combinado de grupo anterior e não avise mais os antigos pares.")
 	case ctx != "" && (fresh || string(old) != Hash(ctx)):
 		_ = os.MkdirAll(filepath.Dir(stamp), 0o755)
 		_ = os.WriteFile(stamp, []byte(Hash(ctx)), 0o644)
 		parts = append(parts, ctx)
 	}
 	for _, n := range take(id) {
-		parts = append(parts, fmt.Sprintf("[neko] Aviso do seu usuário para o grupo #%s (enviado pelo neko): %s", n.Tag, n.Text))
+		parts = append(parts, fmt.Sprintf("[nekuroddo] Aviso do seu usuário para o grupo #%s (enviado pelo nekuroddo): %s", n.Tag, n.Text))
 	}
 	return strings.Join(parts, "\n\n")
 }

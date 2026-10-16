@@ -1,4 +1,4 @@
-# ~/.config/neko/config.toml — tudo é opcional; o que faltar usa o padrão.
+# ~/.config/nekuroddo/config.toml — tudo é opcional; o que faltar usa o padrão.
 
 stale_days = 3               # paradas há mais que isso saem do inbox e ficam ocultas (H mostra)
 sort = "atividade"           # atividade | custo | nome
