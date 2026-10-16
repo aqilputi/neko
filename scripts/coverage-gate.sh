@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # coverage-gate.sh PROFILE MIN — fails when the total statement coverage in
 # PROFILE (go test -coverprofile) is below MIN percent. cmd/vtprobe, a debug
-# tool that drives a real claude, is left out of the total.
+# tool that drives a real claude, and cmd/nekuroddo-gui, the GUI shell (its
+# window needs WebKitGTK; internal/guihost holds its logic and stays in), are
+# left out of the total.
 set -euo pipefail
 profile=${1:-coverage.out}
 min=${2:-80}
@@ -9,7 +11,7 @@ GO=${GO:-go}
 
 filtered=$(mktemp)
 trap 'rm -f "$filtered"' EXIT
-grep -v '/cmd/vtprobe/' "$profile" >"$filtered"
+grep -v -e '/cmd/vtprobe/' -e '/cmd/nekuroddo-gui/' "$profile" >"$filtered"
 
 total=$("$GO" tool cover -func="$filtered" | awk '/^total:/ {sub("%", "", $NF); print $NF}')
 echo "coverage: ${total}% (mínimo ${min}%)"

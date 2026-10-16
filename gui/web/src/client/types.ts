@@ -515,6 +515,7 @@ export const Ev = {
   MailCue: 'mail.cue',
   TodosChanged: 'todos.changed',
   JiraChanged: 'jira.changed',
+  InboxSummoned: 'inbox.summoned',
 } as const;
 export type EventName = (typeof Ev)[keyof typeof Ev];
 
@@ -613,6 +614,11 @@ export interface JiraChanged {
 }
 /** app.TodoList: payload of todos.changed. */
 export type TodosChanged = Todos;
+/** app.InboxSummoned: the session inbox.summon picked (any client ran it). */
+export interface InboxSummoned {
+  session_id: string;
+  label: string;
+}
 
 /** Payload type of each known event. */
 export interface EventPayloads {
@@ -635,4 +641,5 @@ export interface EventPayloads {
   'mail.cue': MailCueEvent;
   'todos.changed': TodosChanged;
   'jira.changed': JiraChanged;
+  'inbox.summoned': InboxSummoned;
 }

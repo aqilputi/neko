@@ -20,7 +20,7 @@ import (
 var clientNames = strings.Fields(`nav.up nav.down nav.top nav.bottom nav.half_up nav.half_down
 	nav.page_up nav.page_down nav.collapse nav.expand nav.pick nav.next_attention nav.prev_attention
 	tab.sessions tab.inbox tab.todos tab.archive tab.next tab.prev view.filter view.show_all view.sort
-	view.theme palette.open switcher.open help.open usage.show app.quit
+	view.theme view.flat palette.open switcher.open help.open usage.show app.quit
 	session.insert pane.close pane.zoom`)
 
 var cmdBg = store.Session{SessionID: "a", ShortID: "aaaa1111", Name: "alpha", Kind: "background", Cwd: "/w"}

@@ -8,7 +8,7 @@ GUI_WEB       := gui/web
 NPM           ?= npm
 
 .PHONY: all build install test cover cover-check cover-html lint fmt vet ci clean
-.PHONY: gui-install gui-test gui-e2e gui-build
+.PHONY: gui-install gui-test gui-e2e gui-build build-gui run-gui-browser
 
 all: build
 
@@ -66,3 +66,21 @@ gui-e2e:
 # typecheck + vite build → gui/web/dist
 gui-build:
 	cd $(GUI_WEB) && npx tsc --noEmit && npx vite build
+
+# ---- nkg (cmd/nekuroddo-gui: Wails v3 window + internal/guihost) ----
+# The window needs cgo + GTK4 + WebKitGTK 6.0 (Arch/CachyOS:
+# sudo pacman -S webkitgtk-6.0; Debian/Ubuntu: libgtk-4-dev
+# libwebkitgtk-6.0-dev). The frontend is embedded from a copy of
+# gui/web/dist (go:embed cannot reach outside the package).
+NKG_DIST := cmd/nekuroddo-gui/dist
+
+build-gui:
+	cd $(GUI_WEB) && npx vite build
+	find $(NKG_DIST) -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+	cp -r $(GUI_WEB)/dist/. $(NKG_DIST)/
+	$(GO) build -tags wails -o bin/nkg ./cmd/nekuroddo-gui
+
+# no window, no WebKitGTK: the demo world in the default browser
+run-gui-browser:
+	cd $(GUI_WEB) && npx vite build
+	$(GO) run ./cmd/nekuroddo-gui --browser --demo --dev

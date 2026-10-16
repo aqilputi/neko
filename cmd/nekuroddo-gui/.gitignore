@@ -1,0 +1,3 @@
+# the frontend copied in by `make build-gui` (go:embed needs it here)
+/dist/*
+!/dist/.gitkeep

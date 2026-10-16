@@ -1,0 +1,206 @@
+/* The calçada: the strip at the bottom where the inbox cats walk. Windows
+ * stay above it; it lets clicks through except on the cats themselves. */
+.nk-calcada {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 72px;
+  /* no overflow clip: the hover label rises above the strip; walkers
+   * waiting off the left edge cause no scroll (position: fixed) */
+  pointer-events: none;
+  z-index: 30;
+}
+
+.nk-walker {
+  position: absolute;
+  left: 0;
+  bottom: 6px;
+  width: 54px;
+  height: 64px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  will-change: transform;
+  font: inherit;
+  color: var(--nk-text);
+}
+
+.nk-walker:focus-visible {
+  outline: 3px solid var(--nk-accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.nk-walker-queued {
+  display: none;
+}
+
+.nk-cat {
+  display: block;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 0 1px var(--nk-subtle, #a6adc8));
+}
+.nk-cat-left {
+  transform: scaleX(-1);
+}
+.nk-px {
+  fill: var(--nk-cat-body, #11111b);
+}
+.nk-px-eye {
+  fill: var(--nk-cat-eyes, #f9e2af);
+}
+
+/* four leg frames, a quarter of the cycle each — only while walking */
+.nk-frame {
+  visibility: hidden;
+  animation: nk-frame 480ms infinite;
+}
+.nk-frame-0 {
+  animation-delay: -480ms;
+}
+.nk-frame-1 {
+  animation-delay: -360ms;
+}
+.nk-frame-2 {
+  animation-delay: -240ms;
+}
+.nk-frame-3 {
+  animation-delay: -120ms;
+}
+@keyframes nk-frame {
+  0% {
+    visibility: visible;
+  }
+  25%,
+  100% {
+    visibility: hidden;
+  }
+}
+
+/* the bubble with what it brings */
+.nk-bubble {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 4px;
+  margin-bottom: 2px;
+  border: 2px solid var(--nk-border);
+  border-radius: 10px;
+  background: var(--nk-surface);
+  font-weight: bold;
+  font-size: 13px;
+  line-height: 1;
+}
+.nk-walker-blocked .nk-bubble {
+  color: var(--nk-bg);
+  background: var(--nk-blocked);
+  border-color: var(--nk-blocked);
+}
+.nk-walker-returned .nk-bubble {
+  color: var(--nk-bg);
+  background: var(--nk-done);
+  border-color: var(--nk-done);
+}
+.nk-walker-mail .nk-bubble {
+  color: var(--nk-bg);
+  background: var(--nk-accent2);
+  border-color: var(--nk-accent2);
+}
+.nk-walker-walking .nk-bubble {
+  animation: nk-bob 240ms steps(2) infinite;
+}
+@keyframes nk-bob {
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+/* label on hover/focus */
+.nk-walker-label {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 2px 8px;
+  border: 2px solid var(--nk-border);
+  border-radius: 6px;
+  background: var(--nk-overlay);
+  color: var(--nk-text);
+  font-size: 13px;
+  visibility: hidden;
+}
+.nk-walker:hover .nk-walker-label,
+.nk-walker:focus-visible .nk-walker-label {
+  visibility: visible;
+}
+
+/* inbox.summoned: the picked one glows */
+.nk-walker-summoned .nk-cat {
+  filter: drop-shadow(0 0 4px var(--nk-accent)) drop-shadow(0 0 2px var(--nk-accent));
+}
+.nk-walker-summoned .nk-bubble {
+  outline: 3px solid var(--nk-accent);
+}
+
+.nk-inbox-more {
+  position: absolute;
+  left: 8px;
+  bottom: 10px;
+  padding: 2px 8px;
+  border: 2px solid var(--nk-border);
+  border-radius: 10px;
+  background: var(--nk-surface);
+  color: var(--nk-subtle);
+  font-weight: bold;
+  pointer-events: auto;
+}
+
+/* prefers-reduced-motion: a static badge in the corner, same items */
+.nk-inbox-badge {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  pointer-events: auto;
+  max-width: calc(100% - 16px);
+  overflow-x: auto;
+}
+.nk-badge-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+  border: 2px solid var(--nk-border);
+  border-radius: 14px;
+  background: var(--nk-surface);
+  color: var(--nk-text);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.nk-badge-item .nk-bubble {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nk-frame,
+  .nk-bubble {
+    animation: none !important;
+  }
+  .nk-walker {
+    transition: none !important;
+  }
+}

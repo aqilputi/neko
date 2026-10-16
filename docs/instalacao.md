@@ -3,9 +3,9 @@ type: Guide
 title: Instalação e primeiro uso
 description: Pré-requisitos, build com Go ou make, o atalho nk, a migração de quem usava o neko e o primeiro uso.
 resource: https://github.com/aqilputi/nekuroddo
-tags: [instalação, build, go, make, migração]
-timestamp: 2026-10-16T12:00:00Z
-generated: { by: agent:claude-code/claude-opus-5-5, at: 2026-10-16T12:00:00Z }
+tags: [instalação, build, go, make, migração, gui]
+timestamp: 2026-10-16T23:50:00Z
+generated: { by: agent:claude-code/claude-sonnet-5, at: 2026-10-16T23:50:00Z }
 status: stable
 ---
 
@@ -85,6 +85,28 @@ O projeto se chamava `neko` até a v0.1.0. Para atualizar:
    ([hooks.md](hooks.md)).
 4. Num clone antigo, aponte o remote para o repositório novo:
    `git remote set-url origin https://github.com/aqilputi/nekuroddo`.
+
+## GUI (`nkg`)
+
+**Em construção** (Fase 3 do [plano](plano-arquitetura.md); guia de uso completo em [gui.md](gui.md)). O `nkg`
+ainda não tem binário — `cmd/nekuroddo-gui` não existe no repositório hoje. Quando existir, o modo
+`nkg --browser` (sem WebKitGTK, abre no navegador padrão) não vai precisar de nada além do Go; só o modo de
+janela nativa (`nkg` sozinho, via Wails v3) vai pedir GTK4 + WebKitGTK 6.0:
+
+| distro | pacote |
+|---|---|
+| Arch / CachyOS | `sudo pacman -S webkitgtk-6.0` |
+| Debian / Ubuntu | `sudo apt install libwebkitgtk-6.0-dev` |
+| Fedora | `sudo dnf install webkitgtk6.0` |
+
+Hoje já dá para ver o frontend do GUI (ainda em construção) num navegador comum, contra um `nk serve --demo`
+de verdade:
+
+```sh
+cd gui/web && npm ci && npm run demo
+```
+
+Veja [gui.md](gui.md) para o que já funciona, o que é só o esqueleto, e solução de problemas de WebGL.
 
 ## Ferramenta de diagnóstico
 

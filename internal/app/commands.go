@@ -50,6 +50,7 @@ func clientCommands() []core.Command {
 		clientCommand("view.show_all", "mostra paradas/arquivadas/subagents concluídos", "H"),
 		clientCommand("view.sort", "ordem: atividade/custo/nome", "S"),
 		clientCommand("view.theme", "tema", "T"),
+		clientCommand("view.flat", "cena 3D ↔ lista plana (GUI)"),
 		switcher,
 		clientCommand("palette.open", "comandos", ":", "ctrl+p"),
 		clientCommand("usage.show", "uso (/usage)", "u"),

@@ -5,8 +5,8 @@ title: nekuroddo — documentação
 description: Bundle OKF 0.2 do nekuroddo, orquestrador TUI das sessões do Claude Code.
 resource: https://github.com/aqilputi/nekuroddo
 tags: [nekuroddo, índice]
-timestamp: 2026-10-16T12:00:00Z
-generated: { by: agent:claude-code/claude-opus-5-5, at: 2026-10-16T12:00:00Z }
+timestamp: 2026-10-16T23:50:00Z
+generated: { by: agent:claude-code/claude-sonnet-5, at: 2026-10-16T23:50:00Z }
 status: stable
 ---
 
@@ -31,6 +31,7 @@ O `index.md` e o `log.md` são arquivos reservados da spec.
 | [protocolo.md](protocolo.md) | Reference | O protocolo v1 do `internal/rpc`: rotas HTTP, SSE, WebSocket de painel, erros e `nk serve`/`--listen`/`run` |
 | [lua.md](lua.md) | Reference | A API `nk.*` do `internal/lua`, eventos, orçamentos, sandbox e o que ainda falta (capacidades de UI) |
 | [plano-arquitetura.md](plano-arquitetura.md) | Plan | Arquitetura alvo (core headless, GUI 3D de gatinhos low-poly, Lua) e os pacotes de trabalho por fase — planejado, fase 1 em andamento |
+| [gui.md](gui.md) | Guide | Guia de uso do GUI (`nkg`): como rodar, a cena, o gato da inbox, janelas, teclado e Lua — fase 3, em construção |
 | [fontes-de-dados.md](fontes-de-dados.md) | Reference | O que o nekuroddo lê de `~/.claude` e como calcula custo |
 | [painel-embutido.md](painel-embutido.md) | Design Note | PTY + `x/vt` rodando `claude attach`; bugs contornados |
 | [jira.md](jira.md) | Guide | Integração Jira sem token, via `claude -p` + conector |
@@ -53,5 +54,6 @@ parecidas se avisem. O usuário instala com [instalacao.md](instalacao.md), ajus
 [plano-arquitetura.md](plano-arquitetura.md) traça para onde [arquitetura.md](arquitetura.md) está migrando
 (core headless, GUI e Lua), por fases e pacotes de trabalho ainda em andamento; o [protocolo.md](protocolo.md)
 (`internal/rpc`, `nk serve`/`--listen`/`run`) e o [lua.md](lua.md) (`internal/lua`, `nk.*`) documentam duas
-dessas peças já em código. As mudanças ficam registradas em [log.md](log.md), e cada versão tem notas em
-[releases/](releases/v0.1.0.md).
+dessas peças já em código. O [gui.md](gui.md) documenta a Fase 3 (o GUI `nkg`), que fala o mesmo
+[protocolo.md](protocolo.md) e o mesmo [lua.md](lua.md) da TUI. As mudanças ficam registradas em
+[log.md](log.md), e cada versão tem notas em [releases/](releases/v0.1.0.md).

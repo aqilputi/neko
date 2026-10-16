@@ -335,7 +335,7 @@ Nomes (v1): `session.open`, `session.preview`, `session.fullscreen`, `session.in
 `jira.open_url`, `pane.close`, `pane.zoom`, `usage.show`, `inbox.summon`, `app.quit`; e os de escopo
 `client`: `nav.up/down/top/bottom/half_up/half_down/page_up/page_down`, `nav.collapse/expand`, `nav.pick`,
 `nav.next_attention/prev_attention`, `tab.sessions/inbox/todos/archive/next/prev`, `view.filter`,
-`view.show_all`, `view.sort`, `view.theme`, `palette.open`, `switcher.open`, `help.open`. A `Context` que
+`view.show_all`, `view.sort`, `view.theme`, `view.flat` (só o GUI: cena ↔ lista plana), `palette.open`, `switcher.open`, `help.open`. A `Context` que
 cada comando recebe traz a **seleção do cliente** (`SessionID`, `Picked []string`, `Tab`, `TodoID`,
 `IssueKey`) — o core nunca sabe onde está o cursor de ninguém.
 

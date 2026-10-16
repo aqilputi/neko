@@ -5,6 +5,18 @@ e as entradas antigas mantêm o nome da época.
 
 ## 2026-10-16
 
+- **documentação:** fase 3 (WP-6.6): [gui.md](gui.md), o guia de uso do GUI (`nkg`) — como rodar hoje (o
+  frontend num navegador comum, contra `nk serve --demo`, já que `cmd/nekuroddo-gui` ainda não existe) e como
+  está planejado (`nkg --browser`/`--demo`/`--connect`, WebKitGTK por distro); a cena, o gato da inbox (com a
+  receita de atalho do compositor para `nk run inbox.summon`, Hyprland e KDE), janelas, teclado, Lua
+  (`nk.ui.has("scene")`), acessibilidade, orçamento de desempenho e solução de problemas de WebGL. Seção nova
+  em [instalacao.md](instalacao.md#gui-nkg), linha em [index.md](index.md) e roadmap do README atualizados.
+  Escrito contra o código real das outras frentes do GUI que rodam em paralelo nesta fase: `gui/web/src/
+  {client,state}` (WP-6.1) prontos; `inbox` (WP-6.4) já exporta `InboxWalk`/`installInboxKeys` pelo contrato;
+  `scene` e `keymap` têm peças internas em código e teste (modelo de cena, resolução de tecla, navegação) mas
+  ainda sem o `index.ts` do contrato; `chrome`/`windows` só o esqueleto; `internal/guihost` (host HTTP, proxy
+  de `/v1`, login por link de uso único) já funcional como pacote; `cmd/nekuroddo-gui` (o binário `nkg`) ainda
+  não existe. Cada seção do guia marca o estado real da peça que descreve, em vez de um GUI que ainda não roda.
 - **documentação:** onda 3 (WP-3.5): [protocolo.md](protocolo.md) (HTTP+JSON, SSE e WebSocket de
   `internal/rpc`, erros e `nk serve`/`--listen`/`run`), [lua.md](lua.md) (API `nk.*` de `internal/lua`,
   eventos, orçamentos, sandbox, reload) e [comandos.md](comandos.md) (todo comando do registro, com escopo,

@@ -264,10 +264,12 @@ Arquitetura e fluxo de dados em [docs/arquitetura.md](docs/arquitetura.md).
 
 ### Roadmap
 
-Em andamento: separar o domínio da TUI (`internal/tui`) num core headless (`internal/core` + `internal/app`),
-servido localmente como opcional; um GUI com gatinhos 3D low-poly que embute os terminais reais do Claude
-Code; e scripts de automação em Lua, na TUI e no GUI. Nada disso existe em código ainda — a TUI atual e todos
-os atalhos continuam funcionando do mesmo jeito enquanto a refatoração avança. Plano completo em
+O core headless (`internal/core` + `internal/app`, servido opcionalmente por `internal/rpc` via `nk serve`/
+`nk --listen`/`nk run`) e o runtime Lua (`internal/lua`, API `nk.*`, docs em [docs/lua.md](docs/lua.md)) das
+fases 1 e 2 do plano já estão em código. **Em construção agora (fase 3):** um GUI (`nkg`) com gatinhos 3D
+low-poly que embute os terminais reais do Claude Code, fala o mesmo protocolo e o mesmo Lua da TUI — guia de
+uso, do que já roda e do que ainda é só o esqueleto, em [docs/gui.md](docs/gui.md). A TUI atual e todos os
+atalhos continuam funcionando do mesmo jeito enquanto o GUI avança. Plano completo em
 [docs/plano-arquitetura.md](docs/plano-arquitetura.md).
 
 ## Contribuindo

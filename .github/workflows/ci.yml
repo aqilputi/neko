@@ -116,3 +116,32 @@ jobs:
           path: |
             gui/web/playwright-report
             gui/web/test-results
+
+  # nkg with its Wails v3 window (cgo, GTK4, WebKitGTK 6.0): build only
+  gui-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: GTK4 and WebKitGTK 6.0
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev pkg-config
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: gui/web/.nvmrc
+          cache: npm
+          cache-dependency-path: gui/web/package-lock.json
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Frontend (vite build)
+        working-directory: gui/web
+        run: |
+          npm ci
+          npx vite build
+      - name: Embed the frontend
+        run: cp -r gui/web/dist/. cmd/nekuroddo-gui/dist/
+      - name: Vet (wails tag)
+        run: go vet -tags wails ./cmd/nekuroddo-gui
+      - name: Build nkg (wails tag)
+        run: go build -tags wails -o /tmp/nkg ./cmd/nekuroddo-gui
