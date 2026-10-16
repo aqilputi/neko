@@ -249,17 +249,17 @@ func (a *App) RegisterTodoJira() error {
 		run Runner
 		opt []Option
 	}{
-		{core.Command{Name: "todo.start", Title: "começa a tarefa", Keys: []string{"s"}, Mode: core.ModeNormal},
+		{core.Command{Name: "todo.start", Title: "começa a tarefa", Keys: []string{"s"}, Mode: core.ModeNormalTodos},
 			a.runTodoStart, []Option{onTodo}},
-		{core.Command{Name: "todo.done", Title: "marca a tarefa como done", Keys: []string{"D"}, Mode: core.ModeNormal, Confirm: true},
+		{core.Command{Name: "todo.done", Title: "marca a tarefa como done", Keys: []string{"D"}, Mode: core.ModeNormalTodos, Confirm: true},
 			a.runTodoDone, []Option{onTodo}},
 		{core.Command{Name: "jira.toggle", Title: "todo↔jira: issue vira tarefa, tarefa vira issue", Keys: []string{"J"},
-			Mode: core.ModeNormal, Confirm: true,
+			Mode: core.ModeNormalTodos, Confirm: true,
 			Args: []core.Arg{{Name: "target", Type: core.ArgString, Prompt: "projeto/tipo"}}},
 			a.runJiraToggle, []Option{onRow}},
-		{core.Command{Name: "jira.fetch", Title: "busca as issues no Jira (via claude, ~$0.1)", Keys: []string{"F"}, Mode: core.ModeNormal},
+		{core.Command{Name: "jira.fetch", Title: "busca as issues no Jira (via claude, ~$0.1)", Keys: []string{"F"}, Mode: core.ModeNormalTodos},
 			a.runJiraFetch, nil},
-		{core.Command{Name: "jira.open_url", Title: "abre a issue no browser", Keys: []string{"o"}, Mode: core.ModeNormal},
+		{core.Command{Name: "jira.open_url", Title: "abre a issue no browser", Keys: []string{"o"}, Mode: core.ModeNormalTodos},
 			a.runJiraOpenURL, []Option{onIssue}},
 	}
 	for _, c := range cmds {

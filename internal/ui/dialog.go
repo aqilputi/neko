@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sahilm/fuzzy"
 
+	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
@@ -104,8 +105,8 @@ func (m *Model) confirmToken(q, token string) {
 type confirmResolvedMsg struct{ token string }
 
 // onConfirmResolved closes the dialogs still asking for token: the question
-// is no longer open. The TUI does not follow the event bus yet; WP-3.1
-// turns confirm.resolved into this message when it does.
+// is no longer open. The TUI follows the core's bus (followBus) and turns
+// confirm.resolved into this message.
 func (m *Model) onConfirmResolved(msg confirmResolvedMsg) tea.Cmd {
 	kept := m.dialogs[:0]
 	for _, d := range m.dialogs {
@@ -133,7 +134,7 @@ func (helpDialog) view(m *Model, t theme.Theme, w int) string {
 	h.FullSeparator = "    "
 	extra := lipgloss.NewStyle().Background(t.Bg).Foreground(t.Muted).Italic(true).Render(
 		"mouse: clique seleciona, clique de novo abre, roda rola · no INSERT o mouse vai pro claude (shift+arrastar seleciona texto)")
-	return lipgloss.NewStyle().Background(t.Bg).Padding(0, 1).Render(h.FullHelpView(fullHelp()) + "\n\n" + extra)
+	return lipgloss.NewStyle().Background(t.Bg).Padding(0, 1).Render(h.FullHelpView(m.fullHelp()) + "\n\n" + extra)
 }
 
 func helpStyles(t theme.Theme) help.Styles {
@@ -254,23 +255,17 @@ func (m *Model) openPalette() tea.Cmd {
 	return d.input.Focus()
 }
 
-// paletteItems: every key action (run by synthesizing its key), every visible
-// session and task to jump to, and every theme.
+// paletteItems: every command the core lists for this selection
+// (Registry.List: builtins and Lua alike, run by name), the group commands
+// that take an argument, every visible session and task to jump to, and
+// every theme.
 func (m *Model) paletteItems() []paletteItem {
 	var items []paletteItem
-	seen := map[string]bool{}
-	for _, group := range fullHelp() {
-		for _, b := range group {
-			h := b.Help()
-			if seen[h.Desc] || len(b.Keys()) == 0 || b.Keys()[0] == ":" || h.Key == "gg" || h.Key == "dd" {
-				continue
-			}
-			seen[h.Desc] = true
-			k := keyPress(b.Keys()[0])
-			items = append(items, paletteItem{title: h.Desc, hint: h.Key, run: func(m *Model) tea.Cmd {
-				_, cmd := m.keyNormal(k)
-				return cmd
-			}})
+	cmds := m.app.Registry().List(m.commandCtx())
+	sort.SliceStable(cmds, func(i, j int) bool { return helpRank(cmds[i].Name) < helpRank(cmds[j].Name) })
+	for _, c := range cmds {
+		if it, ok := m.commandItem(c); ok {
+			items = append(items, it)
 		}
 	}
 	// group commands take an argument: these reopen the palette with the
@@ -286,17 +281,9 @@ func (m *Model) paletteItems() []paletteItem {
 	grp := m.app.Groups()
 	for _, tag := range grp.Tags() {
 		tg := tag
-		items = append(items, paletteItem{title: fmt.Sprintf("desfazer grupo #%s (%d sessões)", tg, len(grp.Groups[tg])), hint: "grupos", run: func(m *Model) tea.Cmd {
-			m.confirmThen("desfazer o grupo #"+tg+"? as sessões são avisadas na próxima ferramenta", func(m *Model) tea.Cmd {
-				return resultCmd(m.app.DissolveGroup(tg))
-			})
-			return nil
-		}})
+		items = append(items, paletteItem{title: fmt.Sprintf("desfazer grupo #%s (%d sessões)", tg, len(grp.Groups[tg])), hint: "grupos",
+			run: func(m *Model) tea.Cmd { return m.runCore("group.dissolve", app.Args{"tag": tg}) }})
 	}
-	items = append(items, paletteItem{title: "limpar chats encerrados (claude rm)", hint: "processos que sobraram",
-		run: func(m *Model) tea.Cmd { return m.removeEnded() }})
-	items = append(items, paletteItem{title: "arquivar todas as sessões paradas", hint: fmt.Sprintf("> %.0fd sem atividade", m.cfg.StaleDays),
-		run: func(m *Model) tea.Cmd { return m.archiveStale() }})
 	for i := range m.snap.Sessions {
 		s := m.snap.Sessions[i]
 		if s.Stale && !m.view.ShowAll {
@@ -337,6 +324,162 @@ func (m *Model) paletteItems() []paletteItem {
 	return items
 }
 
+// paletteHints are the palette hints of commands with no key.
+var paletteHints = map[string]func(m *Model) string{
+	"sessions.remove_ended":  func(*Model) string { return "processos que sobraram" },
+	"sessions.archive_stale": func(m *Model) string { return fmt.Sprintf("> %.0fd sem atividade", m.cfg.StaleDays) },
+}
+
+// commandItem is c as a palette item: its help text (or title), its key as
+// the hint, run by name. Left out: the palette itself, the two-key
+// sequences (gg, dd: their keys are quicker), and the group commands (the
+// palette offers them typed, with their argument).
+func (m *Model) commandItem(c core.Command) (paletteItem, bool) {
+	if c.Name == "palette.open" || strings.HasPrefix(c.Name, "group.") {
+		return paletteItem{}, false
+	}
+	for _, k := range c.Keys {
+		if core.IsSequence(k) {
+			return paletteItem{}, false
+		}
+	}
+	it := paletteItem{title: c.Title, hint: c.Hint}
+	if d, ok := helpDesc[c.Name]; ok {
+		it.title = d
+	}
+	key := ""
+	switch {
+	case len(c.Keys) > 0:
+		key = c.Keys[0]
+		it.hint = key
+	case paletteHints[c.Name] != nil:
+		it.hint = paletteHints[c.Name](m)
+	}
+	name := c.Name
+	if _, own := clientHandlers[name]; !own && hasRequired(c) {
+		// arguments first: the palette waits for them typed after the name
+		it.run = func(m *Model) tea.Cmd { return m.openPaletteWith(name + " ") }
+		return it, true
+	}
+	it.run = func(m *Model) tea.Cmd {
+		_, cmd := m.runCommand(name, key, nil)
+		return cmd
+	}
+	return it, true
+}
+
+func hasRequired(c core.Command) bool {
+	for _, a := range c.Args {
+		if a.Required {
+			return true
+		}
+	}
+	return false
+}
+
+// typedCommand is a command typed with its arguments: the group commands
+// (group <tag>, ungroup [tag], notify [#tag] msg, as groupCommand shows
+// them) or any command with arguments as "<name> <arg>…". nil falls back to
+// fuzzy search.
+func (m *Model) typedCommand(q string) *paletteItem {
+	if it := m.groupCommand(q); it != nil {
+		if it.run != nil {
+			name, args := m.groupArgs(q)
+			it.run = func(m *Model) tea.Cmd { return m.runTyped(name, args) }
+		}
+		return it
+	}
+	return m.argCommand(q)
+}
+
+// groupArgs maps a typed group command to its core command and arguments.
+func (m *Model) groupArgs(q string) (string, app.Args) {
+	f := strings.Fields(q)
+	switch f[0] {
+	case "group", "g":
+		return "group.add", app.Args{"tag": core.CleanTag(strings.Join(f[1:], " "))}
+	case "ungroup", "ug":
+		args := app.Args{}
+		if len(f) > 1 {
+			args["tag"] = core.CleanTag(f[1])
+		}
+		return "group.remove", args
+	}
+	tag, text := "", strings.TrimSpace(strings.TrimPrefix(q, f[0]))
+	if len(f) > 1 && strings.HasPrefix(f[1], "#") {
+		tag = core.CleanTag(f[1])
+		text = strings.TrimSpace(strings.TrimPrefix(text, f[1]))
+	}
+	if sel := m.selected(); tag == "" && sel != nil {
+		if tags := m.app.TagsOf(sel.SessionID); len(tags) > 0 {
+			tag = tags[0]
+		}
+	}
+	return "group.notify", app.Args{"tag": tag, "text": text}
+}
+
+// runTyped runs a command typed in the palette. Grouping drops the picks it
+// used; a note to a group makes the cat say so.
+func (m *Model) runTyped(name string, args app.Args) tea.Cmd {
+	res, err := m.app.Run(m.commandCtx(), name, args)
+	if err == nil {
+		switch name {
+		case "group.add", "group.remove":
+			m.picked = map[string]bool{}
+		case "group.notify":
+			m.cat.Meow(core.Truncate("✉ você → #"+args["tag"], 50))
+		}
+	}
+	return m.commandResult(name, res, err)
+}
+
+// argCommand is "<name> <arg>…" for a command with arguments: the words
+// fill its arguments in order, the last one taking the rest. Until the
+// required ones are there it only shows what it waits for.
+func (m *Model) argCommand(q string) *paletteItem {
+	f := strings.Fields(q)
+	if len(f) == 0 {
+		return nil
+	}
+	c, ok := m.app.Registry().Lookup(f[0])
+	if !ok || len(c.Args) == 0 || c.Scope != core.ScopeCore {
+		return nil
+	}
+	args, rest := app.Args{}, strings.TrimSpace(strings.TrimPrefix(q, f[0]))
+	var shown []string
+	for i, a := range c.Args {
+		v := rest
+		if i < len(c.Args)-1 {
+			v, rest, _ = strings.Cut(rest, " ")
+			rest = strings.TrimSpace(rest)
+		}
+		if v == "" {
+			if a.Required {
+				return &paletteItem{title: c.Name + " " + argsUsage(c), hint: c.Title}
+			}
+			continue
+		}
+		args[a.Name] = v
+		shown = append(shown, v)
+	}
+	name := c.Name
+	return &paletteItem{title: "▶ " + name + " " + strings.Join(shown, " "), hint: c.Title,
+		run: func(m *Model) tea.Cmd { return m.runTyped(name, args) }}
+}
+
+// argsUsage is "<required> [optional]…".
+func argsUsage(c core.Command) string {
+	var u []string
+	for _, a := range c.Args {
+		if a.Required {
+			u = append(u, "<"+a.Name+">")
+		} else {
+			u = append(u, "["+a.Name+"]")
+		}
+	}
+	return strings.Join(u, " ")
+}
+
 // filter matches what was typed. A command with arguments (group <tag>,
 // ungroup, notify #tag msg) shows on top as the item enter runs.
 func (d *paletteDialog) filter(m *Model) {
@@ -347,7 +490,7 @@ func (d *paletteDialog) filter(m *Model) {
 	d.items = d.base
 	d.matches = d.matches[:0]
 	if d.commands {
-		if it := m.groupCommand(q); it != nil {
+		if it := m.typedCommand(q); it != nil {
 			d.items = append(d.base[:len(d.base):len(d.base)], *it)
 			d.matches = append(d.matches, fuzzy.Match{Index: len(d.base)})
 		}

@@ -78,7 +78,7 @@ func (a *App) dispatchNow(req DispatchReq) (Result, error) {
 // registry. todo.dispatch lives with the todo use cases and calls Dispatch.
 func (a *App) RegisterDispatch() error {
 	return a.reg.Register(core.Command{
-		Name: "session.new", Title: "novo agent em background", Mode: core.ModeNormal, Confirm: true,
+		Name: "session.new", Title: "novo agent em background", Keys: []string{"c"}, Mode: core.ModeNormal, Confirm: true,
 		Hint: "bypass pede confirmação, salvo se for o permission_mode configurado",
 		Args: []core.Arg{
 			{Name: "dir", Type: core.ArgDir, Prompt: "diretório › ", Required: true},

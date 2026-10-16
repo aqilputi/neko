@@ -84,13 +84,13 @@ func New(cfg config.Config, p Ports) *App {
 }
 
 // RegisterBuiltins registers every builtin command (plan §2.4): sessions,
-// dispatch, panes, groups, todos and Jira. The composition root (ui.New
+// dispatch, panes, groups, todos and Jira, and the client-scope ones. The composition root (ui.New
 // today, nk serve later) calls it once; a second call fails with
 // ErrDuplicateCommand.
 func (a *App) RegisterBuiltins() error {
 	for _, register := range []func() error{
 		a.RegisterSessionCommands, a.RegisterDispatch, a.RegisterPanes,
-		a.RegisterGroupCommands, a.RegisterTodoJira,
+		a.RegisterGroupCommands, a.RegisterTodoJira, a.RegisterKeyCommands,
 	} {
 		if err := register(); err != nil {
 			return err

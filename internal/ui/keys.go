@@ -5,10 +5,16 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/aqilputi/nekuroddo/internal/core"
 )
 
-// keyMap is the single source of nekuroddo's keys: matching, the status-line
-// hints, the help dialog and the command palette all read from it.
+// keyMap is how the TUI shows its keys: the status-line hints and the help
+// dialog. It is derived from the core's keymap (app.Keymap, built from the
+// registered commands' Keys/Mode), so a key rebound there shows here too;
+// keyNormal resolves keys against that keymap, not against these bindings.
+// What stays here is presentation: which binding goes where (shortHelp,
+// fullHelp), the TUI's help texts and the bar's short labels.
 type keyMap struct {
 	Up, Down, Top, Bottom, HalfDown, HalfUp, PageDown, PageUp     key.Binding
 	Collapse, Expand, Pick, NextAttn, PrevAttn                    key.Binding
@@ -28,76 +34,74 @@ func kb(keys []string, k, desc string) key.Binding {
 
 func ks(k ...string) []string { return k }
 
-var keys = keyMap{
-	Up:       kb(ks("k", "up"), "k", "sobe"),
-	Down:     kb(ks("j", "down"), "j", "desce"),
-	Top:      kb(ks("g"), "gg", "topo"),
-	Bottom:   kb(ks("G"), "G", "fim"),
-	HalfDown: kb(ks("ctrl+d"), "ctrl+d", "meia página ↓"),
-	HalfUp:   kb(ks("ctrl+u"), "ctrl+u", "meia página ↑"),
-	PageDown: kb(ks("ctrl+f", "pgdown"), "ctrl+f", "página ↓"),
-	PageUp:   kb(ks("ctrl+b", "pgup"), "ctrl+b", "página ↑"),
-
-	Collapse: kb(ks("h", "left"), "h", "fecha nó"),
-	Expand:   kb(ks("l", "right"), "l", "abre nó"),
-	Pick:     kb(ks("space"), "space", "seleciona (p/ :group); no contexto: alterna"),
-	NextAttn: kb(ks("a"), "a", "próxima te esperando"),
-	PrevAttn: kb(ks("A"), "A", "anterior te esperando"),
-
-	TabSessions: kb(ks("1"), "1", "sessões"),
-	TabInbox:    kb(ks("2"), "2", "inbox"),
-	TabTodos:    kb(ks("3"), "3", "todos + jira"),
-	TabArchive:  kb(ks("4"), "4", "arquivo"),
-	NextTab:     kb(ks("tab"), "tab", "próxima aba"),
-	PrevTab:     kb(ks("shift+tab"), "shift+tab", "aba anterior"),
-
-	Filter:  kb(ks("/"), "/", "filtro fuzzy"),
-	ShowAll: kb(ks("H"), "H", "mostra paradas/arquivadas/subagents concluídos"),
-	Sort:    kb(ks("S"), "S", "ordem: atividade/custo/nome"),
-	Archive: kb(ks("X"), "X", "arquiva/restaura (no contexto: todas)"),
-	Rename:  kb(ks("n"), "n", "renomeia sessão (no contexto: a seção)"),
-	Move:    kb(ks("m"), "m", "muda a sessão de contexto"),
-
-	Open:    kb(ks("enter"), "enter", "abre e foca"),
-	Preview: kb(ks("o"), "o", "abre sem focar"),
-	Full:    kb(ks("O"), "O", "tela cheia"),
-	Insert:  kb(ks("i"), "i", "INSERT no painel"),
-	Reply:   kb(ks("r"), "r", "resposta rápida"),
-	New:     kb(ks("c"), "c", "nova sessão"),
-	Stop:    kb(ks("x"), "x", "stop"),
-	Remove:  kb(ks("d"), "dd", "remove (rm)"),
-	Close:   kb(ks("w"), "w", "fecha painel"),
-	Zoom:    kb(ks("z"), "z", "zoom do painel"),
-
-	Dispatch:  kb(ks("enter"), "enter", "dispara agent"),
-	Start:     kb(ks("s"), "s", "start"),
-	Done:      kb(ks("D"), "D", "done"),
-	Jira:      kb(ks("J"), "J", "todo↔jira"),
-	JiraFetch: kb(ks("F"), "F", "busca jira"),
-	OpenURL:   kb(ks("o"), "o", "abre no browser"),
-
-	Palette: kb(ks(":", "ctrl+p"), ":", "comandos"),
-	Usage:   kb(ks("u"), "u", "uso (/usage)"),
-	Switch:  kb(ks("ctrl+k"), "ctrl+k", "ir p/ chat rodando/esperando"),
-	Theme:   kb(ks("T"), "T", "tema"),
-	Refresh: kb(ks("R"), "R", "atualiza e reordena"),
-	// ctrl+/ arrives as "ctrl+/" with the kitty keyboard protocol and as
-	// "ctrl+_" (0x1f) in legacy mode.
-	Help: kb(ks("?", "ctrl+/", "ctrl+_"), "ctrl+/", "todos os comandos"),
-	Quit: kb(ks("q", "ctrl+c"), "q", "sai"),
+// newKeyMap derives the TUI's bindings from the core's keymap.
+func newKeyMap(km core.Keymap) keyMap {
+	b := func(name string) key.Binding { return binding(km, name) }
+	return keyMap{
+		Up: b("nav.up"), Down: b("nav.down"), Top: b("nav.top"), Bottom: b("nav.bottom"),
+		HalfDown: b("nav.half_down"), HalfUp: b("nav.half_up"), PageDown: b("nav.page_down"), PageUp: b("nav.page_up"),
+		Collapse: b("nav.collapse"), Expand: b("nav.expand"), Pick: b("nav.pick"),
+		NextAttn: b("nav.next_attention"), PrevAttn: b("nav.prev_attention"),
+		TabSessions: b("tab.sessions"), TabInbox: b("tab.inbox"), TabTodos: b("tab.todos"), TabArchive: b("tab.archive"),
+		NextTab: b("tab.next"), PrevTab: b("tab.prev"),
+		Filter: b("view.filter"), ShowAll: b("view.show_all"), Sort: b("view.sort"), Archive: b("session.archive"),
+		Rename: b("session.rename"), Move: b("session.move"),
+		Open: b("session.open"), Preview: b("session.preview"), Full: b("session.fullscreen"), Insert: b("session.insert"),
+		Reply: b("session.reply"), New: b("session.new"), Stop: b("session.stop"), Remove: b("session.remove"),
+		Close: b("pane.close"), Zoom: b("pane.zoom"),
+		Dispatch: b("todo.dispatch"), Start: b("todo.start"), Done: b("todo.done"), Jira: b("jira.toggle"),
+		JiraFetch: b("jira.fetch"), OpenURL: b("jira.open_url"),
+		Palette: b("palette.open"), Switch: b("switcher.open"), Usage: b("usage.show"), Theme: b("view.theme"),
+		Refresh: b("sessions.refresh"), Help: b("help.open"), Quit: b("app.quit"),
+	}
 }
 
+// binding is command name's key.Binding: its keys (a sequence such as "gg"
+// matches its first press), its first key shown, with the TUI's help text.
+// A command with no keys (unbound) is disabled, so it shows nowhere.
+func binding(km core.Keymap, name string) key.Binding {
+	bd, ok := km.Find(name)
+	if !ok {
+		return key.NewBinding(key.WithDisabled())
+	}
+	keys := make([]string, len(bd.Keys))
+	for i, k := range bd.Keys {
+		if core.IsSequence(k) {
+			k = k[:len(k)/2]
+		}
+		keys[i] = k
+	}
+	desc := bd.Help.Desc
+	if d, ok := helpDesc[name]; ok {
+		desc = d
+	}
+	return kb(keys, bd.Keys[0], desc)
+}
+
+// helpDesc is the TUI's help text for the commands whose title (what the
+// palette and the GUI show) is longer than the help columns allow.
+var helpDesc = map[string]string{
+	"session.stop": "stop", "session.remove": "remove (rm)", "session.new": "nova sessão",
+	"session.rename": "renomeia sessão (no contexto: a seção)", "session.move": "muda a sessão de contexto",
+	"todo.dispatch": "dispara agent", "todo.start": "start", "todo.done": "done", "jira.toggle": "todo↔jira",
+	"jira.fetch": "busca jira", "jira.open_url": "abre no browser",
+}
+
+// keys is the TUI's keymap, from the core's.
+func (m *Model) keys() keyMap { return newKeyMap(m.app.Keymap()) }
+
 // leaveInsert hands the keyboard back to nekuroddo while the embedded claude has
-// focus. Esc is not used: Claude Code needs it.
+// focus. Esc is not used: Claude Code needs it. It is the TUI's own (the
+// pane is), not a command.
 var leaveInsert = kb(ks("ctrl+]"), "ctrl+]", "volta pro nekuroddo")
 
 // shortHelp is what the status line shows, by tab and mode, most useful
 // first: it is cut from the right when the terminal is narrow. Movement keys
 // (j/k/h/l) are left out, and ctrl+/ is drawn apart so it always shows.
 func (m *Model) shortHelp() []key.Binding {
-	k := keys
+	k := m.keys()
 	if m.mode == modeInsert {
-		sw := keys.Switch
+		sw := k.Switch
 		sw.SetHelp("ctrl+k", "outro chat")
 		return []key.Binding{leaveInsert, sw}
 	}
@@ -118,7 +122,7 @@ func (m *Model) shortHelp() []key.Binding {
 		b = append(b, k.Open, k.Reply, k.Archive, k.Rename, k.NextAttn, k.New, k.Move, k.Pick, k.Filter, k.ShowAll, k.Sort)
 	}
 	if len(m.picked) > 0 { // picking: say what to do with them
-		g := keys.Palette
+		g := k.Palette
 		g.SetHelp(":group", fmt.Sprintf("agrupa %d", len(m.picked)))
 		esc := kb(ks("esc"), "esc", "limpa seleção")
 		b = append([]key.Binding{g, esc}, b...)
@@ -144,19 +148,52 @@ var barLabels = map[string]string{
 	"muda a sessão de contexto": "contexto", "seleciona (p/ :group); no contexto: alterna": "seleciona",
 }
 
-// fullHelp is the help dialog, in columns.
-func fullHelp() [][]key.Binding {
-	k := keys
-	return [][]key.Binding{
-		{k.Down, k.Up, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Collapse, k.Expand, k.Pick, k.NextAttn, k.PrevAttn},
-		{k.Open, k.Preview, k.Full, k.Insert, leaveInsert, k.Reply, k.New, k.Stop, k.Remove, k.Close, k.Zoom},
-		{k.TabSessions, k.TabInbox, k.TabTodos, k.TabArchive, k.NextTab, k.Filter, k.ShowAll, k.Sort, k.Archive, k.Rename, k.Move},
-		{k.Dispatch, k.Start, k.Done, k.Jira, k.JiraFetch, k.OpenURL, k.Switch, k.Palette, k.Usage, k.Theme, k.Refresh, k.Help, k.Quit},
-	}
+// helpColumns is the help dialog's layout, by command ("" is leaveInsert).
+// The palette lists commands in this order too.
+var helpColumns = [][]string{
+	{"nav.down", "nav.up", "nav.top", "nav.bottom", "nav.half_down", "nav.half_up", "nav.collapse", "nav.expand",
+		"nav.pick", "nav.next_attention", "nav.prev_attention"},
+	{"session.open", "session.preview", "session.fullscreen", "session.insert", "", "session.reply", "session.new",
+		"session.stop", "session.remove", "pane.close", "pane.zoom"},
+	{"tab.sessions", "tab.inbox", "tab.todos", "tab.archive", "tab.next", "view.filter", "view.show_all", "view.sort",
+		"session.archive", "session.rename", "session.move"},
+	{"todo.dispatch", "todo.start", "todo.done", "jira.toggle", "jira.fetch", "jira.open_url", "switcher.open",
+		"palette.open", "usage.show", "view.theme", "sessions.refresh", "help.open", "app.quit"},
 }
 
-// keyPress builds the key event for a binding's first key, so the palette
-// can run any action exactly as if it was typed.
+// fullHelp is the help dialog, in columns.
+func (m *Model) fullHelp() [][]key.Binding {
+	km := m.app.Keymap()
+	cols := make([][]key.Binding, len(helpColumns))
+	for i, col := range helpColumns {
+		for _, name := range col {
+			b := leaveInsert
+			if name != "" {
+				b = binding(km, name)
+			}
+			cols[i] = append(cols[i], b)
+		}
+	}
+	return cols
+}
+
+// helpRank is a command's place in the help (the palette's order); the
+// commands the help leaves out go after, in the core's order.
+func helpRank(name string) int {
+	n := 0
+	for _, col := range helpColumns {
+		for _, c := range col {
+			if c == name {
+				return n
+			}
+			n++
+		}
+	}
+	return n
+}
+
+// keyPress builds the key event for a key as the keymap writes it, so a key
+// can be replayed (the mouse's click-to-open, tests) exactly as if typed.
 func keyPress(s string) tea.KeyPressMsg {
 	switch s {
 	case "enter":
