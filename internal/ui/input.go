@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -162,4 +163,21 @@ func (m *Model) onDispatched(msg dispatchedMsg) tea.Cmd {
 		})
 	}
 	return tea.Batch(cmds...)
+}
+
+// inputSlice is the bottom input line and the next dispatch's settings.
+type inputSlice struct {
+	input      textinput.Model
+	purpose    inputPurpose
+	basePrompt string // the input prompt without the permission badge
+	perm       int    // index into permModes for the next dispatch
+	draftDir   string
+	draftTask  *todo.Task
+}
+
+func newInputSlice(cfg config.Config) inputSlice {
+	ti := textinput.New()
+	ti.Prompt = "› "
+	ti.CharLimit = 4000
+	return inputSlice{input: ti, perm: permIndex(cfg.PermissionMode)}
 }

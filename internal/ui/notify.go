@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/claude"
 	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
@@ -129,4 +130,24 @@ func (m *Model) onUsage(msg usageMsg) tea.Cmd {
 		}
 	}
 	return next
+}
+
+// notifySlice is state transitions, terminal focus, /usage and hook events.
+type notifySlice struct {
+	prevState map[string]string
+	focused   bool // terminal focus (notifications only when away)
+
+	usage       claude.UsageReport // `claude -p /usage`: 5h session and weekly limits
+	usageErr    error
+	usageWarned int // highest session % threshold already announced
+
+	// Claude Code hook events (nk hook → events.jsonl)
+	evTail       app.EventLog            // ports.Events
+	events       map[string]events.Event // last event per session
+	hooksSeen    bool
+	refreshAgain bool
+}
+
+func newNotifySlice(ports app.Ports) notifySlice {
+	return notifySlice{prevState: map[string]string{}, focused: true, evTail: ports.Events, events: map[string]events.Event{}}
 }

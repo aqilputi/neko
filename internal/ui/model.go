@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/aqilputi/nekuroddo/internal/app"
@@ -16,11 +15,8 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/claude"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
-	"github.com/aqilputi/nekuroddo/internal/events"
-	"github.com/aqilputi/nekuroddo/internal/groups"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/store"
-	"github.com/aqilputi/nekuroddo/internal/term"
 	"github.com/aqilputi/nekuroddo/internal/theme"
 	"github.com/aqilputi/nekuroddo/internal/todo"
 	"github.com/aqilputi/nekuroddo/internal/wire"
@@ -67,8 +63,8 @@ type todoRow struct {
 	issue *jira.Issue
 }
 
-// Model is the TUI. Its fields are grouped by slice: each slice (wave 2 of
-// docs/plano-arquitetura.md) adds fields only inside its own block.
+// Model is the TUI: shared view state here, and one embedded struct per slice
+// (wave 2 of docs/plano-arquitetura.md), each declared in the slice's file.
 type Model struct {
 	cfg   config.Config
 	app   *app.App
@@ -107,56 +103,14 @@ type Model struct {
 	animOn  bool
 	animGen int
 
-	// ---- slice: groups ----
-	// groups of related sessions (see groups.go)
-	picked map[string]bool // sessions picked with space
-	grp    groups.File
-	mail   map[string]mailCue // ✉ next to sessions that sent/got a message
-	msgs   []peerMsg
-
-	// ---- slice: sessions ----
-	// (archive/stop/remove/rename/move keep no state of their own yet; see sessions.go)
-
-	// ---- slice: dispatch/input ----
-	input      textinput.Model
-	purpose    inputPurpose
-	basePrompt string // the input prompt without the permission badge
-	perm       int    // index into permModes for the next dispatch
-	draftDir   string
-	draftTask  *todo.Task
-
-	// ---- slice: panes ----
-	panes   map[string]*term.Pane
-	paneOf  map[string]string // sessionId → pane id (history sessions get a new short id)
-	active  string            // pane id shown on the right (follows the selection, see syncActive)
-	zoom    bool
-	pending map[string]string // pane id → reply to type once it is ready
-
-	// ---- slice: jira/todo ----
-	todos     []todoRow
-	todoCur   int
-	todoErr   error
-	todoAvail bool
-	tasks     []todo.Group
-
-	jira        jira.Cache
-	jiraLoading bool
-	jiraErr     error
-	draftIssue  *jira.Issue
-
-	// ---- slice: notify ----
-	prevState map[string]string
-	focused   bool // terminal focus (notifications only when away)
-
-	usage       claude.UsageReport // `claude -p /usage`: 5h session and weekly limits
-	usageErr    error
-	usageWarned int // highest session % threshold already announced
-
-	// Claude Code hook events (nk hook → events.jsonl)
-	evTail       app.EventLog            // ports.Events
-	events       map[string]events.Event // last event per session
-	hooksSeen    bool
-	refreshAgain bool
+	// Each slice keeps its state in a struct declared in its own file, so a
+	// slice's work never touches this one (fields are promoted: m.picked…).
+	groupsSlice   // groups.go
+	sessionsSlice // sessions.go
+	inputSlice    // input.go
+	paneSlice     // pane.go
+	todoJiraSlice // todo_jira.go
+	notifySlice   // notify.go
 }
 
 // New builds the TUI over the real world (wire.Default).
@@ -168,18 +122,15 @@ func New(cfg config.Config) Model {
 // ports' session store and hook event log (so there is one of each).
 func NewWithApp(a *app.App) Model {
 	cfg, ports := a.Config(), a.Ports()
-	ti := textinput.New()
-	ti.Prompt = "› "
-	ti.CharLimit = 4000
 	return Model{
 		cfg: cfg, app: a, store: ports.Sessions, th: theme.ByName(cfg.Theme),
-		prevState: map[string]string{}, view: core.NewViewState(cfg.Sort),
-		panes: map[string]*term.Pane{}, paneOf: map[string]string{}, pending: map[string]string{},
-		input: ti, cat: cat.New(), todoAvail: todo.Available(),
-		jira: jira.LoadCache(), perm: permIndex(cfg.PermissionMode),
-		focused: true, themeSet: cfg.Theme != "",
-		evTail: ports.Events, events: map[string]events.Event{},
-		picked: map[string]bool{}, grp: groups.Load(), mail: map[string]mailCue{},
+		view: core.NewViewState(cfg.Sort), cat: cat.New(), themeSet: cfg.Theme != "",
+		groupsSlice:   newGroupsSlice(),
+		sessionsSlice: newSessionsSlice(),
+		inputSlice:    newInputSlice(cfg),
+		paneSlice:     newPaneSlice(),
+		todoJiraSlice: newTodoJiraSlice(),
+		notifySlice:   newNotifySlice(ports),
 	}
 }
 

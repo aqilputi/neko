@@ -205,3 +205,9 @@ func (m *Model) contextNames() []string {
 	sort.Strings(out)
 	return out
 }
+
+// sessionsSlice is the sessions slice's state (archive, stop, remove,
+// rename and move keep none of their own yet).
+type sessionsSlice struct{}
+
+func newSessionsSlice() sessionsSlice { return sessionsSlice{} }

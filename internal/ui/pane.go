@@ -184,3 +184,16 @@ func (m *Model) onEnter(msg enterMsg) tea.Cmd {
 	}
 	return toastCmd("resposta enviada ✓", false)
 }
+
+// paneSlice is the embedded claude panes.
+type paneSlice struct {
+	panes   map[string]*term.Pane
+	paneOf  map[string]string // sessionId → pane id (history sessions get a new short id)
+	active  string            // pane id shown on the right (follows the selection, see syncActive)
+	zoom    bool
+	pending map[string]string // pane id → reply to type once it is ready
+}
+
+func newPaneSlice() paneSlice {
+	return paneSlice{panes: map[string]*term.Pane{}, paneOf: map[string]string{}, pending: map[string]string{}}
+}

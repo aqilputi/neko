@@ -391,3 +391,15 @@ func (m *Model) labelOf(id string) string {
 	}
 	return ""
 }
+
+// groupsSlice is the groups slice's state: picks, groups and ✉ cues.
+type groupsSlice struct {
+	picked map[string]bool // sessions picked with space
+	grp    groups.File
+	mail   map[string]mailCue // ✉ next to sessions that sent/got a message
+	msgs   []peerMsg
+}
+
+func newGroupsSlice() groupsSlice {
+	return groupsSlice{picked: map[string]bool{}, grp: groups.Load(), mail: map[string]mailCue{}}
+}

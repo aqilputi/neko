@@ -272,3 +272,21 @@ func (m *Model) onJiraCreated(msg jiraCreatedMsg) tea.Cmd {
 		},
 		m.fetchJira(true))
 }
+
+// todoJiraSlice is the todos tab: the task list and the Jira cache.
+type todoJiraSlice struct {
+	todos     []todoRow
+	todoCur   int
+	todoErr   error
+	todoAvail bool
+	tasks     []todo.Group
+
+	jira        jira.Cache
+	jiraLoading bool
+	jiraErr     error
+	draftIssue  *jira.Issue
+}
+
+func newTodoJiraSlice() todoJiraSlice {
+	return todoJiraSlice{todoAvail: todo.Available(), jira: jira.LoadCache()}
+}
