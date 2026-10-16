@@ -89,6 +89,9 @@ func TestBehaviorDoubleCtrlCQuits(t *testing.T) {
 		t.Fatal("first ctrl+c asks")
 	}
 	m.pop()
+	// "within a second" on the wall clock: pin the first press to now so a
+	// GC pause under -race and a loaded machine can't stretch the gap
+	m.lastCtrlC = time.Now()
 	_, cmd = m.keyNormal(ctrlC)
 	if cmd == nil || len(m.panes) != 0 {
 		t.Fatal("second ctrl+c within a second quits")
@@ -122,7 +125,7 @@ func TestBehaviorHelpAndUsageDialogs(t *testing.T) {
 		t.Fatalf("u fetches /usage even when polling is off: %v", msgs)
 	}
 	um, ok := msgs[0].(usageMsg)
-	if !ok || !um.manual || um.err == nil {
+	if !ok || um.err == nil {
 		t.Fatalf("manual fetch with a failing claude: %+v", msgs[0])
 	}
 	if next := m.update(um); next != nil {
@@ -382,7 +385,7 @@ func TestBehaviorRemoveEnded(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("rm: %v", msgs)
 	}
-	if _, ok := msgs[0].(tickMsg); !ok {
+	if _, ok := msgs[0].(refreshMsg); !ok {
 		t.Fatalf("rm then refresh: %T", msgs[0])
 	}
 }
@@ -437,7 +440,7 @@ func TestBehaviorStopAndRemoveSelected(t *testing.T) {
 	m.keyNormal(bhRune('x'))
 	if msgs := bhRun(m.key(bhRune('y'))); len(msgs) != 1 {
 		t.Fatalf("stop: %v", msgs)
-	} else if _, ok := msgs[0].(tickMsg); !ok {
+	} else if _, ok := msgs[0].(refreshMsg); !ok {
 		t.Fatalf("stop then refresh: %T", msgs[0])
 	}
 }

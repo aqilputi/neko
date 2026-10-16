@@ -66,7 +66,9 @@ func (a *App) JiraCache() jira.Cache {
 func (a *App) readCacheLocked(s *todoJiraState) {
 	if !s.cacheRead {
 		s.cacheRead = true
-		s.cache = jira.LoadCache()
+		if a.ports.Jira != nil {
+			s.cache = a.ports.Jira.Cached()
+		}
 	}
 }
 

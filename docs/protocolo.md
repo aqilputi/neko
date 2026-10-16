@@ -4,7 +4,7 @@ title: Protocolo v1 (RPC)
 description: HTTP+JSON, SSE e WebSocket servidos por internal/rpc sobre o core — endpoints, erros, eventos e painéis remotos, como implementado hoje.
 resource: https://github.com/aqilputi/nekuroddo/tree/main/internal/rpc
 tags: [rpc, protocolo, http, sse, websocket, api]
-timestamp: 2026-10-16T20:00:00Z
+timestamp: 2026-10-16T22:00:00Z
 generated: { by: agent:claude-code/claude-sonnet-5, at: 2026-10-16T20:00:00Z }
 status: draft
 ---
@@ -17,8 +17,10 @@ crus do PTY. É um shell como a TUI — traduz pedidos em chamadas de `app` e nu
 claude/store/groups/jira/todo — e continua opcional: um `nk` comum (sem `serve` nem `--listen`) nunca sobe um
 `rpc.Server`.
 
-**Estado no código:** o pacote (`server.go`, `events.go`, `panes.go`, `client.go`, `proto/proto.go`) tem testes
-próprios (meta do WP-3.2 é ≥ 90% de cobertura) e já está ligado de verdade em `cmd/nekuroddo` (WP-3.4):
+**Estado no código:** o pacote (`server.go`, `events.go`, `panes.go`, `view.go`, `client.go`, `proto/proto.go`,
+`proto/view.go`) tem testes próprios (≥ 90% de cobertura) e cobre todas as rotas do §3 do plano — as da fase 2
+(`/v1/view/tree`, `/v1/theme`, `/v1/lua/eval`) incluídas (WP-5.2). Já está ligado de verdade em `cmd/nekuroddo`
+(WP-3.4):
 
 - `nk serve [--listen <endereço>]` sobe o core sem TUI, servido por RPC; sem `--listen`, escuta em
   `unix://$XDG_RUNTIME_DIR/nekuroddo-<uid>.sock` (`rpc.DefaultSocketPath()`).
@@ -62,9 +64,10 @@ $ curl --unix-socket $XDG_RUNTIME_DIR/nekuroddo-$(id -u).sock http://nk/v1/hello
 {"app":"nekuroddo","version":"dev","protocol":1,"capabilities":["panes"],"pid":48213}
 ```
 
-`capabilities` sempre inclui `"panes"` (`proto.CapPanes`); `"lua"` (`proto.CapLua`) e `"demo"` (`proto.CapDemo`)
-só aparecem se o host passar `Options.Capabilities` — hoje nada os liga (a fase 2 wire `lua`, e `--demo` é o
-WP-5.2). `version` é `Options.Version` (a versão do binário, em texto livre); `pid` é o do processo do
+`capabilities` sempre inclui `"panes"` (`proto.CapPanes`); `"lua"` (`proto.CapLua`) aparece sozinho quando o
+host passa um runtime em `Options.Lua` (ver [`POST /v1/lua/eval`](#post-v1luaeval)), e `"demo"`
+(`proto.CapDemo`) quando o host passa `Options.Capabilities` com ele (`nk serve --demo`, ver [Modo
+demo](#modo-demo-internaldemo)). `version` é `Options.Version` (a versão do binário, em texto livre); `pid` é o do processo do
 servidor.
 
 ## `GET /v1/snapshot`
@@ -251,16 +254,16 @@ códigos diferentes podem compartilhar status, como `not_found` e `unknown_comma
 
 | status | `code` | quando |
 |---|---|---|
-| 400 | `bad_request` | JSON do corpo malformado; `?since=`/`Last-Event-ID` não numérico; `?todo_id=` não numérico; `session_id` faltando em `POST /v1/panes`; tamanho de painel inválido |
+| 400 | `bad_request` | JSON do corpo malformado; `?since=`/`Last-Event-ID` não numérico; `?todo_id=` não numérico; `session_id` faltando em `POST /v1/panes`; tamanho de painel inválido; `tab`/`sort` desconhecidos em `POST /v1/view/tree`; `code` vazio em `POST /v1/lua/eval` |
 | 401 | `unauthorized` | TCP sem `Authorization: Bearer`/`?token=` válido |
-| 404 | `not_found` | sessão ou painel desconhecido (`POST /v1/panes`, `.../resize`, `.../ws`, `DELETE`) |
+| 404 | `not_found` | sessão ou painel desconhecido (`POST /v1/panes`, `.../resize`, `.../ws`, `DELETE`); tema desconhecido em `GET /v1/theme?name=` |
 | 404 | `unknown_command` | `POST /v1/commands/{name}` com nome não registrado |
 | 404 | `unknown_token` | `POST /v1/confirm/{token}` com token desconhecido ou já consumido |
 | 400 | `client_command` | o nome existe mas é `scope: client` (sem `Runner`; roda só no cliente) |
 | 409 | `unavailable` | comando existe mas `available(ctx)` nega para essa seleção (ex.: sem sessão sob o cursor) |
 | 400 | `missing_arg` | falta um argumento `required` do comando |
 | 410 | `expired` | confirmação expirada (60 s) |
-| 501 | `not_implemented` | rota da fase 2 (abaixo), ou `POST /v1/panes` sem `PTYSpawner` quando precisaria abrir um painel |
+| 501 | `not_implemented` | `POST /v1/lua/eval` num servidor sem `Options.Lua`, ou `POST /v1/panes` sem `PTYSpawner` quando precisaria abrir um painel |
 | 422 | `failed` | qualquer outro erro do `app` (fallback) |
 | 500 | `failed` | a própria resposta não serializou em JSON (nunca deveria acontecer) |
 | 503 | `failed` | `GET /v1/events` enquanto o servidor está fechando |
@@ -268,15 +271,136 @@ códigos diferentes podem compartilhar status, como `not_found` e `unknown_comma
 `proto.CodeConflict` está declarado mas **nenhum handler o emite hoje** — `ErrUnavailable` vira `409` com
 `code: "unavailable"`, não `"conflict"` (ver "inconsistências" no relatório final do WP-3.5).
 
-## O que ainda não existe (fase 2)
+## `POST /v1/view/tree`
 
-Declaradas só para dar uma resposta clara em vez de `404` genérico (`m.HandleFunc(p, notImplemented)`):
+A árvore contexto → sessão → subagent já filtrada, ordenada e dobrada por `core.BuildTree` — a mesma função que
+desenha a árvore da TUI — sobre o snapshot do core (`internal/rpc/view.go`). **O servidor não guarda estado de
+visão:** o cliente manda o `state` que recebeu da última vez e a próxima construção continua dele (ordem
+congelada, paleta dos contextos, dobras, cursor). O primeiro pedido pode ir vazio (`{}` ou corpo vazio).
 
-- `POST /v1/view/tree` — árvore já filtrada/ordenada (`core.BuildTree`), para o GUI não duplicar a lógica.
-- `GET /v1/theme` — tokens de cor do tema ativo, para o GUI pintar igual à TUI.
-- `POST /v1/lua/eval` — o `:lua <código>` da paleta, por HTTP.
+```
+$ curl -XPOST --unix-socket $SOCK http://nk/v1/view/tree -d '{"state":{"tab":"sessions"}}'
+{                                   (trecho, sobre o mundo de `nk serve --demo`)
+  "rows": [
+    {"key":"ctx:visio","kind":"ctx","ctx":"visio","depth":0,"color":0,"ctx_cost":6.78,"ctx_n":3,"attention":0},
+    {"key":"sess:d3e0a001-…","kind":"sess","ctx":"visio","depth":1,"color":0,"session_id":"d3e0a001-…",
+     "short_id":"dmgatewy","label":"api-gateway","session_kind":"background","state":"blocked","attention":1,
+     "cost":2.13,"options":3,"groups":[{"tag":"deploy-rc","color":<core.GroupColorIndex("deploy-rc")>}],
+     "mail":{"at":"2026-10-16T20:00:20Z","sent":true},"mail_state":"blink"},
+    {"key":"sub:agent-idx-a","kind":"sub","ctx":"oss","depth":2,"color":2,"session_id":"d3e0a006-…",
+     "short_id":"dmindexr","label":"mapear os módulos","state":"busy","attention":0,"cost":0.2,
+     "sub":{"id":"agent-idx-a","description":"mapear os módulos","type":"Explore","cost":0.2}}
+  ],
+  "state": {"tab":"sessions","sort":"atividade","order":{"ctx:visio":0,"sess:d3e0a001-…":1},
+            "ctx_color":{"visio":0,"pessoal":1,"oss":2},"cursor":0,"cursor_key":"ctx:visio","inbox_cursor":0},
+  "inbox": ["d3e0a001-…","d3e0a002-…"],
+  "hidden": 1,
+  "archived": 0
+}
+```
 
-Todas devolvem `501 {"error":"<rota>: fase 2 (ainda não existe)","code":"not_implemented"}`.
+**Pedido** — `proto.TreeRequest{state}`; `state` é `proto.ViewState` (todos os campos opcionais):
+
+| campo | o quê |
+|---|---|
+| `tab` | `sessions` (padrão) \| `inbox` \| `todos` \| `archive` (`archive` lista só o que foi arquivado à mão) |
+| `filter` | filtro fuzzy (label, contexto, nome, cwd); com filtro, sessões velhas também aparecem |
+| `show_all` | também sessões velhas/arquivadas e subagents terminados (o `H` da TUI) |
+| `sort` | `atividade` \| `custo` \| `nome`; vazio = o `sort` da config. Ao trocar, mande `reset_order: true` uma vez |
+| `order`, `new_rank` | a ordem congelada (chave de linha → rank); devolva como recebeu |
+| `collapsed` | dobras por chave (`"ctx:<nome>"`, `"sess:<id>"`) → `true` |
+| `ctx_color` | contexto → índice de paleta, na ordem em que apareceram; devolva como recebeu |
+| `cursor`, `cursor_key` | linha selecionada; a próxima construção segue `cursor_key` se a linha mudou de lugar |
+| `inbox_cursor` | seleção na inbox (só limitada ao tamanho) |
+| `reset_order` | só no pedido: reordena pelo critério atual (o `S`/`R` da TUI) |
+
+`tab` ou `sort` desconhecidos → `400 bad_request`.
+
+**Resposta** — `proto.Tree{rows, state, inbox, hidden, archived}`. `inbox` são os ids que pedem atenção, na
+ordem de `core.SortInbox` (bloqueadas, depois devolvidas, depois ociosas; desempate pela ordem da árvore);
+`hidden` conta as velhas que o filtro escondeu; `archived` as arquivadas à mão. Cada linha
+(`proto.TreeRow`):
+
+| campo | em | o quê |
+|---|---|---|
+| `key`, `kind`, `ctx`, `depth` | todas | `core.RowKey`; `ctx`\|`sess`\|`sub`; o contexto; 0/1/2 |
+| `color` | todas | índice da paleta do contexto (`state.ctx_color[ctx]`); a cor é `tokens.contexts[color % len]` de `/v1/theme` |
+| `collapsed` | ctx, sess | a linha está dobrada |
+| `ctx_cost`, `ctx_n` | ctx | custo e número das sessões listadas sob o contexto |
+| `session_id`, `short_id` | sess, sub | a sessão (numa linha `sub`, a mãe) |
+| `label`, `state`, `cost` | sess, sub | `Label()`, `store.Session.State`, custo; numa `sub`: a descrição (ou o tipo), `busy`\|`done`, o custo do subagent |
+| `session_kind`, `attention` | sess | `background`\|`interactive`\|`history`; 0 nada, 1 bloqueada, 2 devolvida, 3 ociosa |
+| `stale`, `archived`, `ended`, `finished` | sess | as mesmas flags do snapshot |
+| `subs_running`, `options` | sess | subagents rodando; opções numeradas das perguntas pendentes (`core.OptionCount`) |
+| `groups` | sess | `[{tag, color}]`, `color` = `core.GroupColorIndex(tag)` (a coleira) |
+| `mail`, `mail_state` | sess | o ✉ enquanto aparece: `{at, sent}` e `blink` (primeiros 90 s) ou `dim` (até 15 min) |
+| `sub` | sub | o subagent inteiro (`proto.Sub`) |
+
+O resto de uma sessão (perguntas, links, resultado…) está em `GET /v1/snapshot`, pela `session_id`.
+
+## `GET /v1/theme`
+
+Os tokens de cor de um tema como `#rrggbb` (`theme.Theme.Tokens`/`ContextTokens`, em
+`internal/theme/export.go`) e o nome de todos os temas, para o GUI pintar igual à TUI:
+
+```
+$ curl --unix-socket $SOCK "http://nk/v1/theme?name=dracula"
+{"name":"dracula",
+ "tokens":{"bg":"#282a36","surface":"#343746","overlay":"#44475a","border":"#6272a4","text":"#f8f8f2",
+           "subtle":"#e2e2dc","muted":"#6272a4","accent":"#ff79c6","accent2":"#bd93f9","busy":"#8be9fd",
+           "blocked":"#ff5555","done":"#50fa7b","idle":"#6272a4","error":"#ff5555","cost_low":"#50fa7b",
+           "cost_high":"#ff5555","cat_body":"#191a21","cat_eyes":"#f1fa8c"},
+ "contexts":["#ff79c6","#bd93f9","#50fa7b","#ffb86c","#8be9fd","#f1fa8c"],
+ "themes":["catppuccin-mocha","tokyo-night","gruvbox","dracula","rose-pine-dawn"],
+ "active":"catppuccin-mocha"}
+```
+
+Sem `?name=`, é o tema da config (`theme = "…"`); como um servidor não vê o fundo do terminal, `theme = ""`
+("segue o terminal") vira o primeiro tema. `active` é sempre esse tema da config, mesmo quando `?name=` pede
+outro (um seletor de temas sabe qual está marcado). `?name=` com um nome que não existe (inclusive vazio) →
+`404 not_found`. `contexts` é a paleta dos contextos e das coleiras dos grupos: o índice `i` (`color` das linhas
+de `/v1/view/tree`) usa `contexts[i % len(contexts)]`, como `Theme.ContextColor` na TUI.
+
+## `POST /v1/lua/eval`
+
+O `:lua <código>` da paleta, por HTTP, com o mesmo orçamento do runtime. Precisa de um runtime Lua no
+servidor: o host passa `rpc.Options{Lua: rt}` — qualquer coisa com `Eval(code string) (string, error)`, como
+o `*lua.Runtime` de `internal/lua` — e `hello` passa a anunciar `"lua"`. Sem runtime → `501 not_implemented`.
+
+```
+$ curl -XPOST --unix-socket $SOCK http://nk/v1/lua/eval -d '{"code":"return 6*7"}'
+{"result":"42"}
+$ curl -XPOST --unix-socket $SOCK http://nk/v1/lua/eval -d '{"code":"error(\"x\")"}'
+{"error":"…: x"}
+```
+
+Um erro do Lua (sintaxe, `error()`, orçamento estourado) ainda é `200` — a chamada funcionou — com `error` no
+lugar de `result` (`proto.LuaEval`). `code` vazio → `400 bad_request`.
+
+## Modo demo (`internal/demo`)
+
+`internal/demo` é um mundo de mentira inteiro atrás das portas do `app` (`demo.Ports(clock)` /
+`demo.New(clock).Ports()` preenchem **todas** as portas), para `nk serve --demo` e para os testes Playwright do
+GUI. Nada ali roda `claude`: os painéis rodam um `sh` inofensivo (`internal/demo/screen.sh`) que desenha uma
+tela parecida com a do Claude Code e responde cada linha com um eco (`/exit` encerra). O roteiro é função pura
+do tempo desde o início (lido do `Clock`), então com um relógio falso tudo é determinístico; por cima dele o
+`Scenario` guarda o que o usuário fez (renomear, mover, arquivar, `session.new`, parar, remover…), e os
+comandos do core têm efeito visível.
+
+| sessão (`demo.ID…`) | contexto | o quê |
+|---|---|---|
+| `api-gateway` (`IDGateway`, `dmgatewy`) | visio | `busy` ⇄ `blocked` a cada 15 s; bloqueada, pergunta "Aplico a migração 0042 no staging?" com 3 opções e dispara uma notificação `permission_prompt` |
+| `migração do banco` (`IDMigration`) | visio | sempre `blocked`, pergunta com 3 opções |
+| `relatório Q3` (`IDReport`) | visio | `done`, devolvida (some da inbox ao ser vista) |
+| `dotfiles` (`IDDotfiles`) | pessoal | interativa, `idle` no prompt |
+| `blog antigo` (`IDBlog`) | pessoal | histórico velho (`stale`, escondida sem `show_all`) |
+| `indexador` (`IDIndexer`) | oss | `busy` com 2 subagents rodando (e 1 terminado) |
+| `site de docs` (`IDDocs`) | oss | `busy` → `done` (devolvida) → `idle`, a cada 15 s |
+
+O grupo `#deploy-rc` tem `api-gateway`, `migração do banco`, `indexador` e `site de docs`; a cada 20 s um ✉
+(`peer`) passa de um para o próximo, em roda. O uso da janela de 5 h fica entre 58% e 62%; há 5 todos, 4
+issues `DEMO-…` (criar uma devolve `DEMO-201`, `202`…), e `session.new` cria uma sessão que fica `busy` por 30 s
+e depois volta `done`. Notificações e URLs abertas são só guardadas (`Scenario.Notes()`/`URLs()`).
 
 ## Quick-start
 

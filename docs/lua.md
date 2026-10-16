@@ -4,7 +4,7 @@ title: Lua (nk.*)
 description: Runtime gopher-lua do nekuroddo — API nk.*, eventos, orçamentos, sandbox e reload, como implementado em internal/lua.
 resource: https://github.com/aqilputi/nekuroddo/tree/main/internal/lua
 tags: [lua, gopher-lua, scripting, nk, eventos]
-timestamp: 2026-10-16T20:20:00Z
+timestamp: 2026-10-16T23:00:00Z
 generated: { by: agent:claude-code/claude-sonnet-5, at: 2026-10-16T20:20:00Z }
 status: draft
 ---
@@ -15,35 +15,39 @@ status: draft
 mesmo tempo, porque registra comandos no mesmo `Registry` e assina o mesmo barramento de eventos que eles
 (plano §5). O pacote fala só com `internal/app` — nunca com Bubble Tea, `os/exec` ou o terminal direto.
 
-**Estado no código, agora:** o runtime (`runtime.go`, `bridge.go`, `loader.go`) roda isolado na sua própria
-goroutine, tem suíte própria (meta do WP-3.3 é ≥ 90% de cobertura) e **já está ligado em `cmd/nekuroddo`**:
-`host.go` (o mesmo para `nk`, `nk --listen` e `nk serve`) cria um `lua.Runtime` com `lua.Options{}` (valores
-padrão) logo depois de `RegisterBuiltins`, chama `rt.Load()` na hora (um erro de carga vira só um aviso no
-stderr, nunca impede o programa de subir) e registra à mão um comando extra, `lua.reload` (sem tecla,
-`Title: "recarrega o init.lua e os plugins"`), que chama `Runtime.Reload()` — esse sim roda pela paleta, por
-RPC (`POST /v1/commands/lua.reload`) e por `nk run lua.reload`, como qualquer outro comando builtin. A TUI
-(`internal/tui/lua.go`) também usa o runtime para duas coisas: digitar `lua <código>` depois de abrir a
-paleta (`:`) chama `Runtime.Eval` e mostra o resultado como toast (`:lua <expr>` do plano); e as teclas que um
-script religou com `nk.keymap.set`/`del` (`Runtime.Keymap()`) são resolvidas **antes** do keymap do núcleo —
-mas a barra de status e a ajuda (`?`) ainda só desenham o keymap do núcleo, não as sobreposições do Lua
-(`TODO(WP-5.3)` no próprio código). Ainda assim, ficam **em andamento**, mesmo com o runtime ligado:
+**Como o host liga o runtime:** `cmd/nekuroddo/host.go` (o mesmo para `nk`, `nk --listen` e `nk serve`) cria
+um `lua.Runtime` logo depois de `RegisterBuiltins`, com as opções do `[lua]` do `config.toml` (abaixo) e as
+**capacidades de UI do cliente** (`nk` = TUI, `nk serve` = sem tela; veja [Capacidades](#capacidades-nkuihas)),
+registra os comandos do próprio runtime (`lua.reload`, `lua.messages`, `lua.enable` — `Runtime.RegisterCommands`)
+e chama `rt.Load()` na hora (um erro de carga vira só um aviso no stderr, nunca impede o programa de subir).
+Com `auto_reload = true`, liga também o vigia de arquivos (`Runtime.AutoReload`). O servidor RPC do host
+(`listenRPC`) recebe o runtime em `rpc.Options.Lua`, então `POST /v1/lua/eval` avalia código no mesmo runtime
+(o `:lua` de um cliente remoto). A TUI (`internal/tui/lua.go`) usa o runtime para: `lua <código>` depois de
+abrir a paleta (`:`) chama `Runtime.Eval` e mostra o resultado como toast; as teclas que um script religou com
+`nk.keymap.set`/`del` (`Runtime.Keymap()`) são resolvidas **antes** do keymap do núcleo; e a ajuda (`?`) lista
+essas teclas numa seção própria, "teclas do init.lua", abaixo das colunas do núcleo (a barra de status
+continua só com o keymap do núcleo).
 
-- `lua.enable <arquivo>` e `lua.messages` **não** existem como comandos em lugar nenhum — só `lua.reload` foi
-  cadastrado à mão; `Runtime.Enable` e `Runtime.Messages` continuam métodos Go sem chamador;
-- `:lua <código>`/`Eval` só roda dentro da TUI local (`m.luaCommand`) — não há `POST /v1/lua/eval` (é a rota
-  `501` da fase 2 em [protocolo.md](protocolo.md#o-que-ainda-não-existe-fase-2)), então um `nk serve` headless
-  ou um cliente RPC não conseguem avaliar código Lua ad-hoc, só rodar comandos já registrados;
-- o host sempre passa `lua.Options{}` **zero** — nenhuma capacidade (`Caps`) é declarada —, então **todo**
-  `nk.ui.has(...)` responde `false` e `nk.ui.toast`/`.palette_open`/`.cat.meow`/`nk.ui.notify` não fazem nada
-  (voltam `false`) até um host passar `Caps` (WP-5.3, fase 2); `nk.ui.confirm` é a exceção — não depende de
-  capacidade, então já funciona hoje;
-- não existe `[lua]` no `config.toml` (`enabled`, `command_timeout_ms`, `auto_reload` do plano §5.1 são
-  metas, não campos de `internal/config` hoje) — o `lua.Options{}` do host usa só os padrões do pacote
-  (`ConfigDir` = `paths.ConfigDir()`, orçamentos de 5 s/50 ms), sem jeito de ajustar por `config.toml`.
+## Configuração (`[lua]` no `config.toml`)
 
-Em resumo: um `init.lua` de verdade em `~/.config/nekuroddo/init.lua` já roda, registra comandos, reage a
-eventos e religa teclas na TUI hoje; o que falta (fase 2) é capacidades de UI, `nk.ui.eval` remoto e os
-comandos de diagnóstico (`enable`/`messages`).
+```toml
+[lua]
+enabled = true               # false: não carrega nenhum arquivo (Load não faz nada; lua.reload/lua.enable falham)
+command_timeout_ms = 5000    # comando Lua (paleta, tecla, RPC), carga de um arquivo, :lua / POST /v1/lua/eval
+callback_timeout_ms = 50     # cada handler nk.on e cada tecla ligada a uma função
+auto_reload = false          # true: recarrega sozinho quando init.lua ou plugins/ mudam
+```
+
+Tudo é opcional; a tabela inteira pode faltar. Um orçamento `≤ 0` volta ao padrão e o `config.Load` devolve
+um erro dizendo qual chave (o `nk` mostra como aviso no stderr), **sem** descartar o resto do arquivo; um tipo
+errado (`enabled = "sim"`) é erro de TOML e o arquivo todo cai nos padrões, como qualquer outra chave.
+`config.Lua` → `lua.Options` em `luaOptions` (`host.go`): `CommandTimeout`, `CallbackTimeout`,
+`Disabled = !enabled`.
+
+**`auto_reload`** é um poller simples (sem `fsnotify`): a cada 1 s (`lua.AutoReloadEvery`) olha a lista de
+arquivos que o `Reload` leria e o mtime/tamanho de cada um; se um arquivo apareceu, sumiu ou mudou, chama
+`Reload()`. Um arquivo quebrado nessa hora tem o mesmo tratamento de um `lua.reload` manual (toast, anel de
+mensagens, `lua.error`, último estado bom mantido) e o vigia segue. Para quando o runtime fecha.
 
 ## Arquivos e carga
 
@@ -53,9 +57,24 @@ comandos de diagnóstico (`enable`/`messages`).
 ```
 
 (`Options.ConfigDir` sobrescreve o diretório; o padrão é `paths.ConfigDir()`.) `Load()`/`Reload()` relê os dois
-e refaz comandos, teclas e handlers a partir do zero — chame de novo a cada mudança de arquivo (não há
-`fsnotify`/`auto_reload` automático no código hoje, apesar do plano prever um). Sem nenhum arquivo, nada
-muda: é o contrato "no-op" que a suíte cobre (`TestNoFilesChangesNothing`).
+e refaz comandos, teclas e handlers a partir do zero — à mão (`lua.reload`) ou sozinho com `auto_reload`. Sem
+nenhum arquivo, nada muda: é o contrato "no-op" que a suíte cobre (`TestNoFilesChangesNothing`).
+
+## Comandos do runtime
+
+Registrados pelo host (`Runtime.RegisterCommands`) como builtins — rodam pela paleta, por RPC
+(`POST /v1/commands/<nome>`) e por `nk run <nome>`, e **não** saem do registro quando um arquivo é descartado:
+
+| comando | args | o que faz |
+|---|---|---|
+| `lua.reload` | — | `Reload()`; toast `lua recarregado (N arquivos)` ou o erro (arquivo:linha) |
+| `lua.messages` | — | o anel de mensagens: `Result.Data` = lista `{at, file?, level, text}` (mais antiga primeiro); toast `lua: N mensagens · última: …` |
+| `lua.enable` | `file` (obrigatório, ex.: `plugins/x.lua`) | religa um arquivo desativado após 3 falhas e recarrega; o erro lista os desativados |
+
+Na TUI, a resposta de `lua.messages` aparece pelo tratamento genérico de resultado (o toast com a contagem e a
+última mensagem); `tui/lua.go` também tem o diálogo "últimos erros lua" (`onLuaMessages`, uma linha
+`hora nível arquivo: texto` por mensagem, as mais recentes que cabem), para quando o laço de resultados da TUI
+o chamar para `lua.messages`.
 
 ## API (`nk.*`)
 
@@ -120,7 +139,7 @@ nk.dispatch{ dir=, prompt=, name=, perm= } -> short_id | pending   -- perm: "", 
 nk.stop(id) -> result | pending
 nk.remove(id) -> result | pending
 ```
-`dir`/`prompt` são obrigatórios; `perm` fora da lista levanta erro; `extra` (do plano) **ainda não é
+`dir`/`prompt` são obrigatórios; `perm` fora da lista (`core.PermModes()`, a mesma de todo cliente) levanta erro; `extra` (do plano) **ainda não é
 suportado** (`"dispatch: extra ainda não é suportado"`). Um `bypassPermissions` que não é o
 `permission_mode` configurado devolve uma tabela `pending` (mesmo formato de `POST /v1/commands` —
 `{token, question, expires_at}`) em vez de disparar; resolva com `app.Confirm`/`POST /v1/confirm` (não há um
@@ -137,7 +156,7 @@ nk.group.tags() -> {tag, ...}          -- ordenado
 nk.group.of(id) -> {tag, ...}
 ```
 
-### UI (precisa de capacidade; hoje sempre indisponível — veja acima)
+### UI (por capacidade do cliente — veja [Capacidades](#capacidades-nkuihas))
 
 ```lua
 nk.ui.has(cap) -> bool                 -- "toast" | "confirm" | "cat" | "palette" | "scene" | "notify"
@@ -148,7 +167,9 @@ nk.ui.cat.meow(text)
 nk.ui.notify(body, title)              -- notificação de desktop (fora da VM, goroutine própria); precisa do port Notify também
 ```
 `"scene"` está na lista de capacidades mas nenhuma função de hoje a consulta — é reservada para o GUI (fase
-3). `nk.ui.confirm` sempre funciona (não depende de capacidade: é `app.Ask` puro).
+3). `nk.ui.toast` (é `app.Toast`: o evento `toast` chega a todo cliente) e `nk.ui.confirm` (é `app.Ask`:
+`confirm.requested`) sempre funcionam — não consultam capacidade; os hosts as declaram mesmo assim para que
+`nk.ui.has("toast")`/`("confirm")` digam a verdade.
 
 ### Diversos
 
@@ -196,8 +217,8 @@ do JSON do protocolo.
 
 | chamada | orçamento padrão | opção |
 |---|---|---|
-| comando (`nk.command`, palette/tecla/RPC), `Eval`, carregar um arquivo | 5 s | `Options.CommandTimeout` |
-| `nk.on`, tecla de função (`nk.keymap.set` com `fn`) | 50 ms | `Options.CallbackTimeout` |
+| comando (`nk.command`, palette/tecla/RPC), `Eval`, carregar um arquivo | 5 s | `Options.CommandTimeout` (`[lua] command_timeout_ms`) |
+| `nk.on`, tecla de função (`nk.keymap.set` com `fn`) | 50 ms | `Options.CallbackTimeout` (`[lua] callback_timeout_ms`) |
 
 Toda entrada passa por `context.WithTimeout` + `LState.SetContext`; um estouro vira `lua: orçamento de tempo
 estourado (<duração>)` (`ErrBudget`), nunca trava a VM nem o processo (`TestInfiniteLoopIsInterruptedWithinBudget`
@@ -228,20 +249,38 @@ desativado (abaixo) é pulado até `Enable`.
 ## Erros, mensagens e desativação automática
 
 Todo erro (de carga, de comando, de handler, de tecla) vira: um toast (`lua: <mensagem>`), uma entrada no anel
-de até 100 mensagens (`Runtime.Messages()`, mais antiga descartada) e o evento `lua.error {file?, error}` —
+de até 100 mensagens (`Runtime.Messages()`, comando `lua.messages`; mais antiga descartada) e o evento `lua.error {file?, error}` —
 exceto quando o próprio handler de `lua.error` é quem falhou (não alimenta a si mesmo:
 `TestLuaErrorHandlerFailureDoesNotFeedItself`). **Três falhas seguidas** de callbacks (`nk.on`/tecla) do
-**mesmo arquivo** desativam só aquele arquivo (`Runtime.Disabled()` lista; `Enable(file)` religa e recarrega);
+**mesmo arquivo** desativam só aquele arquivo (`Runtime.Disabled()` lista; `Enable(file)` — o comando `lua.enable file=<arquivo>` — religa e recarrega);
 um sucesso zera a contagem. Falhas de `Eval` (`:lua`) nunca contam para a desativação.
 
 ## Capacidades (`nk.ui.has`)
 
-`Options.Caps` é a lista que o host declara ao criar o runtime: `"toast"`, `"confirm"`, `"cat"`, `"palette"`,
-`"scene"`, `"notify"` (comentário de `runtime.go`). `nk.ui.has(cap)` só olha essa lista; as funções de UI que
-dependem de capacidade (`nk.ui.toast`, `.palette_open`, `.cat.meow`, `.notify`) voltam `false` sem fazer nada
-quando a capacidade falta, em vez de erro — então um script pode checar `nk.ui.has("notify")` e cair para
-`nk.ui.toast` (é exatamente o que o exemplo 2 abaixo faz). Hoje nenhum host passa `Options.Caps`, então todas
-voltam `false`; `nk.ui.confirm` é a exceção (não depende de capacidade).
+`Options.Caps` é a lista que o host declara ao criar o runtime (constantes `lua.CapToast`, `CapConfirm`,
+`CapCat`, `CapPalette`, `CapScene`, `CapNotify`). `nk.ui.has(cap)` só olha essa lista; as funções que dependem
+de capacidade (`nk.ui.palette_open`, `.cat.meow`, `.notify`) voltam `false` sem fazer nada quando ela falta,
+em vez de erro — então um script pode checar `nk.ui.has("notify")` e cair para `nk.ui.toast` (é o que o
+exemplo 2 abaixo faz). Uma VM só por processo: as capacidades são as do processo, não de cada cliente RPC
+conectado nele.
+
+| processo | capacidades | por quê |
+|---|---|---|
+| `nk` (TUI; também com `--listen`) | `toast`, `confirm`, `cat`, `palette`, `notify` | a TUI desenha tudo menos a cena do GUI |
+| `nk serve` (e `--demo`) | `toast`, `confirm`, `notify` | sem tela: só o que chega a um cliente remoto pelo barramento (`toast`, `confirm.requested`) e a notificação de desktop, que o próprio processo manda |
+
+`nk.ui.cat.meow` e `nk.ui.palette_open` **publicam eventos** (`ui.cat.meow {text}`, `ui.palette_open
+{prefill}`) no barramento — o SSE os leva a clientes remotos também. A TUI os desenha pelo handler
+`onLuaUIEvent` (`internal/tui/lua.go`): o miado vai para o gato da barra de status (cortado em 50 colunas) e
+`palette_open` abre a paleta com o texto já digitado (uma paleta aberta só troca o texto). O handler é chamado
+pelo ouvinte do barramento da TUI para os eventos em que `isLuaUIEvent(nome)` é verdadeiro.
+
+## Ajuda (`?`)
+
+As teclas de `nk.keymap.set`/`del` aparecem na ajuda numa seção "teclas do init.lua", abaixo das colunas do
+núcleo (em até 3 colunas): uma tecla ligada a comando mostra o título do comando (ou o nome, sem título), uma
+ligada a função mostra "função lua", uma apagada mostra "desligada", e uma fora do NORMAL leva o modo entre
+colchetes (`ctrl+y  inbox [insert]`). Sem teclas Lua, a ajuda é a de sempre.
 
 ## Os três exemplos de `internal/lua/testdata/init.lua`
 
@@ -253,7 +292,7 @@ melhor referência de como a API se encaixa:
    há `nk.group.has`).
 2. **Notificação de deploy.** Em `peer.message`, se o texto menciona `[#deploy`, manda uma notificação de
    desktop (`nk.ui.notify`) se o host tiver a capacidade, senão cai para um toast — o padrão de fallback que
-   todo script que usa `nk.ui.*` deveria seguir, já que hoje (sem capacidades) sempre cai no `else`.
+   todo script que usa `nk.ui.*` deveria seguir (um host sem `"notify"` cai no `else`).
 3. **`deploy-all`.** Um comando (`nk.command`, tecla `ctrl+shift+d`) que dispara quatro agents
    (`nk.dispatch`, um `perm = "acceptEdits"` por diretório), agrupa os IDs resultantes em `#deploy` e mostra
    um toast com a contagem — mostra `nk.dispatch` chamado em loop e `nk.group.add` com uma lista de IDs.

@@ -1,10 +1,7 @@
 package app_test
 
 import (
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -200,19 +197,19 @@ func TestFetchJiraOneAtATime(t *testing.T) {
 	}
 }
 
-func TestJiraCacheLoadsFromDisk(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", dir)
-	c := jira.Cache{FetchedAt: apptest.Epoch, Issues: []jira.Issue{{Key: "D-1"}}}
-	b, _ := json.Marshal(c)
-	_ = os.MkdirAll(filepath.Join(dir, "nekuroddo"), 0o755)
-	if err := os.WriteFile(filepath.Join(dir, "nekuroddo", "jira.json"), b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	a := app.New(config.Default(), apptest.Ports())
+// Opening starts from the port's cached issues (the disk, for the real
+// adapter) without fetching, and reads them only once.
+func TestJiraCacheStartsFromThePortsCache(t *testing.T) {
+	f := apptest.New()
+	f.Jira.Disk = jira.Cache{FetchedAt: apptest.Epoch, Issues: []jira.Issue{{Key: "D-1"}}}
+	a := app.New(config.Default(), f.Ports())
 	defer a.Close()
 	if got := a.JiraCache(); len(got.Issues) != 1 || got.Issues[0].Key != "D-1" {
-		t.Fatalf("starts from the cache on disk (opening costs nothing): %+v", got)
+		t.Fatalf("starts from the cached issues (opening costs nothing): %+v", got)
+	}
+	_ = a.JiraCache()
+	if f.Jira.Count("Cached") != 1 || f.Jira.Count("Fetch") != 0 {
+		t.Fatalf("Cached once, never Fetch: cached=%d fetch=%d", f.Jira.Count("Cached"), f.Jira.Count("Fetch"))
 	}
 }
 

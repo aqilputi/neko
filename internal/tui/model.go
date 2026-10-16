@@ -74,11 +74,11 @@ type Model struct {
 	tab  tab
 	mode mode
 
-	// snap is the core's snapshot as the last refresh (app.RefreshNotices)
-	// handed it over; its sessions are shared with the core, so the session
-	// commands' in-place changes (archive, rename…) show at once.
+	// snap is the core's snapshot as the bus (snapshot.changed) or the
+	// last refresh the TUI asked for handed it over; after a session command
+	// (archive, rename…) pullSnap reads it again to show the change at once.
 	snap       store.Snapshot
-	refreshing bool
+	refreshing bool // a refresh the TUI asked for (R, back from fullscreen…) runs
 
 	// The tree and the inbox: client-only view state (filter, fold, frozen
 	// order, cursor, sort, context colors) and the rows core.BuildTree made.
@@ -149,13 +149,12 @@ func (m Model) t() theme.Theme { return theme.All[m.th] }
 
 // ---- messages ----
 
-// snapMsg is a finished refresh: the core's new snapshot and the notices
-// its transitions made (app.RefreshNotices).
-type snapMsg struct {
-	snap    store.Snapshot
-	notices []app.Notice
-}
-type tickMsg struct{}
+// snapMsg is a finished refresh the TUI asked for: the core's new snapshot
+// (its notices come on the bus, like the scheduler's).
+type snapMsg struct{ snap store.Snapshot }
+
+// refreshMsg asks for a refresh now (R, a command that changed sessions).
+type refreshMsg struct{}
 
 // todosMsg says the core reloaded the todo list (app.Todos has it); err is
 // that load's error.
@@ -171,12 +170,13 @@ type dispatchedMsg struct {
 	err  error
 }
 type replyMsg struct{ pane string }
+
+// usageMsg is the /usage report `u` fetched (the scheduler fetches the
+// periodic ones itself).
 type usageMsg struct {
-	rep    claude.UsageReport
-	err    error
-	manual bool // from `u`: does not schedule the next poll
+	rep claude.UsageReport
+	err error
 }
-type usageTickMsg struct{}
 type jiraMsg struct {
 	cache jira.Cache
 	err   error
@@ -194,32 +194,34 @@ type paneOpenMsg struct {
 	text string // reply to send once attached
 }
 
+// Init loads the todos and asks the terminal's background. The refreshes,
+// the hook log and /usage are the core's scheduler's (app.RunSchedule,
+// started with WithScheduler once the TUI follows the bus); the TUI only
+// draws what it publishes.
 func (m Model) Init() tea.Cmd {
-	m.app.PollHookEvents() // start at the end: only new events matter
-	return tea.Batch(m.refresh(), m.loadTodos(), tea.RequestBackgroundColor, func() tea.Msg { return eventsTickMsg{} }, m.fetchUsage(false))
+	return tea.Batch(m.loadTodos(), tea.RequestBackgroundColor)
 }
 
-// refresh asks the core for a new snapshot (app.RefreshNotices, off the UI
-// goroutine). One at a time: a refresh asked meanwhile is coalesced by the
-// caller (refreshAgain).
+// WithScheduler gives the TUI what starts the core's scheduler (cmd: a
+// goroutine running app.RunSchedule). It runs once, right after the TUI
+// subscribed to the bus (its first window size), so no event of the first
+// refresh is missed. Without one nothing refreshes by itself (tests).
+func (m Model) WithScheduler(start func()) Model {
+	m.startSchedule = start
+	return m
+}
+
+// refresh asks the core for a new snapshot now (app.RefreshNotices, off the
+// UI goroutine): R, back from fullscreen, a command that changed sessions.
+// One at a time: a refresh asked meanwhile is dropped (the scheduler's next
+// one comes soon anyway). Its notices go out on the bus.
 func (m *Model) refresh() tea.Cmd {
 	if m.refreshing {
 		return nil
 	}
 	m.refreshing = true
 	a := m.app
-	return func() tea.Msg {
-		snap, notices := a.RefreshNotices()
-		return snapMsg{snap: snap, notices: notices}
-	}
-}
-
-func (m Model) scheduleTick() tea.Cmd {
-	d := time.Duration(m.cfg.Refresh * float64(time.Second))
-	if d < 500*time.Millisecond {
-		d = 2 * time.Second
-	}
-	return tea.Tick(d, func(time.Time) tea.Msg { return tickMsg{} })
+	return func() tea.Msg { return snapMsg{snap: a.Refresh()} }
 }
 
 func toastCmd(text string, err bool) tea.Cmd {

@@ -12,7 +12,6 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
-	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/theme"
 )
 
@@ -42,6 +41,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 
 	case busMsg:
 		return tea.Batch(m.onBus(msg.ev), listenBus(msg.ch))
+
+	case busCutMsg: // fell too far behind (a long fullscreen): catch up, follow again
+		return tea.Tick(busRetry, func(time.Time) tea.Msg { return busRetryMsg{} })
+
+	case busRetryMsg:
+		m.pullSnap()
+		m.rebuildTodos()
+		return m.followBus()
 
 	case resizeMsg:
 		if msg.seq == m.resizeSeq {
@@ -80,27 +87,13 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.refreshing = false
 		m.snap = msg.snap
 		m.rebuild()
-		cmds := []tea.Cmd{m.showNotices(msg.notices), m.scheduleTick()}
-		if m.refreshAgain { // an event arrived while we were refreshing
-			m.refreshAgain = false
-			cmds = append(cmds, m.refresh())
-		}
-		return tea.Batch(cmds...)
+		return nil
 
-	case tickMsg:
+	case refreshMsg:
 		return m.refresh()
 
 	case usageMsg:
 		return m.onUsage(msg)
-
-	case usageTickMsg:
-		return m.fetchUsage(false)
-
-	case eventsTickMsg:
-		return m.pollEvents()
-
-	case eventsMsg:
-		return tea.Batch(m.onEvents([]events.Event(msg)), m.scheduleEvents())
 
 	case todosMsg:
 		return m.onTodos(msg)
@@ -195,8 +188,6 @@ type resizeMsg struct{ seq int }
 type execDoneMsg struct{ err error }
 type animMsg struct{ gen int }
 type clearToastMsg struct{ seq int }
-type eventsTickMsg struct{}
-type eventsMsg []events.Event
 
 // ensureAnim runs the one animation clock: fast while something visibly
 // animates (spinners, blinking, a meowing cat), slow for the sleeping cat.
@@ -386,7 +377,7 @@ func init() {
 		"palette.open":  run((*Model).openPalette),
 		"switcher.open": run((*Model).openSwitcher),
 		"help.open":     do(func(m *Model) { m.push(helpDialog{}) }),
-		"usage.show":    run(func(m *Model) tea.Cmd { m.push(usageDialog{}); return m.fetchUsage(true) }),
+		"usage.show":    run(func(m *Model) tea.Cmd { m.push(usageDialog{}); return m.fetchUsage() }),
 		"app.quit":      (*Model).quitKey,
 
 		"session.open":       run(func(m *Model) tea.Cmd { return m.openOrDispatch(true) }),
@@ -735,6 +726,9 @@ func (m *Model) commandResult(name string, res app.Result, err error) tea.Cmd {
 		m.askApp(res, !quickConfirm[name])
 		return nil
 	}
+	if name == "lua.messages" { // the "últimos erros lua" dialog (lua.go)
+		return m.onLuaMessages(res)
+	}
 	var cmds []tea.Cmd
 	if res.Toast != "" {
 		cmds = append(cmds, toastCmd(res.Toast, res.Err))
@@ -770,30 +764,81 @@ type busMsg struct {
 	ch <-chan core.Event
 }
 
-// followBus subscribes to the core's event bus for the program's life.
-func (m *Model) followBus() tea.Cmd { return listenBus(m.app.Subscribe(context.Background())) }
+// busCutMsg says the bus cut the TUI's subscription (it fell
+// app.SubscriberBuffer events behind); busRetryMsg follows it again.
+type (
+	busCutMsg   struct{}
+	busRetryMsg struct{}
+)
 
-// listenBus waits for the next event the TUI reacts to. Only
-// confirm.resolved is followed: the TUI's own commands already drew their
-// toasts and refreshes from their Results, so the other events (toast,
-// dispatched, snapshot.changed…) would only repeat them. A subscription the
-// bus cut (closed) ends the listening.
+// busRetry is the pause before following the bus again after a cut (no
+// spinning on a closed core).
+const busRetry = 250 * time.Millisecond
+
+// followBus subscribes to the core's event bus for the program's life; the
+// first time, it then starts the core's scheduler (WithScheduler), so the
+// TUI hears its first refresh.
+func (m *Model) followBus() tea.Cmd {
+	cmd := listenBus(m.app.Subscribe(context.Background()))
+	if start := m.startSchedule; start != nil {
+		m.startSchedule = nil
+		start()
+	}
+	return cmd
+}
+
+// followed are the events the TUI reacts to. The others (toast,
+// dispatched, command.ran…) only repeat what the TUI's own commands already
+// drew from their Results.
+var followed = map[string]bool{
+	app.EvConfirmResolved: true,
+	app.EvSnapshotChanged: true,
+	app.EvNotice:          true,
+	app.EvUsageUpdated:    true,
+	app.EvTodosChanged:    true,
+	app.EvJiraChanged:     true,
+	app.EvPeerMessage:     true,
+	app.EvMailCue:         true,
+}
+
+// follows reports whether the TUI reacts to an event: the core's (followed)
+// and the Lua UI ones (lua.go).
+func follows(name string) bool { return followed[name] || isLuaUIEvent(name) }
+
+// listenBus waits for the next event the TUI follows. A subscription the
+// bus cut (closed) comes back as busCutMsg.
 func listenBus(ch <-chan core.Event) tea.Cmd {
 	return func() tea.Msg {
 		for ev := range ch {
-			if ev.Name == app.EvConfirmResolved {
+			if follows(ev.Name) {
 				return busMsg{ev: ev, ch: ch}
 			}
 		}
-		return nil
+		return busCutMsg{}
 	}
 }
 
-// onBus reacts to a core event: a confirmation answered or expired, maybe
-// by another client, closes its dialog here.
+// onBus reacts to a core event: a new snapshot (the scheduler's refresh,
+// or another client's) is drawn, a notice meows (bell, toast), the todos and
+// Jira rows are rebuilt, and a confirmation answered or expired, maybe by
+// another client, closes its dialog here. /usage, the ✉ cues and the
+// messages between sessions need only the redraw every message gets.
 func (m *Model) onBus(ev core.Event) tea.Cmd {
-	if r, ok := ev.Data.(app.ConfirmResolved); ok {
-		return m.onConfirmResolved(confirmResolvedMsg{token: r.Token})
+	switch ev.Name {
+	case app.EvSnapshotChanged:
+		m.pullSnap()
+	case app.EvNotice:
+		if n, ok := ev.Data.(app.Notice); ok {
+			return m.showNotices([]app.Notice{n})
+		}
+	case app.EvTodosChanged, app.EvJiraChanged:
+		m.rebuildTodos()
+	case app.EvConfirmResolved:
+		if r, ok := ev.Data.(app.ConfirmResolved); ok {
+			return m.onConfirmResolved(confirmResolvedMsg{token: r.Token})
+		}
+	default: // nk.ui.cat.meow, nk.ui.palette_open (lua.go)
+		return m.onLuaUIEvent(ev)
 	}
 	return nil
 }

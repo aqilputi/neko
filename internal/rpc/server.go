@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,9 +58,18 @@ type Options struct {
 	Backlog      int           // events kept for Last-Event-ID (DefaultBacklog)
 	// Panes starts the PTYs of POST /v1/panes; nil uses the app's port.
 	Panes app.PTYSpawner
+	// Lua runs POST /v1/lua/eval (the host's *lua.Runtime); nil answers 501.
+	// Setting it also announces the "lua" capability in hello.
+	Lua LuaEvaluator
 
 	replyDelay func(time.Duration) time.Duration // tests shorten the reply timers
 	exitWait   time.Duration                     // defaultExitWait
+}
+
+// LuaEvaluator runs a chunk of Lua and returns its result as text, under
+// the runtime's own budget (internal/lua's Runtime.Eval).
+type LuaEvaluator interface {
+	Eval(code string) (string, error)
 }
 
 // Server serves one App. Build it with New, then Serve as many listeners as
@@ -121,10 +131,9 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /v1/panes/{id}/ws", s.paneWS)
 	m.HandleFunc("POST /v1/panes/{id}/resize", s.resizePane)
 	m.HandleFunc("DELETE /v1/panes/{id}", s.closePane)
-	// Phase 2 (WP-5.2, WP-5.3): declared so clients get a clear answer.
-	for _, p := range []string{"POST /v1/view/tree", "GET /v1/theme", "POST /v1/lua/eval"} {
-		m.HandleFunc(p, notImplemented)
-	}
+	m.HandleFunc("POST /v1/view/tree", s.viewTree)
+	m.HandleFunc("GET /v1/theme", s.theme)
+	m.HandleFunc("POST /v1/lua/eval", s.luaEval)
 	s.mux = m
 }
 
@@ -233,10 +242,6 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-func notImplemented(w http.ResponseWriter, r *http.Request) {
-	writeErr(w, http.StatusNotImplemented, proto.CodeNotImplemented, r.URL.Path+": fase 2 (ainda não existe)")
-}
-
 // appErr maps an app error to a status and code.
 func appErr(err error) (int, string) {
 	switch {
@@ -265,6 +270,9 @@ func writeAppErr(w http.ResponseWriter, err error) {
 
 func (s *Server) hello(w http.ResponseWriter, _ *http.Request) {
 	caps := append([]string{proto.CapPanes}, s.o.Capabilities...)
+	if s.o.Lua != nil && !slices.Contains(caps, proto.CapLua) {
+		caps = append(caps, proto.CapLua)
+	}
 	writeJSON(w, http.StatusOK, proto.Hello{App: proto.AppName, Version: s.o.Version, Protocol: proto.Version,
 		Capabilities: caps, PID: os.Getpid()})
 }

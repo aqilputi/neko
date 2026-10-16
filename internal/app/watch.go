@@ -1,9 +1,9 @@
 package app
 
 // Slice "watch": session state transitions, hook events, desktop
-// notifications and the /usage report. The client polls and schedules
-// (WP-5.1 moves that here later); app decides what is worth telling the user
-// and publishes it, and the client only draws it (the cat, the bell, toasts).
+// notifications and the /usage report. The scheduler (scheduler.go) polls
+// and refreshes; app decides what is worth telling the user and publishes
+// it, and the client only draws it (the cat, the bell, toasts).
 
 import (
 	"fmt"

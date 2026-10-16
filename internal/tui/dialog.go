@@ -134,7 +134,7 @@ func (helpDialog) view(m *Model, t theme.Theme, w int) string {
 	h.FullSeparator = "    "
 	extra := lipgloss.NewStyle().Background(t.Bg).Foreground(t.Muted).Italic(true).Render(
 		"mouse: clique seleciona, clique de novo abre, roda rola · no INSERT o mouse vai pro claude (shift+arrastar seleciona texto)")
-	return lipgloss.NewStyle().Background(t.Bg).Padding(0, 1).Render(h.FullHelpView(m.fullHelp()) + "\n\n" + extra)
+	return lipgloss.NewStyle().Background(t.Bg).Padding(0, 1).Render(h.FullHelpView(m.fullHelp()) + m.luaHelp(h, t) + "\n\n" + extra)
 }
 
 func helpStyles(t theme.Theme) help.Styles {

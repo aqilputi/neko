@@ -80,6 +80,9 @@ type Opener interface{ OpenURL(u string) error }
 
 // JiraClient reads and creates Jira issues through a headless claude.
 type JiraClient interface {
+	// Cached is the last fetch kept on disk (the real adapter) or the
+	// world's own issues (demo, fakes): the core never reads the disk itself.
+	Cached() jira.Cache
 	Fetch(cfg jira.Config) (jira.Cache, error)
 	Create(cfg jira.Config, n jira.NewIssue) (key string, cost float64, err error)
 }

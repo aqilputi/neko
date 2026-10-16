@@ -42,8 +42,20 @@ type envOpt func(*Options, *fakesT)
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
+type configT = config.Config
+
 func newEnv(t *testing.T, opts ...envOpt) *env {
 	t.Helper()
+	return newEnvCfg(t, nil, opts...)
+}
+
+// newEnvCfg is newEnv with the config changed by cfgFn first.
+func newEnvCfg(t *testing.T, cfgFn func(*configT), opts ...envOpt) *env {
+	t.Helper()
+	cfg := config.Default()
+	if cfgFn != nil {
+		cfgFn(&cfg)
+	}
 	t.Setenv("XDG_CACHE_HOME", shortDir(t)) // the Jira cache is read from disk
 	f := apptest.New()
 	f.Sessions.SetSnapshot(store.Snapshot{At: apptest.Epoch,
@@ -52,7 +64,7 @@ func newEnv(t *testing.T, opts ...envOpt) *env {
 	for _, fn := range opts {
 		fn(&o, f)
 	}
-	a := app.New(config.Default(), f.Ports())
+	a := app.New(cfg, f.Ports())
 	if err := a.RegisterBuiltins(); err != nil {
 		t.Fatal(err)
 	}

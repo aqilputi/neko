@@ -41,3 +41,9 @@ agent_dir = "~/work"
 cache_minutes = 30
 # approve_hint = "<comando que libera a escrita, se um hook bloquear>"
 # jql = "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC"
+
+[lua]                        # ~/.config/nekuroddo/init.lua + plugins/*.lua (docs/lua.md)
+enabled = true               # false: não carrega nenhum arquivo Lua
+command_timeout_ms = 5000    # orçamento de um comando Lua (paleta, tecla, RPC), da carga de um arquivo e do :lua
+callback_timeout_ms = 50     # orçamento de cada handler nk.on e de cada tecla ligada a uma função
+auto_reload = false          # true: recarrega sozinho quando init.lua ou plugins/ mudam (checa a cada 1 s)

@@ -21,6 +21,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/groups"
@@ -82,7 +83,7 @@ func runContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 			return 1 // not 2: a hook exiting 2 blocks the session
 		}
 	}
-	return startTUI(args, stdout, stderr)
+	return startTUI(ctx, args, stdout, stderr)
 }
 
 func usage(w io.Writer) {
@@ -103,7 +104,7 @@ var runTUI = func(m tea.Model) (tea.Model, error) { return tea.NewProgram(m).Run
 
 // startTUI is plain nk: the TUI over a core built here, and with --listen the
 // RPC server on that same core, in the same process.
-func startTUI(args []string, stdout, stderr io.Writer) int {
+func startTUI(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("nk", stderr)
 	listen := fs.String("listen", "", "também serve o core por RPC neste endereço (unix:///… ou tcp://127.0.0.1:0)")
 	fs.Usage = func() {}
@@ -120,18 +121,22 @@ func startTUI(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	cfg := loadConfig(stderr)
-	h := newHost(cfg, stderr)
+	h := newHost(cfg, stderr, tuiCaps...)
 	defer h.Close()
+	m := tui.New(h.app, cfg).WithLua(h.lua)
 	if *listen != "" {
-		srv, addr, err := listenRPC(h.app, *listen)
+		srv, addr, err := listenRPC(h, *listen)
 		if err != nil {
 			fmt.Fprintln(stderr, "nekuroddo:", err)
 			return 1
 		}
 		defer srv.Close()
 		fmt.Fprintf(stderr, "nekuroddo: servindo em %s\n", addr)
+		m = m.WithPaneHook(paneHook(srv)) // a client attaching a session the TUI shows shares its PTY
 	}
-	final, err := runTUI(tui.New(h.app, cfg).WithLua(h.lua))
+	start, stop := scheduleOnce(ctx, h.app, app.ScheduleFrom(cfg))
+	defer stop()
+	final, err := runTUI(m.WithScheduler(start))
 	if err != nil {
 		fmt.Fprintln(stderr, "nekuroddo:", err)
 		return 1

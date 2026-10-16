@@ -10,9 +10,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/cat"
 	"github.com/aqilputi/nekuroddo/internal/claude"
-	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/jira"
@@ -106,22 +106,16 @@ func TestBehaviorFocusAndBackground(t *testing.T) {
 	}
 }
 
-func TestBehaviorSnapAndTick(t *testing.T) {
+func TestBehaviorSnapAndRefresh(t *testing.T) {
 	m := bhModel(t)
-	if m.update(tickMsg{}) != nil {
+	if m.update(refreshMsg{}) != nil {
 		t.Fatal("no second refresh while one runs")
 	}
-	m.refreshAgain = true
-	cmd := m.update(snapMsg{snap: store.Snapshot{Sessions: bhSessions()}})
-	if cmd == nil || len(m.rows) == 0 {
-		t.Fatal("snapMsg rebuilds and schedules the next tick")
+	if m.update(snapMsg{snap: store.Snapshot{Sessions: bhSessions()}}) != nil || len(m.rows) == 0 || m.refreshing {
+		t.Fatal("snapMsg rebuilds and ends the refresh; nothing is scheduled")
 	}
-	if m.refreshAgain || !m.refreshing {
-		t.Fatal("an event during the refresh triggers another one right away")
-	}
-	m.refreshing = false
-	if m.update(tickMsg{}) == nil || !m.refreshing {
-		t.Fatal("tick refreshes")
+	if m.update(refreshMsg{}) == nil || !m.refreshing {
+		t.Fatal("a refresh request refreshes")
 	}
 	m.refreshing = false
 	if m.update(execDoneMsg{}) == nil {
@@ -129,10 +123,74 @@ func TestBehaviorSnapAndTick(t *testing.T) {
 	}
 }
 
+// bhFollow subscribes to m's core as the program does (followBus); the
+// function it returns hands m every followed event published since, as the
+// TUI's listener would, and returns what they asked for.
+func bhFollow(t *testing.T, m *Model) func() tea.Cmd {
+	t.Helper()
+	ch := m.app.Subscribe(t.Context())
+	return func() tea.Cmd {
+		var cmds []tea.Cmd
+		for {
+			select {
+			case ev := <-ch:
+				if follows(ev.Name) {
+					cmds = append(cmds, m.onBus(ev))
+				}
+			default:
+				return tea.Batch(cmds...)
+			}
+		}
+	}
+}
+
+// The scheduler's refresh reaches the TUI as snapshot.changed: it draws the
+// core's snapshot.
+func TestBehaviorBusSnapshot(t *testing.T) {
+	m := bhModel(t)
+	feed := bhFollow(t, &m)
+	ts := m.app.Ports().Sessions.(*testStore)
+	ts.mu.Lock()
+	ts.snap = &store.Snapshot{Sessions: bhSessions()}
+	ts.mu.Unlock()
+	m.app.Refresh() // as app.RunSchedule does
+	if len(m.rows) != 0 {
+		t.Fatal("nothing drawn before the event")
+	}
+	if feed() != nil || len(m.snap.Sessions) != len(bhSessions()) || len(m.rows) == 0 {
+		t.Fatal("snapshot.changed draws the core's snapshot")
+	}
+}
+
+// todos.changed and jira.changed rebuild the todos tab.
+func TestBehaviorBusTodos(t *testing.T) {
+	m := bhModel(t)
+	feed := bhFollow(t, &m)
+	bhSetTodos(t, &m, []todo.Group{{Group: "g", Tasks: []todo.Task{{ID: 1, Title: "x"}}}})
+	if len(m.todos) != 0 {
+		t.Fatal("nothing drawn before the event")
+	}
+	feed()
+	if len(m.todos) != 1 {
+		t.Fatalf("todos.changed rebuilds the rows: %v", m.todos)
+	}
+	m.app.Publish(app.EvJiraChanged, nil)
+	m.todos = nil
+	feed()
+	if len(m.todos) != 1 {
+		t.Fatal("jira.changed rebuilds the rows")
+	}
+	// redraw only: /usage, the ✉ cues, peer messages
+	for _, name := range []string{app.EvUsageUpdated, app.EvMailCue, app.EvPeerMessage} {
+		if m.onBus(core.Event{Name: name}) != nil {
+			t.Fatalf("%s: only a redraw", name)
+		}
+	}
+}
+
 func TestBehaviorUsageMessages(t *testing.T) {
-	cfg := config.Default()
-	cfg.UsageRefresh = 0.001 // the next-poll tick fires at once
-	m := bhModelCfg(t, cfg)
+	m := bhModel(t)
+	feed := bhFollow(t, &m)
 	steps := []struct {
 		pct    int
 		toast  string // "" = no warning
@@ -147,11 +205,10 @@ func TestBehaviorUsageMessages(t *testing.T) {
 		{81, "janela de 5h em 81%", 80},
 	}
 	for _, s := range steps {
-		cmd := m.update(usageMsg{rep: bhUsage(s.pct)})
-		if cmd == nil {
-			t.Fatalf("%d%%: the next poll is scheduled", s.pct)
+		if m.update(usageMsg{rep: bhUsage(s.pct)}) != nil {
+			t.Fatalf("%d%%: the report goes to app, nothing else", s.pct)
 		}
-		toasts := bhToasts(cmd)
+		toasts := bhToasts(feed()) // the warning comes back as a notice
 		if s.toast == "" && len(toasts) != 0 {
 			t.Errorf("%d%%: unexpected toast %v", s.pct, toasts)
 		}
@@ -168,49 +225,33 @@ func TestBehaviorUsageMessages(t *testing.T) {
 	if rep, err := m.app.Usage(); err != nil || rep.Raw == "" {
 		t.Fatal("the report is kept")
 	}
-	next := m.update(usageMsg{err: errors.New("boom")})
-	if rep, err := m.app.Usage(); next == nil || err == nil || rep.Raw == "" {
-		t.Fatal("an error keeps the last report and still schedules the next poll")
-	}
-	if m.update(usageTickMsg{}) == nil {
-		t.Fatal("the poll tick fetches")
-	}
-	off := bhModel(t)
-	if off.update(usageMsg{rep: bhUsage(10)}) != nil || off.update(usageTickMsg{}) != nil {
-		t.Fatal("polling off: nothing scheduled")
+	m.update(usageMsg{err: errors.New("boom")})
+	if rep, err := m.app.Usage(); err == nil || rep.Raw == "" {
+		t.Fatal("an error keeps the last report")
 	}
 	// no session limit in the report: nothing to warn about
-	if off.update(usageMsg{rep: claude.ParseUsage("nada")}) != nil {
+	off := bhModel(t)
+	offFeed := bhFollow(t, &off)
+	off.update(usageMsg{rep: claude.ParseUsage("nada")})
+	if offFeed() != nil || off.cat.Awake() {
 		t.Fatal("no limits")
 	}
 }
 
-func TestBehaviorEventsFlow(t *testing.T) {
+func TestBehaviorNoticesFromTheBus(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	msgs := bhRun(m.update(eventsTickMsg{}))
-	if len(msgs) != 1 {
-		t.Fatalf("the tick polls the events file: %v", msgs)
-	}
-	if _, ok := msgs[0].(eventsMsg); !ok {
-		t.Fatalf("poll: %T", msgs[0])
-	}
-	if m.onEvents(nil) != nil || m.app.HooksSeen() {
-		t.Fatal("no events: nothing")
-	}
-	if m.update(eventsMsg(nil)) == nil {
-		t.Fatal("the next poll is always scheduled")
-	}
-
-	// a notification while refreshing: meow, refresh again after
-	m.update(eventsMsg{{Name: "Notification", Type: "permission_prompt", SessionID: "a", Message: "pode rodar?"}})
-	if e, _ := m.app.LastEvent("a"); !m.app.HooksSeen() || e.Message != "pode rodar?" || !m.cat.Awake() || !m.refreshAgain {
-		t.Fatal("a notification is recorded, meows and asks for a refresh")
+	feed := bhFollow(t, &m)
+	// the scheduler hands the hook events to app (app.RunSchedule)
+	m.app.OnHookEvents([]events.Event{{Name: "Notification", Type: "permission_prompt", SessionID: "a", Message: "pode rodar?"}})
+	feed()
+	if e, _ := m.app.LastEvent("a"); !m.app.HooksSeen() || e.Message != "pode rodar?" || !m.cat.Awake() {
+		t.Fatal("a notification is recorded and meows")
 	}
 	// away from the terminal: bell + desktop notification (notify-send is not on PATH here)
 	m.app.SetFocused(false)
-	cmd := m.onEvents([]events.Event{{Name: "Notification", SessionID: "b"}})
+	m.app.OnHookEvents([]events.Event{{Name: "Notification", SessionID: "b"}})
 	var raw bool
-	for _, msg := range bhRun(cmd) {
+	for _, msg := range bhRun(feed()) {
 		if r, ok := msg.(tea.RawMsg); ok && r.Msg == "\a" {
 			raw = true
 		}
@@ -218,22 +259,27 @@ func TestBehaviorEventsFlow(t *testing.T) {
 	if !raw {
 		t.Fatal("away: rings the bell")
 	}
-	// events that do not need you only refresh (now, when idle)
+	// events that do not need you only refresh (the scheduler's)
 	n := bhModel(t, bhSessions()...)
-	n.refreshing = false
-	if n.onEvents([]events.Event{{Name: "PostToolUse", SessionID: "a"}}) == nil || !n.refreshing || n.refreshAgain {
-		t.Fatal("not refreshing: refresh right away")
-	}
+	nFeed := bhFollow(t, &n)
+	n.app.OnHookEvents([]events.Event{{Name: "PostToolUse", SessionID: "a"}})
+	bhRun(nFeed())
 	if n.cat.Awake() {
 		t.Fatal("a tool event is no reason to meow")
+	}
+	// a malformed notice is ignored
+	if n.onBus(core.Event{Name: app.EvNotice, Data: "?"}) != nil {
+		t.Fatal("not a Notice")
 	}
 }
 
 func TestBehaviorNotice(t *testing.T) {
 	m := bhModel(t, bhSessions()...) // the core saw these states first (setSnap)
-	if msg := bhRefreshMsg(t, &m); m.showNotices(msg.notices) != nil || m.cat.Awake() {
+	feed := bhFollow(t, &m)          // the refresh's notices come on the bus
+	if m.update(bhRefreshMsg(t, &m)); feed() != nil || m.cat.Awake() {
 		t.Fatal("the first snapshot only records states")
 	}
+	ss := m.app.Ports().Sessions.(*testStore).snap.Sessions // what the refresh reads
 	cases := []struct {
 		name   string
 		change func(ss []store.Session)
@@ -246,17 +292,19 @@ func TestBehaviorNotice(t *testing.T) {
 		{"two return", func(ss []store.Session) { ss[0].State = "done"; ss[1].State = "blocked" }, true},
 	}
 	for _, c := range cases {
-		c.change(m.snap.Sessions) // shared with the store the refresh reads
-		m.cat = cat.New()         // a fresh cat for each case
+		c.change(ss)
+		m.cat = cat.New() // a fresh cat for each case
 		m.update(bhRefreshMsg(t, &m))
+		feed()
 		if m.cat.Awake() != c.meow {
 			t.Errorf("%s: meow=%v want %v", c.name, m.cat.Awake(), c.meow)
 		}
 	}
 	// away: bell and desktop notification
 	m.app.SetFocused(false)
-	m.snap.Sessions[2].State = "blocked"
-	cmd := m.showNotices(bhRefreshMsg(t, &m).notices)
+	ss[2].State = "blocked"
+	m.update(bhRefreshMsg(t, &m))
+	cmd := feed()
 	if cmd == nil {
 		t.Fatal("away from the terminal a return rings")
 	}
@@ -366,34 +414,26 @@ func TestBehaviorPaneMessages(t *testing.T) {
 
 func TestBehaviorInit(t *testing.T) {
 	m := bhModel(t)
-	var gotEvents bool
-	for _, msg := range bhRun(m.Init()) {
-		if _, ok := msg.(eventsTickMsg); ok {
-			gotEvents = true
-		}
+	if m.Init() == nil {
+		t.Fatal("Init asks the terminal's background")
 	}
-	if !gotEvents {
-		t.Fatal("Init starts the events poll")
+	for _, msg := range bhRun(m.Init()) {
+		if _, ok := msg.(snapMsg); ok {
+			t.Fatal("Init leaves the refreshes to the scheduler")
+		}
 	}
 }
 
 func TestBehaviorFetchGuards(t *testing.T) {
 	m := bhModel(t)
-	if m.fetchUsage(false) != nil {
-		t.Fatal("polling off: no automatic fetch")
-	}
-	if m.fetchUsage(true) == nil {
-		t.Fatal("a manual fetch always runs")
+	if m.fetchUsage() == nil {
+		t.Fatal("u always fetches")
 	}
 	if m.fetchJira(true) != nil {
 		t.Fatal("jira off: no fetch")
 	}
 	if m.loadTodos() != nil {
 		t.Fatal("no todo skill: nothing to load")
-	}
-	m.cfg.Refresh = 0.1
-	if m.scheduleTick() == nil {
-		t.Fatal("a tick is always scheduled")
 	}
 }
 

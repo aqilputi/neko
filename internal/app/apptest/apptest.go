@@ -575,13 +575,19 @@ func (o *FakeOpener) URLs() []string {
 
 // ---- Jira ----
 
-// FakeJira answers Fetch with Cache and Create with Key/Cost.
+// FakeJira answers Cached with Disk, Fetch with Cache and Create with Key/Cost.
 type FakeJira struct {
 	Recorder
+	Disk  jira.Cache // what "the disk" holds before any fetch
 	Cache jira.Cache
 	Key   string
 	Cost  float64
 	Errs  map[string]error
+}
+
+func (j *FakeJira) Cached() jira.Cache {
+	j.record("Cached")
+	return j.Disk
 }
 
 func (j *FakeJira) Fetch(cfg jira.Config) (jira.Cache, error) {

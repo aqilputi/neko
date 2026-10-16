@@ -244,8 +244,8 @@ func TestBusClosesAnsweredConfirmations(t *testing.T) {
 		t.Fatal("other events do nothing")
 	}
 	cancel()
-	if listenBus(m.app.Subscribe(ctx))() != nil {
-		t.Fatal("a closed subscription ends the listening")
+	if _, ok := listenBus(m.app.Subscribe(ctx))().(busCutMsg); !ok {
+		t.Fatal("a closed subscription says so")
 	}
 }
 

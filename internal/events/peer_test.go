@@ -74,13 +74,13 @@ func record(t *testing.T, v map[string]string) {
 
 func TestRecordTail(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	var tail Tail
-	if tail.Poll() != nil {
+	if (&Tail{}).Poll() != nil {
 		t.Fatal("Poll without a file should be nil")
 	}
 
-	// History before the first successful Poll is skipped.
+	// History (what the log held when the tail started) is skipped.
 	record(t, map[string]string{"hook_event_name": "Stop", "session_id": "old"})
+	var tail Tail
 	if got := tail.Poll(); got != nil {
 		t.Fatalf("first Poll returned history: %+v", got)
 	}

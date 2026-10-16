@@ -101,6 +101,7 @@ func (Opener) OpenURL(u string) error {
 // Jira is package jira (a headless claude calling the Atlassian connector).
 type Jira struct{}
 
+func (Jira) Cached() jira.Cache                        { return jira.LoadCache() }
 func (Jira) Fetch(cfg jira.Config) (jira.Cache, error) { return jira.Fetch(cfg) }
 func (Jira) Create(cfg jira.Config, n jira.NewIssue) (string, float64, error) {
 	return jira.Create(cfg, n)

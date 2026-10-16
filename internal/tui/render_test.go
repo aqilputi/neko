@@ -23,9 +23,8 @@ func TestRenderSnapshot(t *testing.T) {
 	m := newTestModel(cfg)
 	var mm tea.Model = m
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	mm, _ = mm.Update(m.fetchUsage(true)()) // window start before the refresh
-	snap, notices := m.app.RefreshNotices()
-	mm, _ = mm.Update(snapMsg{snap: snap, notices: notices})
+	mm, _ = mm.Update(m.fetchUsage()()) // window start before the refresh
+	mm, _ = mm.Update(snapMsg{snap: m.app.Refresh()})
 	if c := m.loadTodos(); c != nil {
 		mm, _ = mm.Update(c())
 	}
@@ -60,7 +59,7 @@ func TestRenderUsage(t *testing.T) {
 	m := newTestModel(cfg)
 	var mm tea.Model = m
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	mm, _ = mm.Update(m.fetchUsage(true)())
+	mm, _ = mm.Update(m.fetchUsage()())
 	mm, _ = mm.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
 	out := ansi.Strip(mm.View().Content)
 	lines := strings.Split(out, "\n")

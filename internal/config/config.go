@@ -65,6 +65,9 @@ type Config struct {
 	// is not in TodoRepos.
 	RepoRoots []string `toml:"repo_roots"`
 
+	// Lua is the [lua] table: the scripting runtime.
+	Lua Lua `toml:"lua"`
+
 	Rules  []Rule  `toml:"context"`
 	Prices []Price `toml:"price"`
 }
@@ -82,6 +85,7 @@ func Default() Config {
 		StaleDays:       3,
 		Sort:            "atividade",
 		RepoRoots:       []string{"~/visio/dev", "~/dev", "~"},
+		Lua:             defaultLua(),
 		Rules: []Rule{
 			{Match: `^~/visio/dev/worktrees/([A-Z]+-\d+)`, Name: "visio · $1"},
 			{Match: `^~/visio/dev/visio-processing-context`, Name: "visio · processing-context"},
@@ -113,7 +117,9 @@ func Default() Config {
 
 func Path() string { return filepath.Join(paths.ConfigDir(), "config.toml") }
 
-// Load reads the config file over the defaults. A missing file is fine.
+// Load reads the config file over the defaults. A missing file is fine. An
+// invalid [lua] budget takes its default and is returned as the error with
+// the rest of the file applied.
 func Load() (Config, error) {
 	c := Default()
 	if b, err := os.ReadFile(Path()); err == nil {
@@ -129,6 +135,8 @@ func Load() (Config, error) {
 		c.Prices = append(c.Prices, Default().Prices...)
 	}
 	c.Jira = c.Jira.WithDefaults()
+	var lerr error
+	c.Lua, lerr = c.Lua.valid() // a bad budget is reported, the rest still counts
 	for i := range c.Rules {
 		re, err := regexp.Compile(c.Rules[i].Match)
 		if err != nil { // a typo in the file must not crash the program
@@ -136,7 +144,7 @@ func Load() (Config, error) {
 		}
 		c.Rules[i].re = re
 	}
-	return c, nil
+	return c, lerr
 }
 
 // Tilde shortens /home/user/x to ~/x.

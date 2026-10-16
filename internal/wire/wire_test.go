@@ -320,11 +320,18 @@ func TestJira(t *testing.T) {
 	isolate(t)
 	var j app.JiraClient = Jira{}
 	cfg := jira.Config{Site: "acme.atlassian.net", CloudID: "c"}
+	if c := j.Cached(); len(c.Issues) != 0 {
+		t.Fatalf("nothing fetched yet: Cached = %+v", c)
+	}
 
 	fakeClaude(t, fixture(t, "search_ok.jsonl"), 0)
 	c, err := j.Fetch(cfg)
 	if err != nil || len(c.Issues) == 0 || c.Issues[0].Key != "ABC-1" {
 		t.Fatalf("Fetch = %+v, %v", c, err)
+	}
+	// the real adapter keeps the fetch on disk: a later run opens with it
+	if c := j.Cached(); len(c.Issues) == 0 || c.Issues[0].Key != "ABC-1" {
+		t.Fatalf("Cached after a fetch = %+v", c)
 	}
 
 	fakeClaude(t, fixture(t, "create_ok.jsonl"), 0)

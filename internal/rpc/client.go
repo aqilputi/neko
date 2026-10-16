@@ -203,6 +203,30 @@ func (c *Client) ClosePane(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/panes/"+url.PathEscape(id), nil, nil)
 }
 
+// ViewTree is POST /v1/view/tree: the tree built with st (send back the
+// state of the previous answer to keep its order, palette and cursor).
+func (c *Client) ViewTree(ctx context.Context, st proto.ViewState) (proto.Tree, error) {
+	var out proto.Tree
+	return out, c.do(ctx, http.MethodPost, "/v1/view/tree", proto.TreeRequest{State: st}, &out)
+}
+
+// Theme is GET /v1/theme: the named theme, or the active one when name is "".
+func (c *Client) Theme(ctx context.Context, name string) (proto.Theme, error) {
+	path := "/v1/theme"
+	if name != "" {
+		path += "?name=" + url.QueryEscape(name)
+	}
+	var out proto.Theme
+	return out, c.do(ctx, http.MethodGet, path, nil, &out)
+}
+
+// LuaEval is POST /v1/lua/eval. A Lua error comes back in LuaEval.Error,
+// not as err.
+func (c *Client) LuaEval(ctx context.Context, code string) (proto.LuaEval, error) {
+	var out proto.LuaEval
+	return out, c.do(ctx, http.MethodPost, "/v1/lua/eval", proto.LuaEvalRequest{Code: code}, &out)
+}
+
 // ---- events ----
 
 // EventStream is an open GET /v1/events. C closes when the stream ends

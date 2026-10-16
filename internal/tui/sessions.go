@@ -136,7 +136,7 @@ func (m *Model) askApp(res app.Result, async bool) {
 }
 
 // confirmedMsg is the one message a parked action run off the UI goroutine
-// comes back as: its toast, else a refresh (tickMsg).
+// comes back as: its toast, else a refresh (refreshMsg).
 func confirmedMsg(res app.Result, err error) tea.Msg {
 	eff, _ := res.Data.(app.SessionEffect)
 	switch {
@@ -145,7 +145,7 @@ func confirmedMsg(res app.Result, err error) tea.Msg {
 	case res.Toast != "":
 		return toastMsg{text: res.Toast, err: res.Err}
 	case eff.Refresh:
-		return tickMsg{}
+		return refreshMsg{}
 	}
 	return nil
 }

@@ -17,12 +17,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/aqilputi/nekuroddo/internal/app"
-	"github.com/aqilputi/nekuroddo/internal/app/apptest"
 	"github.com/aqilputi/nekuroddo/internal/config"
-	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/rpc"
 	"github.com/aqilputi/nekuroddo/internal/rpc/proto"
-	"github.com/aqilputi/nekuroddo/internal/store"
 )
 
 // syncBuffer is a bytes.Buffer safe to write from the server goroutine
@@ -51,7 +48,8 @@ func fakeClaudeBin(t *testing.T) string {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "args")
 	bin := filepath.Join(dir, "claude")
-	script := "#!/bin/sh\ncase \"$1\" in\n  agents) echo '[]' ;;\n  *) echo \"$@\" > " + log + "; echo 'started abcd1234' ;;\nesac\n"
+	// -p is the scheduler's /usage: answered, never logged as a dispatch
+	script := "#!/bin/sh\ncase \"$1\" in\n  agents) echo '[]' ;;\n  -p) echo 'Current session: 5% used' ;;\n  *) echo \"$@\" > " + log + "; echo 'started abcd1234' ;;\nesac\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -491,52 +489,6 @@ func TestLuaLoadErrorIsAWarning(t *testing.T) {
 	}
 	if res, err := h.app.Run(app.Context{}, "lua.reload", nil); err != nil || res.Toast == "" {
 		t.Fatalf("lua.reload: %+v %v", res, err)
-	}
-}
-
-// schedule drives the core with no TUI: a refresh at once and on every
-// period, and the hook log polled; an event that needs the user refreshes
-// at once.
-func TestSchedule(t *testing.T) {
-	f := apptest.New()
-	f.Sessions.SetSnapshot(store.Snapshot{})
-	a := app.New(config.Default(), f.Ports())
-	defer a.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { schedule(ctx, a, time.Hour, 5*time.Millisecond); close(done) }()
-	waitFor(t, func() bool { return f.Sessions.Count("Refresh") >= 1 })
-	f.Events.Push(events.Event{Name: "Notification", SessionID: "s", Type: "permission_prompt", Message: "?"})
-	waitFor(t, func() bool { return f.Sessions.Count("Refresh") >= 2 })
-	if !a.HooksSeen() {
-		t.Fatal("the polled event should reach the core")
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("schedule must return when ctx ends")
-	}
-
-	// the periodic refresh
-	f2 := apptest.New()
-	a2 := app.New(config.Default(), f2.Ports())
-	defer a2.Close()
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	go schedule(ctx2, a2, 5*time.Millisecond, time.Hour)
-	waitFor(t, func() bool { return f2.Sessions.Count("Refresh") >= 3 })
-}
-
-func TestRefreshEvery(t *testing.T) {
-	cfg := config.Default()
-	cfg.Refresh = 3
-	if d := refreshEvery(cfg); d != 3*time.Second {
-		t.Fatalf("3s: %v", d)
-	}
-	cfg.Refresh = 0.1
-	if d := refreshEvery(cfg); d != 2*time.Second {
-		t.Fatalf("too short falls back to 2s: %v", d)
 	}
 }
 

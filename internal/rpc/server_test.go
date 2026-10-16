@@ -186,26 +186,6 @@ func TestServeAfterClose(t *testing.T) {
 	}
 }
 
-func TestPhaseTwoEndpointsAre501(t *testing.T) {
-	e := newEnv(t)
-	hc := e.rawUnix()
-	for _, r := range []struct{ method, path string }{
-		{http.MethodPost, "/v1/view/tree"}, {http.MethodGet, "/v1/theme"}, {http.MethodPost, "/v1/lua/eval"},
-	} {
-		req, _ := http.NewRequest(r.method, "http://nk"+r.path, strings.NewReader("{}"))
-		resp, err := hc.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var body proto.Error
-		_ = json.NewDecoder(resp.Body).Decode(&body)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusNotImplemented || body.Code != proto.CodeNotImplemented {
-			t.Errorf("%s %s = %d %+v", r.method, r.path, resp.StatusCode, body)
-		}
-	}
-}
-
 func TestUnknownPathAndMethod(t *testing.T) {
 	e := newEnv(t)
 	hc := e.rawUnix()

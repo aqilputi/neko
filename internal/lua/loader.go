@@ -86,14 +86,23 @@ func (fs *fileState) off(event string, fn *glua.LFunction) {
 }
 
 // Load reads init.lua and plugins/*.lua (none: nothing changes). It is
-// Reload under another name: the first load is a reload from nothing.
-func (r *Runtime) Load() error { return r.Reload() }
+// Reload under another name: the first load is a reload from nothing. A
+// disabled runtime ([lua] enabled = false) loads nothing, without error.
+func (r *Runtime) Load() error {
+	if r.opts.Disabled {
+		return nil
+	}
+	return r.Reload()
+}
 
 // Reload re-reads every file. Each file is staged and committed on its own:
 // a file that fails keeps its last good commands, keys and handlers (or has
 // none, on the first load), and the error names it with its line. A file
 // gone from disk is dropped; a disabled one is skipped until Enable.
 func (r *Runtime) Reload() error {
+	if r.opts.Disabled {
+		return ErrDisabled
+	}
 	var err error
 	if derr := r.do(func() { err = r.reload() }); derr != nil {
 		return derr

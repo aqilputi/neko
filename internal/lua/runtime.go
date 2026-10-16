@@ -48,6 +48,16 @@ const (
 	keyCommandPrefix = "lua.key:"
 )
 
+// UI capabilities a host declares in Options.Caps (nk.ui.has).
+const (
+	CapToast   = "toast"
+	CapConfirm = "confirm"
+	CapCat     = "cat"
+	CapPalette = "palette"
+	CapScene   = "scene"
+	CapNotify  = "notify"
+)
+
 var (
 	// ErrBudget is a Lua call cut off by its time budget.
 	ErrBudget = errors.New("lua: orçamento de tempo estourado")
@@ -66,6 +76,9 @@ type Options struct {
 	// Caps are the UI capabilities the host provides (nk.ui.has): "toast",
 	// "confirm", "cat", "palette", "scene", "notify".
 	Caps []string
+	// Disabled loads no file ([lua] enabled = false): Load does nothing,
+	// Reload and Enable fail with ErrDisabled, AutoReload never starts.
+	Disabled bool
 }
 
 // Message is one entry of the runtime's log ring (errors and nk.log).
@@ -109,6 +122,8 @@ type Runtime struct {
 	keymap   core.Keymap
 	wanted   map[string]bool // event names some handler follows
 	fileList []string        // live files, load order (Files)
+	closed   bool            // Close began: no new background work
+	watching bool            // AutoReload started
 }
 
 // invocation is the Lua entry running now: its file (for attribution and
@@ -227,6 +242,9 @@ func (r *Runtime) post(f func()) {
 // the LState is closed. Safe to call twice.
 func (r *Runtime) Close() {
 	r.closeOnce.Do(func() {
+		r.mu.Lock()
+		r.closed = true
+		r.mu.Unlock()
 		_ = r.do(func() {
 			for _, name := range append([]string(nil), r.order...) {
 				r.dropFile(name)

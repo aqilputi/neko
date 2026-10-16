@@ -143,6 +143,11 @@ type Tail struct {
 func (t *Tail) Poll() []Event {
 	f, err := os.Open(Path())
 	if err != nil {
+		if os.IsNotExist(err) {
+			// no log yet: there is no history to skip, so everything the
+			// hooks write from now on is new
+			t.started = true
+		}
 		return nil
 	}
 	defer f.Close()

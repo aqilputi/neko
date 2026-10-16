@@ -23,11 +23,6 @@ import (
 // APIVersion is nk.version.
 const APIVersion = 1
 
-// permModes are the --permission-mode values nk.dispatch accepts ("" =
-// Claude Code's own settings). Bypass still asks, unless it is the
-// configured default (app.Dispatch).
-var permModes = []string{"", "acceptEdits", "auto", "plan", app.PermBypass}
-
 var argTypes = []string{core.ArgString, core.ArgSession, core.ArgDir, core.ArgTag, core.ArgInt}
 
 // installAPI defines the global nk table.
@@ -430,8 +425,8 @@ func (r *Runtime) nkDispatch(L *glua.LState) int {
 		L.RaiseError("dispatch: falta dir")
 	case req.Prompt == "":
 		L.RaiseError("dispatch: falta prompt")
-	case !slices.Contains(permModes, req.PermMode):
-		L.RaiseError("dispatch: perm %q inválido (use %v)", req.PermMode, permModes[1:])
+	case !core.ValidPermMode(req.PermMode): // bypass still asks unless it is the default (app.Dispatch)
+		L.RaiseError("dispatch: perm %q inválido (use %v)", req.PermMode, core.PermModes()[1:])
 	case len(optStrings(L, t, "extra")) > 0:
 		L.RaiseError("dispatch: extra ainda não é suportado")
 	}

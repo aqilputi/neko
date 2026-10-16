@@ -118,7 +118,7 @@ func TestPaletteIncompleteCommandStaysOpen(t *testing.T) {
 
 func TestPeerMessageCue(t *testing.T) {
 	m := groupModel(t)
-	m.onEvents([]events.Event{{At: time.Now(), Name: "UserPromptSubmit", SessionID: "b", Type: "peer",
+	m.app.OnHookEvents([]events.Event{{At: time.Now(), Name: "UserPromptSubmit", SessionID: "b", Type: "peer",
 		From: "deploy rc 1", Message: "[#deploy-rc] bug: tag errada"}})
 	if c, ok := m.app.MailCueOf("b"); !ok || c.Sent {
 		t.Fatal("receiver should get ✉←")

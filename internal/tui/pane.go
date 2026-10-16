@@ -71,6 +71,9 @@ func (m *Model) startPane(plan app.AttachPlan) tea.Cmd {
 		m.mode = modeInsert
 	}
 	m.app.Panes().Started(plan)
+	if m.onPaneStarted != nil {
+		m.onPaneStarted(p.Process, plan.SessionID, w, h)
+	}
 	cmds := []tea.Cmd{listenPane(p)}
 	if plan.Reply != "" {
 		cmds = append(cmds, m.sendReplyLater(plan.ID, plan.ReplyIn))
@@ -186,6 +189,21 @@ type paneSlice struct {
 	panes  map[string]*term.Pane
 	active string // pane id shown on the right (follows the selection, see syncActive)
 	zoom   bool
+
+	onPaneStarted PaneHook
+}
+
+// PaneHook hears of every pane the TUI starts: its program half (the PTY,
+// app.Pane), the session it shows and its size.
+type PaneHook func(p app.Pane, sessionID string, cols, rows int)
+
+// WithPaneHook has the TUI hand every pane it starts to hook: nk --listen
+// gives it to the RPC server (rpc.Server.AttachPane), so a client attaching
+// the same session shares that PTY instead of starting a second
+// `claude attach`.
+func (m Model) WithPaneHook(hook PaneHook) Model {
+	m.onPaneStarted = hook
+	return m
 }
 
 func newPaneSlice() paneSlice { return paneSlice{panes: map[string]*term.Pane{}} }
