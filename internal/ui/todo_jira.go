@@ -1,21 +1,18 @@
 package ui
 
-// Slice "jira/todo": the todos tab, Jira issues and agents dispatched
-// from them (WP-2.5 moves the logic to app/jira.go and app/todo.go).
+// Slice "jira/todo": the todos tab. The use cases live in app (todo.go,
+// jira.go); this file keeps the tab's rows and cursor, asks for input and
+// turns the core's answers into messages.
 
 import (
-	"errors"
 	"fmt"
-	"os/exec"
-	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/aqilputi/nekuroddo/internal/config"
-	"github.com/aqilputi/nekuroddo/internal/core"
+	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/todo"
+	"github.com/aqilputi/nekuroddo/internal/wire"
 )
 
 func (m *Model) curRow() *todoRow {
@@ -55,7 +52,8 @@ func (m *Model) issueForKey(key string) *jira.Issue {
 	return nil
 }
 
-// rebuildTodos flattens tasks and Jira issues into the todos tab.
+// rebuildTodos flattens tasks and Jira issues (as the core last handed them
+// over) into the todos tab.
 func (m *Model) rebuildTodos() {
 	m.todos = m.todos[:0]
 	for gi := range m.tasks {
@@ -65,10 +63,11 @@ func (m *Model) rebuildTodos() {
 		}
 	}
 	if m.cfg.Jira.Enabled {
+		now := m.app.Clock().Now()
 		for i := range m.jira.Issues {
 			is := &m.jira.Issues[i]
 			// Issues untouched for months stay out of the way unless H.
-			if !m.view.ShowAll && time.Since(is.UpdatedAt()) > 90*24*time.Hour {
+			if !m.view.ShowAll && app.IssueStale(*is, now) {
 				continue
 			}
 			m.todos = append(m.todos, todoRow{group: "jira", issue: is})
@@ -77,26 +76,41 @@ func (m *Model) rebuildTodos() {
 	m.todoCur = min(m.todoCur, max(len(m.todos)-1, 0))
 }
 
+// todosCmd runs a todo use case in the background and hands the reloaded
+// list to onTodos.
+func todosCmd(run func() ([]todo.Group, error)) tea.Cmd {
+	return func() tea.Msg {
+		g, err := run()
+		return todosMsg{g, err}
+	}
+}
+
+// todoResult turns a Result whose Data is an app.TodoList into a message.
+func todoResult(res app.Result) tea.Msg {
+	if res.Err {
+		return toastMsg{text: res.Toast, err: true}
+	}
+	l, _ := res.Data.(app.TodoList)
+	return todosMsg{l.Groups, l.Error()}
+}
+
 func (m Model) loadTodos() tea.Cmd {
 	if !m.todoAvail {
 		return nil
 	}
-	return func() tea.Msg {
-		g, err := todo.List()
-		return todosMsg{g, err}
-	}
+	return todosCmd(m.app.LoadTodos)
 }
 
 // fetchJira refreshes the Jira list through headless claude (~$0.1 a call),
 // so it only runs on demand or when the cache is older than cache_minutes.
 func (m *Model) fetchJira(force bool) tea.Cmd {
-	cfg := m.cfg.Jira
-	if !cfg.Enabled || m.jiraLoading || (!force && m.jira.Fresh(cfg)) {
+	if !app.JiraShouldFetch(m.cfg.Jira, m.jira, m.jiraLoading, force, m.app.Clock().Now()) {
 		return nil
 	}
 	m.jiraLoading = true
+	a := m.app
 	return func() tea.Msg {
-		c, err := jira.Fetch(cfg)
+		c, _, err := a.FetchJira(force)
 		return jiraMsg{c, err}
 	}
 }
@@ -105,30 +119,20 @@ func (m *Model) fetchJira(force bool) tea.Cmd {
 // an issue comes into the todo list.
 func (m *Model) jiraAction() tea.Cmd {
 	if !m.cfg.Jira.Enabled {
-		return toastCmd("jira desligado: configure [jira] no config.toml", true)
+		return toastCmd(app.ErrJiraOff.Error(), true)
 	}
 	r := m.curRow()
 	if r == nil {
 		return nil
 	}
 	if r.issue != nil {
-		if t := m.todoForKey(r.issue.Key); t != nil {
-			return toastCmd(fmt.Sprintf("%s já está no todo #%d", r.issue.Key, t.ID), true)
-		}
-		key, sum := r.issue.Key, r.issue.Summary
-		return func() tea.Msg {
-			if err := todo.AddFromJira(key, sum); err != nil {
-				return toastMsg{text: err.Error(), err: true}
-			}
-			g, err := todo.List()
-			return todosMsg{g, err}
-		}
+		a, groups, is := m.app, m.tasks, *r.issue
+		return func() tea.Msg { return todoResult(a.IssueToTodo(groups, is.Key, is.Summary)) }
 	}
-	if k := r.task.JiraKey(); k != "" {
-		return toastCmd(fmt.Sprintf("#%d já tem issue: %s", r.task.ID, k), true)
+	if err := app.TaskHasIssue(*r.task); err != nil {
+		return toastCmd(err.Error(), true)
 	}
-	def := m.cfg.Jira.DefaultProject + "/" + m.cfg.Jira.DefaultType
-	return m.ask(inJiraProject, fmt.Sprintf("#%d no Jira — projeto/tipo › ", r.task.ID), def)
+	return m.ask(inJiraProject, fmt.Sprintf("#%d no Jira — projeto/tipo › ", r.task.ID), app.JiraDefaultTarget(m.cfg.Jira))
 }
 
 // submitJiraProject creates the selected task in Jira ("PROJ/Type"), asking first.
@@ -137,18 +141,11 @@ func (m *Model) submitJiraProject(val string) tea.Cmd {
 	if t == nil || val == "" {
 		return nil
 	}
-	proj, typ, _ := strings.Cut(val, "/")
-	proj = strings.ToUpper(strings.TrimSpace(proj))
-	typ = strings.TrimSpace(typ)
-	if typ == "" {
-		typ = m.cfg.Jira.DefaultType
-	}
-	task := *t
-	n := jira.NewIssue{Project: proj, Type: typ, Summary: task.Title, Description: jiraDescription(task), Labels: []string{"nekuroddo"}}
-	cfg := m.cfg.Jira
-	m.confirmThen(fmt.Sprintf("criar no Jira %s/%s, atribuída a você:\n\"%s\"\n(escreve no Jira)", proj, typ, core.Truncate(task.Title, 70)), func(*Model) tea.Cmd {
+	proj, typ := app.JiraTarget(m.cfg.Jira, val)
+	task, a := *t, m.app
+	m.confirmThen(app.CreateIssueQuestion(proj, typ, task.Title), func(*Model) tea.Cmd {
 		return tea.Batch(toastCmd("criando no Jira via claude…", false), func() tea.Msg {
-			key, cost, err := jira.Create(cfg, n)
+			key, cost, err := a.CreateIssue(task, proj, typ)
 			return jiraCreatedMsg{task: task.ID, key: key, cost: cost, err: err}
 		})
 	})
@@ -156,49 +153,21 @@ func (m *Model) submitJiraProject(val string) tea.Cmd {
 }
 
 // jiraDescription is the issue body built from a task.
-func jiraDescription(t todo.Task) string {
-	var b strings.Builder
-	if t.Desc != "" {
-		b.WriteString(t.Desc + "\n\n")
-	}
-	for _, r := range t.Refs {
-		fmt.Fprintf(&b, "- %s: %s %s\n", r.Kind, r.Value, r.URL)
-	}
-	for _, l := range t.Links {
-		fmt.Fprintf(&b, "- %s\n", l)
-	}
-	for _, n := range t.Notes {
-		fmt.Fprintf(&b, "\n> %s — %s\n", n.At[:min(10, len(n.At))], n.Text)
-	}
-	b.WriteString("\n_criada pelo nekuroddo a partir do todo #" + fmt.Sprint(t.ID) + "_")
-	return b.String()
-}
+func jiraDescription(t todo.Task) string { return app.JiraDescription(t) }
 
+// dispatchTodo asks where an agent for the selected task or issue starts;
+// submitInput then dispatches it (app.Dispatch).
 func (m *Model) dispatchTodo() tea.Cmd {
 	if r := m.curRow(); r != nil && r.issue != nil {
 		m.draftIssue = r.issue
-		dir := m.cfg.Jira.AgentDir
-		if dir == "" {
-			dir = "~/visio/dev"
-		}
-		return m.ask(inJiraAgentDir, "agent p/ "+r.issue.Key+" em › ", dir)
+		return m.ask(inJiraAgentDir, "agent p/ "+r.issue.Key+" em › ", app.IssueDispatchDir(m.cfg.Jira))
 	}
 	t := m.curTodo()
 	if t == nil {
 		return nil
 	}
-	dir := ""
-	for _, c := range t.Contexts {
-		if d := m.cfg.RepoFor(c); d != "" {
-			dir = d
-			break
-		}
-	}
-	if dir == "" {
-		dir = config.Expand("~")
-	}
 	m.draftTask = t
-	return m.ask(inDispatchDir, fmt.Sprintf("agent p/ #%d em › ", t.ID), config.Tilde(dir))
+	return m.ask(inDispatchDir, fmt.Sprintf("agent p/ #%d em › ", t.ID), app.TodoDispatchDir(m.cfg, *t))
 }
 
 // startTodo marks the selected task as started (nil when none is selected).
@@ -207,27 +176,31 @@ func (m *Model) startTodo() tea.Cmd {
 	if t == nil {
 		return nil
 	}
-	id := t.ID
-	return func() tea.Msg {
-		_ = todo.Start(id)
-		g, err := todo.List()
-		return todosMsg{g, err}
-	}
+	id, a := t.ID, m.app
+	return todosCmd(func() ([]todo.Group, error) { return a.StartTodo(id) })
 }
 
 // doneTodo marks the selected task as done, asking first.
 func (m *Model) doneTodo() {
 	if t := m.curTodo(); t != nil {
-		id, title := t.ID, t.Title
-		m.confirmThen(fmt.Sprintf("marcar #%d \"%s\" como done?", id, core.Truncate(title, 50)), func(*Model) tea.Cmd {
-			return func() tea.Msg { _ = todo.Done(id); g, err := todo.List(); return todosMsg{g, err} }
+		id, a := t.ID, m.app
+		m.confirmThen(app.DoneQuestion(id, t.Title), func(*Model) tea.Cmd {
+			return todosCmd(func() ([]todo.Group, error) { return a.DoneTodo(id) })
 		})
 	}
 }
 
-func openURL(u string) tea.Cmd {
+// openURL opens u in the browser through the Opener port.
+// TODO(WP-2.7): update.go calls this free function, which cannot reach
+// m.app; once it calls m.openIssueURL(u) this shim goes away.
+func openURL(u string) tea.Cmd { return openWith(wire.Opener{}, u) }
+
+// openIssueURL opens u through the core (app.OpenURL).
+func (m *Model) openIssueURL(u string) tea.Cmd { return openWith(m.app, u) }
+
+func openWith(o app.Opener, u string) tea.Cmd {
 	return func() tea.Msg {
-		if err := exec.Command("xdg-open", u).Start(); err != nil {
+		if err := o.OpenURL(u); err != nil {
 			return toastMsg{text: err.Error(), err: true}
 		}
 		return nil
@@ -247,33 +220,26 @@ func (m *Model) onJira(msg jiraMsg) tea.Cmd {
 	m.jiraLoading = false
 	m.jiraErr = msg.err
 	if msg.err != nil {
-		return toastCmd("jira: "+msg.err.Error(), true)
+		return toastCmd(app.JiraFetchText(msg.cache, msg.err), true)
 	}
 	m.jira = msg.cache
 	m.rebuildTodos()
-	return toastCmd(fmt.Sprintf("jira: %d issues (custou $%.2f)", len(m.jira.Issues), m.jira.CostUSD), false)
+	return toastCmd(app.JiraFetchText(m.jira, nil), false)
 }
 
 func (m *Model) onJiraCreated(msg jiraCreatedMsg) tea.Cmd {
-	var denied jira.DeniedError
-	if errors.As(msg.err, &denied) && m.cfg.Jira.ApproveHint != "" {
-		return stickyToast("jira: " + denied.Error() + "  — se for o seu hook, rode:  " + m.cfg.Jira.ApproveHint + "  e aperte J de novo")
-	}
 	if msg.err != nil {
-		return stickyToast("jira: " + msg.err.Error() + "  (log: ~/.cache/nekuroddo/jira-last.jsonl)")
+		return stickyToast(app.JiraCreateFailure(msg.err, m.cfg.Jira.ApproveHint))
 	}
-	id, key := msg.task, msg.key
+	id, key, a := msg.task, msg.key, m.app
 	return tea.Batch(
-		toastCmd(fmt.Sprintf("%s criada e ligada ao #%d ($%.2f)", key, id, msg.cost), false),
-		func() tea.Msg {
-			_ = todo.LinkJira(id, key)
-			g, err := todo.List()
-			return todosMsg{g, err}
-		},
+		toastCmd(app.JiraCreatedText(key, id, msg.cost), false),
+		todosCmd(func() ([]todo.Group, error) { return a.LinkIssue(id, key) }),
 		m.fetchJira(true))
 }
 
-// todoJiraSlice is the todos tab: the task list and the Jira cache.
+// todoJiraSlice is the todos tab: the core's task list and Jira cache as
+// last received, the cursor, and the issue an agent is being asked for.
 type todoJiraSlice struct {
 	todos     []todoRow
 	todoCur   int
@@ -287,6 +253,13 @@ type todoJiraSlice struct {
 	draftIssue  *jira.Issue
 }
 
-func newTodoJiraSlice() todoJiraSlice {
-	return todoJiraSlice{todoAvail: todo.Available(), jira: jira.LoadCache()}
+// newTodoJiraSlice starts the tab from the core: whether the todo skill is
+// there and the Jira list saved on disk.
+// TODO(WP-2.7): model.go calls it without the app; pass it
+// (newTodoJiraSlice(a)) and drop the fallback, which asks the adapters.
+func newTodoJiraSlice(a ...*app.App) todoJiraSlice {
+	if len(a) > 0 && a[0] != nil {
+		return todoJiraSlice{todoAvail: a[0].TodoAvailable(), jira: a[0].JiraCache()}
+	}
+	return todoJiraSlice{todoAvail: wire.Todo{}.Available(), jira: jira.LoadCache()}
 }

@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/groups"
@@ -19,20 +20,20 @@ import (
 // Groups relate sessions doing similar work: space picks sessions (as in
 // yazi), `:group <tag>` groups them, and each member learns about its peers
 // through `nk hook-context`. When one warns the others (SendMessage), the
-// sender and the receivers show ✉ and the cat meows.
+// sender and the receivers show ✉ and the cat meows. The use cases live in
+// app (app/groups.go); this file keeps the picks, parses the palette and
+// draws.
 
-// mailCueFor is how long the ✉ blinks; it then stays dim until mailKeep.
-const (
-	mailCueFor = 90 * time.Second
-	mailKeep   = 15 * time.Minute
-)
+// mailKeep is how long a ✉ stays (app.MailKeep; it blinks for app.MailCueFor).
+const mailKeep = app.MailKeep
 
+// mailCue mirrors app.MailCue for the renderers.
 type mailCue struct {
 	at   time.Time
 	sent bool // the session sent it (→); otherwise received (←)
 }
 
-// peerMsg is one message seen between sessions, newest last.
+// peerMsg mirrors app.PeerMsg (one message seen between sessions).
 type peerMsg struct {
 	at       time.Time
 	from, to string // session ids ("" when the sender is not known)
@@ -86,12 +87,44 @@ func (m *Model) targets() []*store.Session {
 	return out
 }
 
-func member(s *store.Session) groups.Member {
-	mb := groups.Member{SessionID: s.SessionID, Name: s.Name, Label: s.Label(), Cwd: s.Cwd}
-	if mb.Name == "" {
-		mb.Name = s.Label()
+// groupCtx is the client's selection as app sees it: the picked sessions
+// (in tree order) and the one under the cursor.
+func (m *Model) groupCtx() app.Context {
+	var ctx app.Context
+	if len(m.picked) > 0 {
+		for _, s := range m.targets() {
+			ctx.Picked = append(ctx.Picked, s.SessionID)
+		}
 	}
-	return mb
+	if sel := m.selected(); sel != nil {
+		ctx.SessionID = sel.SessionID
+	}
+	return ctx
+}
+
+// pullGroups refreshes the slice's read-only mirrors of app's groups, ✉
+// cues and messages (the renderers read them; app owns the state).
+func (m *Model) pullGroups() {
+	m.grp = m.app.Groups()
+	m.mail = map[string]mailCue{}
+	for id, c := range m.app.Mail() {
+		m.mail[id] = mailCue{at: c.At, sent: c.Sent}
+	}
+	m.msgs = nil
+	for _, p := range m.app.Messages() {
+		m.msgs = append(m.msgs, peerMsg{at: p.At, from: p.From, to: p.To, fromName: p.FromName, text: p.Text})
+	}
+}
+
+// resultCmd turns a use case's Result into the toast it asks for.
+func resultCmd(res app.Result, err error) tea.Cmd {
+	switch {
+	case res.Toast != "":
+		return toastCmd(res.Toast, res.Err || err != nil)
+	case err != nil:
+		return toastCmd(err.Error(), true)
+	}
+	return nil
 }
 
 // groupCommand parses what was typed in the palette; nil when it is not a
@@ -111,12 +144,12 @@ func (m *Model) groupCommand(q string) *paletteItem {
 		if len(f) < 2 {
 			return &paletteItem{title: "group <tag>", hint: "agrupa " + what}
 		}
-		tag := groups.CleanTag(strings.Join(f[1:], " "))
+		tag := core.CleanTag(strings.Join(f[1:], " "))
 		return &paletteItem{title: "▶ group #" + tag, hint: what, run: func(m *Model) tea.Cmd { return m.groupTargets(tag) }}
 	case "ungroup", "ug":
 		tag := ""
 		if len(f) > 1 {
-			tag = groups.CleanTag(f[1])
+			tag = core.CleanTag(f[1])
 		}
 		title := "▶ ungroup " + what
 		if tag != "" {
@@ -126,7 +159,7 @@ func (m *Model) groupCommand(q string) *paletteItem {
 	case "notify", "n":
 		tag, text := "", strings.TrimSpace(strings.TrimPrefix(q, f[0]))
 		if len(f) > 1 && strings.HasPrefix(f[1], "#") {
-			tag = groups.CleanTag(f[1])
+			tag = core.CleanTag(f[1])
 			text = strings.TrimSpace(strings.TrimPrefix(text, f[1]))
 		}
 		if tag == "" {
@@ -146,65 +179,32 @@ func (m *Model) groupCommand(q string) *paletteItem {
 }
 
 func (m *Model) groupTargets(tag string) tea.Cmd {
-	ts := m.targets()
-	if tag == "" || len(ts) == 0 {
-		return toastCmd("group: escolha sessões com space (ou ponha o cursor numa)", true)
+	res, err := m.app.GroupTargets(m.groupCtx(), tag, m.snap.Sessions...)
+	m.pullGroups()
+	if err == nil {
+		m.picked = map[string]bool{}
 	}
-	var ms []groups.Member
-	for _, s := range ts {
-		ms = append(ms, member(s))
-	}
-	m.grp = groups.Load()
-	m.grp.Add(tag, ms...)
-	if err := m.grp.Save(); err != nil {
-		return toastCmd("group: "+err.Error(), true)
-	}
-	m.picked = map[string]bool{}
-	return toastCmd(fmt.Sprintf("#%s: %d sessões — cada uma fica sabendo dos pares na próxima ferramenta", tag, len(m.grp.Groups[tag])), false)
+	return resultCmd(res, err)
 }
 
 func (m *Model) ungroupTargets(tag string) tea.Cmd {
-	var ids []string
-	for _, s := range m.targets() {
-		ids = append(ids, s.SessionID)
+	res, err := m.app.UngroupTargets(m.groupCtx(), tag)
+	m.pullGroups()
+	if err == nil {
+		m.picked = map[string]bool{}
 	}
-	m.grp = groups.Load()
-	n := m.grp.Remove(tag, ids...)
-	if err := m.grp.Save(); err != nil {
-		return toastCmd("ungroup: "+err.Error(), true)
-	}
-	m.picked = map[string]bool{}
-	if n == 0 {
-		return toastCmd("ungroup: nada a tirar", true)
-	}
-	return toastCmd(fmt.Sprintf("%d saíram do grupo", n), false)
+	return resultCmd(res, err)
 }
 
-// notifyGroup queues your note for every member; each gets it at its next
-// tool call or prompt. Sessions not running only see it when they resume.
+// notifyGroup queues your note for every member (app.NotifyGroup) and the
+// cat tells you so.
 func (m *Model) notifyGroup(tag, text string) tea.Cmd {
-	ms := m.grp.Groups[tag]
-	if len(ms) == 0 {
-		return toastCmd("notify: #"+tag+" não existe", true)
+	res, err := m.app.NotifyGroup(tag, text, m.snap.Sessions...)
+	m.pullGroups()
+	if err == nil {
+		m.cat.Meow(core.Truncate("✉ você → #"+tag, 50))
 	}
-	now := time.Now()
-	idle := 0
-	for _, mb := range ms {
-		if err := groups.Queue(mb.SessionID, groups.Note{At: now, Tag: tag, Text: text}); err != nil {
-			return toastCmd("notify: "+err.Error(), true)
-		}
-		m.mail[mb.SessionID] = mailCue{at: now}
-		m.addMsg(peerMsg{at: now, to: mb.SessionID, fromName: "você", text: "[#" + tag + "] " + text})
-		if s := m.session(mb.SessionID); s == nil || s.State != "busy" {
-			idle++
-		}
-	}
-	m.cat.Meow(core.Truncate("✉ você → #"+tag, 50))
-	msg := fmt.Sprintf("✉ #%s: aviso na fila de %d sessões", tag, len(ms))
-	if idle > 0 {
-		msg += fmt.Sprintf(" (%d paradas recebem quando voltarem a rodar)", idle)
-	}
-	return toastCmd(msg, false)
+	return resultCmd(res, err)
 }
 
 func (m *Model) session(id string) *store.Session {
@@ -218,50 +218,18 @@ func (m *Model) session(id string) *store.Session {
 
 // sessionNamed finds the sender of a message by the name Claude gave it.
 func (m *Model) sessionNamed(name string) *store.Session {
-	if name == "" {
-		return nil
-	}
-	for i := range m.snap.Sessions {
-		s := &m.snap.Sessions[i]
-		if s.Name == name || s.Label() == name {
-			return s
-		}
-	}
-	// names are cut with "…" in some listings
-	if p, ok := strings.CutSuffix(name, "…"); ok && p != "" {
-		for i := range m.snap.Sessions {
-			if s := &m.snap.Sessions[i]; strings.HasPrefix(s.Name, p) {
-				return s
-			}
-		}
-	}
-	return nil
+	return app.SessionNamed(m.snap.Sessions, name)
 }
 
-// onPeer reacts to a message another session sent: ✉ on both ends, the
-// message in the log, and the cat says who told whom.
+// onPeer reacts to a message another session sent: app records the ✉ on
+// both ends and the message; the cat says who told whom.
 func (m *Model) onPeer(e events.Event) {
-	now := e.At
-	if now.IsZero() {
-		now = time.Now()
-	}
-	m.mail[e.SessionID] = mailCue{at: now}
-	from := m.sessionNamed(e.From)
-	pm := peerMsg{at: now, to: e.SessionID, fromName: e.From, text: e.Message}
-	fromLabel := e.From
-	if from != nil {
-		pm.from = from.SessionID
-		fromLabel = from.Label()
-		m.mail[from.SessionID] = mailCue{at: now, sent: true}
-	}
-	m.addMsg(pm)
-	toLabel := "?"
-	if s := m.session(e.SessionID); s != nil {
-		toLabel = s.Label()
-	}
-	m.cat.Meow(core.Truncate("✉ "+core.Truncate(fromLabel, 16)+" → "+core.Truncate(toLabel, 16), 50))
+	seen := m.app.OnPeer(e, m.snap.Sessions...)
+	m.pullGroups()
+	m.cat.Meow(core.Truncate("✉ "+core.Truncate(seen.FromLabel, 16)+" → "+core.Truncate(seen.ToLabel, 16), 50))
 }
 
+// addMsg appends to the message mirror (app.Messages is the real log).
 func (m *Model) addMsg(p peerMsg) {
 	m.msgs = append(m.msgs, p)
 	if len(m.msgs) > 100 {
@@ -270,33 +238,33 @@ func (m *Model) addMsg(p peerMsg) {
 }
 
 // mailMark is the ✉ drawn next to a session that just sent or got a
-// message: blinking at first, then dim.
+// message: blinking at first, then dim (app.MailCue.State, by app's clock).
 func (m *Model) mailMark(t theme.Theme, id string) (string, color.Color) {
 	c, ok := m.mail[id]
 	if !ok {
-		return "", nil
-	}
-	age := time.Since(c.at)
-	if age > mailKeep {
 		return "", nil
 	}
 	mark := "✉←"
 	if c.sent {
 		mark = "✉→"
 	}
-	if age < mailCueFor {
+	switch (app.MailCue{At: c.at, Sent: c.sent}).State(m.app.Clock().Now()) {
+	case app.CueBlink:
 		if m.frame%6 < 3 {
 			return mark, t.Accent
 		}
 		return mark, t.Accent2
+	case app.CueDim:
+		return mark, t.Muted
 	}
-	return mark, t.Muted
+	return "", nil
 }
 
 // mailBlinking keeps the fast animation clock on while a ✉ blinks.
 func (m *Model) mailBlinking() bool {
+	now := m.app.Clock().Now()
 	for _, c := range m.mail {
-		if time.Since(c.at) < mailCueFor {
+		if (app.MailCue{At: c.at, Sent: c.sent}).State(now) == app.CueBlink {
 			return true
 		}
 	}
@@ -305,23 +273,10 @@ func (m *Model) mailBlinking() bool {
 
 // syncGroupNames refreshes the names kept in groups.json when Claude
 // renames a session (they are the SendMessage addresses), and reloads the
-// file in case another nekuroddo changed it.
+// file in case another nekuroddo changed it (app.SyncGroupNames).
 func (m *Model) syncGroupNames() {
-	m.grp = groups.Load()
-	changed := false
-	for tag, ms := range m.grp.Groups {
-		for i, mb := range ms {
-			if s := m.session(mb.SessionID); s != nil {
-				if nm := member(s); nm.Name != mb.Name || nm.Label != mb.Label || nm.Cwd != mb.Cwd {
-					ms[i], changed = nm, true
-				}
-			}
-		}
-		m.grp.Groups[tag] = ms
-	}
-	if changed {
-		_ = m.grp.Save()
-	}
+	_, _ = m.app.SyncGroupNames(m.snap.Sessions)
+	m.pullGroups()
 }
 
 // peersOfCursor are the sessions sharing a group with the one under the
@@ -332,10 +287,8 @@ func (m *Model) peersOfCursor() map[string]bool {
 		return nil
 	}
 	out := map[string]bool{}
-	for _, tag := range m.grp.Of(sel.SessionID) {
-		for _, mb := range m.grp.Groups[tag] {
-			out[mb.SessionID] = true
-		}
+	for _, id := range app.PeersIn(m.grp, sel.SessionID) {
+		out[id] = true
 	}
 	return out
 }
@@ -392,7 +345,11 @@ func (m *Model) labelOf(id string) string {
 	return ""
 }
 
-// groupsSlice is the groups slice's state: picks, groups and ✉ cues.
+// groupsSlice is the groups slice's state. picked is this client's own
+// selection; grp, mail and msgs are read-only mirrors of app's state
+// (app.Groups/Mail/Messages), refreshed by pullGroups after each use case.
+// They stay only because code and tests outside this slice still read the
+// fields (WP-2.7 drops them).
 type groupsSlice struct {
 	picked map[string]bool // sessions picked with space
 	grp    groups.File
@@ -401,5 +358,5 @@ type groupsSlice struct {
 }
 
 func newGroupsSlice() groupsSlice {
-	return groupsSlice{picked: map[string]bool{}, grp: groups.Load(), mail: map[string]mailCue{}}
+	return groupsSlice{picked: map[string]bool{}, grp: groups.File{Groups: map[string][]groups.Member{}}, mail: map[string]mailCue{}}
 }

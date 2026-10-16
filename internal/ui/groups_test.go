@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
@@ -168,5 +170,17 @@ func TestGroupColorStable(t *testing.T) {
 	a, b := groupColor(m.t(), "deploy-rc"), groupColor(m.t(), "deploy-rc")
 	if lipgloss.NewStyle().Foreground(a).Render("x") != lipgloss.NewStyle().Foreground(b).Render("x") {
 		t.Fatal("a tag always gets the same color")
+	}
+}
+
+func TestGroupResultCmd(t *testing.T) {
+	if resultCmd(app.Result{}, nil) != nil {
+		t.Fatal("nothing to say")
+	}
+	if tm, ok := bhHasToast(resultCmd(app.Result{}, errors.New("falhou")), "falhou"); !ok || !tm.err {
+		t.Fatal("a bare error becomes an error toast")
+	}
+	if tm, ok := bhHasToast(resultCmd(app.Result{Toast: "x"}, errors.New("y")), "x"); !ok || !tm.err {
+		t.Fatal("the result's toast wins, as an error")
 	}
 }

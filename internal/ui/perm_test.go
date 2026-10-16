@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/config"
 )
 
@@ -103,5 +104,58 @@ func TestBypassDefaultNoConfirm(t *testing.T) {
 	}
 	if permModes[m.perm] != "bypassPermissions" {
 		t.Fatal("should stay on the configured default")
+	}
+}
+
+// Any key but y/enter cancels the parked bypass in the core: nothing runs.
+func TestBypassCancelledByOtherKey(t *testing.T) {
+	log := fakeClaude(t)
+	m := New(config.Default())
+	m.w, m.h = 120, 40
+	m.draftDir = t.TempDir()
+	m.perm = permIndex("bypassPermissions")
+	m.ask(inNewPrompt, "prompt › ", "")
+	typeLine(&m, "nada")
+	if cmd := m.key(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil || m.top() == nil || len(m.app.Pending()) != 1 {
+		t.Fatal("bypass parks a confirmation in the core")
+	}
+	if cmd := m.key(tea.KeyPressMsg{Code: 'n', Text: "n"}); cmd != nil || m.top() != nil {
+		t.Fatal("n closes without dispatching")
+	}
+	if len(m.app.Pending()) != 0 {
+		t.Fatal("the token is cancelled")
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Fatal("claude must not run")
+	}
+}
+
+// A token the core no longer knows (answered elsewhere) shows the error.
+func TestConfirmTokenUnknown(t *testing.T) {
+	m := New(config.Default())
+	m.w, m.h = 120, 40
+	m.confirmToken("q?", "gone")
+	msg := m.key(tea.KeyPressMsg{Code: tea.KeyEnter})()
+	if tm, ok := msg.(toastMsg); !ok || !tm.err || !strings.Contains(tm.text, "confirmação") {
+		t.Fatalf("unknown token: %+v", msg)
+	}
+	m.confirmToken("q?", "gone")
+	if m.key(tea.KeyPressMsg{Code: 'x', Text: "x"}) != nil || m.top() != nil {
+		t.Fatal("cancelling an unknown token just closes")
+	}
+}
+
+func TestResultMsg(t *testing.T) {
+	if msg := resultMsg(app.Result{Data: app.Dispatched{ID: "a1", TaskID: 4}}, nil).(dispatchedMsg); msg.id != "a1" || msg.task == nil || msg.task.ID != 4 {
+		t.Fatalf("dispatched with task: %+v", msg)
+	}
+	if msg := resultMsg(app.Result{Data: app.Dispatched{ID: "a2"}}, nil).(dispatchedMsg); msg.task != nil {
+		t.Fatalf("dispatched without task: %+v", msg)
+	}
+	if msg := resultMsg(app.Result{Toast: "ok", Err: true}, nil).(toastMsg); msg.text != "ok" || !msg.err {
+		t.Fatalf("toast: %+v", msg)
+	}
+	if resultMsg(app.Result{}, nil) != nil {
+		t.Fatal("empty result: no message")
 	}
 }

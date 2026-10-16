@@ -1,7 +1,10 @@
 package ui
 
 // Slice "panes": the embedded `claude attach` panes, replies typed into
-// them and fullscreen (WP-2.4 moves the logic to app/panes.go).
+// them and fullscreen. The decisions live in app (app.PaneManager: which
+// pane a session maps to, reuse, resume, pending replies; app.Fullscreen);
+// this side starts the term.Pane an app.AttachPlan describes — it needs the
+// Screen half to draw it — reports back, and keeps the presentation state.
 
 import (
 	"fmt"
@@ -10,7 +13,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/aqilputi/nekuroddo/internal/claude"
+	"github.com/aqilputi/nekuroddo/internal/app"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/term"
 )
@@ -20,53 +24,65 @@ func (m *Model) paneSize() (int, int) {
 	return r.Dx(), r.Dy()
 }
 
-// openPane attaches the session in the embedded pane, resuming it into the
-// daemon first when it is not a background session.
-func (m *Model) openPane(s store.Session, focus bool, reply string) tea.Cmd {
-	if s.Kind == "interactive" {
-		return toastCmd(fmt.Sprintf("sessão interativa aberta em outro terminal (pid %d) — use o terminal dela", s.PID), true)
-	}
-	// already open (history sessions keep the pane under their new short id)
-	if id := m.paneOf[s.SessionID]; id != "" {
-		if p := m.panes[id]; p != nil && !p.Done() {
-			m.active = id
-			if focus {
-				m.mode = modeInsert
-			}
-			if reply != "" {
-				m.pending[id] = reply
-				return m.sendReplyLater(id, 50*time.Millisecond)
-			}
-			return nil
-		}
-	}
-	if s.ShortID != "" {
-		return m.startPane(s, s.ShortID, focus, reply)
-	}
-	sess := s
-	return func() tea.Msg {
-		id, err := claude.ResumeInBackground(sess.Cwd, sess.SessionID)
-		return paneOpenMsg{sess: sess, id: id, err: err, text: reply}
-	}
+// paneAlive is the client's word on whether pane id still runs.
+func (m *Model) paneAlive(id string) bool {
+	p := m.panes[id]
+	return p != nil && !p.Done()
 }
 
-func (m *Model) startPane(s store.Session, id string, focus bool, reply string) tea.Cmd {
+// syncPaneMirror copies app's pane table into paneOf/pending (read-only
+// mirrors, kept until WP-2.7 removes them).
+func (m *Model) syncPaneMirror() {
+	pm := m.app.Panes()
+	m.paneOf, m.pending = pm.Bindings(), pm.Replies()
+}
+
+// openPane shows the session in the embedded pane as app plans it: reuse
+// the open pane, attach a background session, or resume a history one into
+// the daemon first (off the UI thread).
+func (m *Model) openPane(s store.Session, focus bool, reply string) tea.Cmd {
+	pm := m.app.Panes()
+	plan, err := pm.Open(s, focus, reply, m.paneAlive)
+	if err != nil {
+		return toastCmd(err.Error(), true)
+	}
+	switch {
+	case plan.Reuse:
+		m.syncPaneMirror()
+		m.active = plan.ID
+		if focus {
+			m.mode = modeInsert
+		}
+		if plan.Reply != "" {
+			return m.sendReplyLater(plan.ID, plan.ReplyIn)
+		}
+		return nil
+	case plan.Resume:
+		return func() tea.Msg {
+			id, err := pm.Resume(plan.Dir, plan.SessionID)
+			return paneOpenMsg{sess: s, id: id, err: err, text: reply}
+		}
+	}
+	return m.startPane(plan)
+}
+
+// startPane runs the plan's program in a new pane and tells app it started.
+func (m *Model) startPane(plan app.AttachPlan) tea.Cmd {
 	w, h := m.paneSize()
-	p, err := term.Start(id, s.Label(), s.Cwd, w, h, claude.AttachArgv(id)...)
+	p, err := term.Start(plan.ID, plan.Title, plan.Dir, w, h, plan.Argv...)
 	if err != nil {
 		return toastCmd("attach: "+err.Error(), true)
 	}
-	m.panes[id] = p
-	m.paneOf[s.SessionID] = id
-	m.active = id
-	if focus {
+	m.panes[plan.ID] = p
+	m.active = plan.ID
+	if plan.Focus {
 		m.mode = modeInsert
 	}
-	m.store.MarkSeen(s.SessionID, time.Now())
+	m.app.Panes().Started(plan)
+	m.syncPaneMirror()
 	cmds := []tea.Cmd{listenPane(p)}
-	if reply != "" {
-		m.pending[id] = reply
-		cmds = append(cmds, m.sendReplyLater(id, 1500*time.Millisecond))
+	if plan.Reply != "" {
+		cmds = append(cmds, m.sendReplyLater(plan.ID, plan.ReplyIn))
 	}
 	return tea.Batch(cmds...)
 }
@@ -75,23 +91,20 @@ func (m *Model) sendReplyLater(id string, d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return replyMsg{id} })
 }
 
-// syncActive makes the right side follow the selection: the selected
-// session's pane if it has one open, otherwise its details. Panes that are
-// not shown keep running hidden. In INSERT or zoom the pane stays put.
+// syncActive makes the right side follow the selection (core.ActivePane).
+// Panes that are not shown keep running hidden.
 func (m *Model) syncActive() {
-	if m.mode == modeInsert || (m.zoom && m.active != "") {
-		return
-	}
-	m.active = ""
+	var sid, short string
 	if sel := m.selected(); sel != nil {
-		id := m.paneOf[sel.SessionID]
-		if id == "" {
-			id = sel.ShortID
-		}
-		if p := m.panes[id]; p != nil && !p.Done() {
-			m.active = id
+		sid, short = sel.SessionID, sel.ShortID
+	}
+	alive := make(map[string]bool, len(m.panes))
+	for id := range m.panes {
+		if m.paneAlive(id) {
+			alive[id] = true
 		}
 	}
+	m.active = core.ActivePane(m.active, sid, short, m.paneOf, alive, m.mode == modeInsert, m.zoom)
 }
 
 func (m *Model) closePane(id string) {
@@ -99,11 +112,8 @@ func (m *Model) closePane(id string) {
 		p.Close()
 		delete(m.panes, id)
 	}
-	for sid, pid := range m.paneOf {
-		if pid == id {
-			delete(m.paneOf, sid)
-		}
-	}
+	m.app.Panes().Close(id)
+	m.syncPaneMirror()
 	if m.active == id {
 		m.active = ""
 		m.zoom = false
@@ -120,23 +130,19 @@ func (m *Model) resizePanes() {
 	}
 }
 
-// fullscreen hands the whole terminal to `claude attach` (or resume), and
-// comes back when it exits — ← inside claude returns here.
+// fullscreen hands the whole terminal to what app.Fullscreen asks for
+// (`claude attach`, or resume), and comes back when it exits — ← inside
+// claude returns here.
 func (m *Model) fullscreen(s store.Session) tea.Cmd {
-	var c *exec.Cmd
-	switch {
-	case s.ShortID != "":
-		c = exec.Command(claude.Bin(), "attach", s.ShortID)
-	case s.Kind == "history":
-		c = exec.Command(claude.Bin(), claude.AllowBypass, "--resume", s.SessionID)
-	default:
-		return toastCmd("sessão interativa aberta em outro terminal", true)
+	res, err := m.app.Fullscreen(s)
+	if err != nil {
+		return toastCmd(err.Error(), true)
 	}
-	c.Dir = s.Cwd
 	if s.ShortID != "" {
 		m.closePane(s.ShortID)
 	}
-	m.store.MarkSeen(s.SessionID, time.Now())
+	c := exec.Command(res.Exec.Argv[0], res.Exec.Argv[1:]...)
+	c.Dir = res.Exec.Dir
 	return tea.ExecProcess(c, func(err error) tea.Msg { return execDoneMsg{err} })
 }
 
@@ -144,9 +150,8 @@ func (m *Model) onPaneOpen(msg paneOpenMsg) tea.Cmd {
 	if msg.err != nil {
 		return toastCmd(msg.err.Error(), true)
 	}
-	s := msg.sess
-	s.ShortID = msg.id
-	return tea.Batch(m.startPane(s, msg.id, true, msg.text), m.refresh())
+	plan := m.app.Panes().Attach(msg.sess, msg.id, true, msg.text)
+	return tea.Batch(m.startPane(plan), m.refresh())
 }
 
 func (m *Model) onPaneOutput(msg paneOutputMsg) tea.Cmd {
@@ -163,14 +168,15 @@ func (m *Model) onPaneOutput(msg paneOutputMsg) tea.Cmd {
 
 func (m *Model) onPaneExit(msg paneExitMsg) tea.Cmd {
 	// `claude attach` returned (← in claude, or the session ended).
+	m.app.Panes().Exited(msg.ID, msg.Err)
 	m.closePane(msg.ID)
 	return m.refresh()
 }
 
 func (m *Model) onReply(msg replyMsg) tea.Cmd {
 	if p := m.panes[msg.pane]; p != nil {
-		if text := m.pending[msg.pane]; text != "" {
-			delete(m.pending, msg.pane)
+		if text, ok := m.app.Panes().TakeReply(msg.pane); ok && text != "" {
+			m.syncPaneMirror()
 			p.Paste(text)
 			return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return enterMsg(msg) })
 		}
@@ -185,13 +191,14 @@ func (m *Model) onEnter(msg enterMsg) tea.Cmd {
 	return toastCmd("resposta enviada ✓", false)
 }
 
-// paneSlice is the embedded claude panes.
+// paneSlice is the embedded claude panes: presentation only. paneOf and
+// pending mirror app.PaneManager (syncPaneMirror) for the tests until WP-2.7.
 type paneSlice struct {
 	panes   map[string]*term.Pane
-	paneOf  map[string]string // sessionId → pane id (history sessions get a new short id)
-	active  string            // pane id shown on the right (follows the selection, see syncActive)
+	active  string // pane id shown on the right (follows the selection, see syncActive)
 	zoom    bool
-	pending map[string]string // pane id → reply to type once it is ready
+	paneOf  map[string]string // mirror: sessionId → pane id
+	pending map[string]string // mirror: pane id → reply to type once it is ready
 }
 
 func newPaneSlice() paneSlice {

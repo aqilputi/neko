@@ -1,11 +1,12 @@
 package ui
 
-// Slice "notify": state transitions, hook events, desktop notifications
-// and the /usage poll (WP-2.6 moves the logic to app/watch.go).
+// Slice "notify": state transitions, hook events, desktop notifications and
+// the /usage poll. app (app/watch.go) decides what to tell the user and
+// sends the desktop notification; this slice polls and schedules (WP-5.1
+// moves that to app later) and draws the notices: the cat meows, the
+// terminal bell rings, toasts show.
 
 import (
-	"fmt"
-	"os/exec"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -16,41 +17,31 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/events"
 )
 
-// notice transitions: a session that just became blocked or done makes the
-// cat meow and rings the terminal bell.
+// notice hands the new snapshot to app: a session that just became blocked
+// or done makes the cat meow (and, away from the terminal, rings the bell).
 func (m *Model) notice() tea.Cmd {
-	var waiting []string
-	for _, s := range m.snap.Sessions {
-		prev, had := m.prevState[s.SessionID]
-		m.prevState[s.SessionID] = s.State
-		if !had || prev == s.State {
-			continue
-		}
-		if s.State == "blocked" || s.State == "done" || (s.Kind == "interactive" && s.State == "idle" && prev == "busy") {
-			waiting = append(waiting, s.Label())
-		}
-	}
-	if len(waiting) == 0 {
-		return nil
-	}
-	msg := "miau! " + core.Truncate(waiting[0], 40) + " voltou"
-	if len(waiting) > 1 {
-		msg = fmt.Sprintf("miau! %d agents voltaram", len(waiting))
-	}
-	m.cat.Meow(core.Truncate(msg, 50))
-	if m.focused {
-		return nil // you're looking at nekuroddo: the cat is enough
-	}
-	return tea.Batch(tea.Raw("\a"), notifyDesktop("nekuroddo", msg))
+	m.app.SetFocused(m.focused)
+	return m.showNotices(m.app.ObserveSessions(m.snap.Sessions))
 }
 
-func notifyDesktop(title, body string) tea.Cmd {
-	return func() tea.Msg {
-		if p, err := exec.LookPath("notify-send"); err == nil {
-			_ = exec.Command(p, "-a", "nekuroddo", title, body).Run()
-		}
-		return nil
+// showNotices draws app notices: the cat's line, the bell, a toast.
+func (m *Model) showNotices(ns []app.Notice) tea.Cmd {
+	var cmds []tea.Cmd
+	for _, n := range ns {
+		cmds = m.showNotice(n, cmds)
 	}
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) showNotice(n app.Notice, cmds []tea.Cmd) []tea.Cmd {
+	m.cat.Meow(core.Truncate(n.Meow, 50))
+	if n.Bell {
+		cmds = append(cmds, tea.Raw("\a")) // the desktop notification went out from app
+	}
+	if n.Toast != "" {
+		cmds = append(cmds, toastCmd(n.Toast, n.ToastErr))
+	}
+	return cmds
 }
 
 func (m *Model) pollEvents() tea.Cmd {
@@ -62,28 +53,25 @@ func (m *Model) scheduleEvents() tea.Cmd {
 	return tea.Tick(400*time.Millisecond, func(time.Time) tea.Msg { return eventsTickMsg{} })
 }
 
-// onEvents reacts to hook events: refresh now, and meow when one needs you.
+// onEvents hands hook events to app: refresh now, and meow when one needs you.
 func (m *Model) onEvents(evs []events.Event) tea.Cmd {
-	if len(evs) == 0 {
+	m.app.SetFocused(m.focused)
+	notices, refresh := m.app.OnHookEvents(evs)
+	if !refresh {
 		return nil
 	}
 	m.hooksSeen = true
 	var cmds []tea.Cmd
+	// app returns one notice per event that needs you, in order; peers are
+	// drawn by the groups slice. Interleaving keeps the cat's last line.
 	for _, e := range evs {
-		m.events[e.SessionID] = e
-		if e.Type == "peer" {
+		m.events[e.SessionID] = e // view mirror of app.LastEvent
+		switch {
+		case e.Type == "peer":
 			m.onPeer(e)
-			continue
-		}
-		if e.NeedsYou() {
-			msg := "miau! " + e.Message
-			if e.Message == "" {
-				msg = "miau! uma sessão precisa de você"
-			}
-			m.cat.Meow(core.Truncate(msg, 50))
-			if !m.focused {
-				cmds = append(cmds, tea.Raw("\a"), notifyDesktop("nekuroddo", e.Message))
-			}
+		case e.NeedsYou() && len(notices) > 0:
+			cmds = m.showNotice(notices[0], cmds)
+			notices = notices[1:]
 		}
 	}
 	if m.refreshing {
@@ -94,13 +82,14 @@ func (m *Model) onEvents(evs []events.Event) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// fetchUsage runs `claude -p /usage` (local, ~2s, no tokens spent).
+// fetchUsage runs `claude -p /usage` through app (local, ~2s, no tokens spent).
 func (m *Model) fetchUsage(manual bool) tea.Cmd {
 	if m.cfg.UsageRefresh <= 0 && !manual {
 		return nil
 	}
+	a := m.app
 	return func() tea.Msg {
-		rep, err := claude.FetchUsage()
+		rep, err := a.FetchUsage()
 		return usageMsg{rep, err, manual}
 	}
 }
@@ -110,44 +99,26 @@ func (m *Model) onUsage(msg usageMsg) tea.Cmd {
 	if !msg.manual && m.cfg.UsageRefresh > 0 {
 		next = tea.Tick(time.Duration(m.cfg.UsageRefresh*float64(time.Second)), func(time.Time) tea.Msg { return usageTickMsg{} })
 	}
-	if msg.err != nil {
-		m.usageErr = msg.err
-		return next
-	}
-	m.usage, m.usageErr = msg.rep, nil
-	m.store.SetWindowStart(m.usage.WindowStart())
-	// the cat warns once per threshold of the 5-hour window
-	if l, ok := m.usage.Find("session"); ok {
-		for _, th := range []int{95, 80} {
-			if l.Pct >= th && m.usageWarned < th {
-				m.usageWarned = th
-				m.cat.Meow(fmt.Sprintf("miau! %d%% da janela de 5h (reseta %s)", l.Pct, l.ShortReset()))
-				return tea.Batch(next, toastCmd(fmt.Sprintf("janela de 5h em %d%% — reseta %s", l.Pct, l.ShortReset()), true))
-			}
-		}
-		if l.Pct < 80 {
-			m.usageWarned = 0 // new window
-		}
-	}
-	return next
+	notices := m.app.OnUsage(msg.rep, msg.err)
+	m.usage, m.usageErr = m.app.Usage()
+	return tea.Batch(next, m.showNotices(notices))
 }
 
-// notifySlice is state transitions, terminal focus, /usage and hook events.
+// notifySlice is terminal focus and the view's mirrors of app's watch state
+// (WP-2.7 drops the mirrors and reads app directly).
 type notifySlice struct {
-	prevState map[string]string
-	focused   bool // terminal focus (notifications only when away)
+	focused bool // terminal focus (notifications only when away); handed to app.SetFocused
 
-	usage       claude.UsageReport // `claude -p /usage`: 5h session and weekly limits
-	usageErr    error
-	usageWarned int // highest session % threshold already announced
+	usage    claude.UsageReport // mirror of app.Usage: 5h session and weekly limits
+	usageErr error
 
 	// Claude Code hook events (nk hook → events.jsonl)
 	evTail       app.EventLog            // ports.Events
-	events       map[string]events.Event // last event per session
-	hooksSeen    bool
+	events       map[string]events.Event // mirror of app.LastEvent
+	hooksSeen    bool                    // mirror of app.HooksSeen
 	refreshAgain bool
 }
 
 func newNotifySlice(ports app.Ports) notifySlice {
-	return notifySlice{prevState: map[string]string{}, focused: true, evTail: ports.Events, events: map[string]events.Event{}}
+	return notifySlice{focused: true, evTail: ports.Events, events: map[string]events.Event{}}
 }

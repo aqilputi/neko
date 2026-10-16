@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aqilputi/nekuroddo/internal/app"
+	"github.com/aqilputi/nekuroddo/internal/app/apptest"
+	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/todo"
 )
@@ -198,6 +201,40 @@ func TestRhWithDescNoRoom(t *testing.T) {
 	out = withDesc(m.t(), []string{"a"}, "", "dica", 30, 10)
 	if got := rhLines(out); len(got) != 3 {
 		t.Fatalf("no description: fields, blank, hint; got %q", got)
+	}
+}
+
+// TestRhTodoSliceThroughTheCore: the tab reads and writes through app (its
+// ports are fakes here), never the todo/jira/xdg-open adapters.
+func TestRhTodoSliceThroughTheCore(t *testing.T) {
+	rhEnv(t)
+	f := apptest.New()
+	f.Todo.Avail = true
+	f.Todo.Groups = []todo.Group{{Group: "g", Tasks: []todo.Task{{ID: 3, Title: "x"}}}}
+	cfg := config.Default()
+	cfg.Jira.Enabled = true
+	a := app.New(cfg, f.Ports())
+	defer a.Close()
+	s := newTodoJiraSlice(a)
+	if !s.todoAvail || len(s.jira.Issues) != 0 {
+		t.Fatalf("starts from the core: %+v", s)
+	}
+	m := NewWithApp(a)
+	m.todoJiraSlice = s
+	m.update(m.loadTodos()())
+	if len(m.todos) != 1 || m.todos[0].task.ID != 3 {
+		t.Fatalf("loaded through app: %+v", m.todos)
+	}
+	m.update(m.startTodo()())
+	if c := f.Todo.CallsTo("Start"); len(c) != 1 || c[0].Args[0] != 3 {
+		t.Fatalf("started through app: %v", c)
+	}
+	if m.openIssueURL("https://x/1")() != nil || len(f.Open.URLs()) != 1 {
+		t.Fatal("opened through the Opener port")
+	}
+	f.Open.Err = errors.New("sem browser")
+	if msg, ok := m.openIssueURL("https://x/2")().(toastMsg); !ok || !msg.err {
+		t.Fatal("a failure is a toast")
 	}
 }
 

@@ -18,6 +18,24 @@ incompatíveis podem acontecer em versões menores e serão sempre descritas aqu
 - `internal/ui` fatiada por assunto (sessões, painéis, entrada/disparo, Jira/todos, avisos, navegação) e
   ligada a `internal/core` (árvore, inbox e helpers) e a `internal/app` (um só store e log de eventos, via
   `internal/wire`), sem mudança de comportamento.
+- Arquivar, parar, remover, renomear e mover sessões passam a ser casos de uso de `internal/app`
+  (comandos `session.archive`, `session.stop`, `session.remove`, `session.rename`, `session.move`,
+  `sessions.archive_stale`, `sessions.remove_ended`, com confirmação por token); a TUI só traduz.
+- Disparo de agents (`app.Dispatch`, comando `session.new`) no core; a confirmação do bypass vira um token
+  respondido por `app.Confirm`/`app.Cancel`, sem mudança de comportamento.
+- Avisos em `internal/app` (`app/watch.go`): transições de estado, eventos de hook, notificação no desktop
+  (porta `Notifier`) e limites do `/usage`, publicados como `session.state`, `session.notification`,
+  `notice` e `usage.updated`; a TUI só mia, toca o sino e mostra o toast.
+- Painéis no core (`app.PaneManager`): qual painel é de qual sessão, reaproveitar, retomar histórico,
+  resposta pendente e tela cheia (`Result{Exec}`), com eventos `pane.*` e comandos `session.open`,
+  `session.preview`, `session.fullscreen`, `pane.close`, `pane.zoom`; a TUI só sobe e desenha o painel.
+- Grupos no core (`app/groups.go`): agrupar, tirar, desfazer, avisar o grupo, remetente das mensagens e
+  cues de ✉ pelo `Clock`, com eventos `group.changed`, `peer.message`, `mail.cue` e comandos `group.add`,
+  `group.remove`, `group.notify`, `group.dissolve`; a TUI só escolhe sessões, lê a paleta e desenha.
+- Todos e Jira no core (`app/todo.go`, `app/jira.go`): carregar, start/done, issue → todo, todo → issue com
+  confirmação e `LinkJira`, cache do Jira com validade e uma busca por vez, abrir no browser (porta
+  `Opener`), com eventos `todos.changed`, `jira.changed` e comandos `todo.start`, `todo.done`,
+  `jira.toggle`, `jira.fetch`, `jira.open_url`; a TUI só monta as linhas da aba e traduz.
 
 ## [0.1.0] - 2026-10-16
 

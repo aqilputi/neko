@@ -11,7 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/aqilputi/nekuroddo/internal/claude"
+	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/jira"
@@ -69,27 +69,51 @@ func (m *Model) refreshPrompt() {
 	m.input.SetWidth(max(m.w-lipglossWidth(prompt)-4, 10))
 }
 
-// dispatch launches a background agent with the chosen permission mode.
-// Bypass asks first unless it is the configured default (permission_mode).
-// The mode then goes back to the default, so a bypass picked with tab never
-// sticks around unnoticed.
+// dispatch launches a background agent (app.Dispatch) with the chosen
+// permission mode. Bypass asks first unless it is the configured default:
+// the core parks it and hands back a token the dialog answers. The mode then
+// goes back to the default, so a bypass picked with tab never sticks around
+// unnoticed.
 func (m *Model) dispatch(dir, name, prompt string, task *todo.Task) tea.Cmd {
-	mode := permModes[m.perm]
+	req := app.DispatchReq{Dir: dir, Name: name, Prompt: prompt, PermMode: permModes[m.perm]}
+	if task != nil {
+		req.TaskID = task.ID
+	}
 	m.perm = permIndex(m.cfg.PermissionMode)
-	var extra []string
-	if mode != "" {
-		extra = []string{"--permission-mode", mode}
+	a := m.app
+	if a.DispatchNeedsConfirm(req.PermMode) {
+		// only parks the confirmation: returns at once
+		res, err := a.Dispatch(req)
+		if err == nil && res.Pending != nil {
+			m.confirmToken(res.Pending.Question, res.Pending.Token)
+			return nil
+		}
+		return func() tea.Msg { return resultMsg(res, err) }
 	}
-	run := func() tea.Msg {
-		id, err := claude.Dispatch(dir, name, prompt, extra...)
-		return dispatchedMsg{id: id, task: task, err: err}
+	return func() tea.Msg {
+		res, err := a.Dispatch(req)
+		d, _ := res.Data.(app.Dispatched)
+		return dispatchedMsg{id: d.ID, task: task, err: err}
 	}
-	if mode == "bypassPermissions" && m.cfg.PermissionMode != "bypassPermissions" {
-		m.confirmThen(fmt.Sprintf("disparar em BYPASS (sem nenhuma checagem de permissão) em %s?\nos hooks, como o guarded-access, continuam valendo", config.Tilde(dir)),
-			func(*Model) tea.Cmd { return run })
-		return nil
+}
+
+// resultMsg turns what a core command returned in the background into the
+// message the update loop reacts to: a dispatch, an error or a toast.
+func resultMsg(res app.Result, err error) tea.Msg {
+	if err != nil {
+		return toastMsg{text: err.Error(), err: true}
 	}
-	return run
+	if d, ok := res.Data.(app.Dispatched); ok {
+		var task *todo.Task
+		if d.TaskID > 0 {
+			task = &todo.Task{ID: d.TaskID}
+		}
+		return dispatchedMsg{id: d.ID, task: task}
+	}
+	if res.Toast != "" {
+		return toastMsg{text: res.Toast, err: res.Err}
+	}
+	return nil
 }
 
 func (m *Model) submitInput() tea.Cmd {
@@ -147,18 +171,17 @@ func (m *Model) submitInput() tea.Cmd {
 	return nil
 }
 
+// onDispatched announces the agent; the core already started and noted the
+// todo it works on, so the list is reloaded to show it.
 func (m *Model) onDispatched(msg dispatchedMsg) tea.Cmd {
 	if msg.err != nil {
 		return toastCmd(msg.err.Error(), true)
 	}
 	cmds := []tea.Cmd{m.refresh(), toastCmd("agent "+msg.id+" disparado", false)}
 	if msg.task != nil {
-		t := *msg.task
-		id := msg.id
+		td := m.app.Ports().Todo
 		cmds = append(cmds, func() tea.Msg {
-			_ = todo.Start(t.ID)
-			_ = todo.AddNote(t.ID, "nekuroddo: agent "+id+" disparado (claude attach "+id+")")
-			g, err := todo.List()
+			g, err := td.List()
 			return todosMsg{g, err}
 		})
 	}

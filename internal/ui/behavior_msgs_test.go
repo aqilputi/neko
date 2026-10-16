@@ -157,8 +157,8 @@ func TestBehaviorUsageMessages(t *testing.T) {
 		if s.toast != "" && (len(toasts) != 1 || !strings.Contains(toasts[0].text, s.toast) || !toasts[0].err) {
 			t.Errorf("%d%%: want toast %q, got %v", s.pct, s.toast, toasts)
 		}
-		if m.usageWarned != s.warned {
-			t.Errorf("%d%%: warned %d want %d", s.pct, m.usageWarned, s.warned)
+		if m.app.UsageWarned() != s.warned {
+			t.Errorf("%d%%: warned %d want %d", s.pct, m.app.UsageWarned(), s.warned)
 		}
 	}
 	if !m.cat.Awake() {
@@ -246,13 +246,12 @@ func TestBehaviorNotice(t *testing.T) {
 	for _, c := range cases {
 		c.change(m.snap.Sessions)
 		fresh := bhModel(t)
-		fresh.prevState = m.prevState
+		fresh.app = m.app // the previous states live in app
 		fresh.snap = m.snap
 		fresh.notice()
 		if fresh.cat.Awake() != c.meow {
 			t.Errorf("%s: meow=%v want %v", c.name, fresh.cat.Awake(), c.meow)
 		}
-		m.prevState = fresh.prevState
 	}
 	// away: bell and desktop notification
 	m.focused = false

@@ -50,6 +50,7 @@ func dialogBox(t theme.Theme, title, body string, w int) string {
 type confirmDialog struct {
 	q   string
 	yes func(m *Model) tea.Cmd
+	no  func(m *Model) // optional: any other key
 }
 
 func (d *confirmDialog) title() string { return "confirma?" }
@@ -67,6 +68,9 @@ func (d *confirmDialog) handle(m *Model, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "y", "Y", "enter":
 		return true, d.yes(m)
 	}
+	if d.no != nil {
+		d.no(m)
+	}
 	return true, nil
 }
 
@@ -80,6 +84,19 @@ func (d *confirmDialog) view(m *Model, t theme.Theme, w int) string {
 // the live model, so it may change it.
 func (m *Model) confirmThen(q string, yes func(m *Model) tea.Cmd) {
 	m.push(&confirmDialog{q: q, yes: yes})
+}
+
+// confirmToken shows the same dialog for a confirmation parked in the core
+// (app.Ask): yes answers app.Confirm(token) in the background and turns its
+// Result into messages; any other key answers app.Cancel(token).
+func (m *Model) confirmToken(q, token string) {
+	a := m.app
+	m.push(&confirmDialog{q: q,
+		yes: func(*Model) tea.Cmd {
+			return func() tea.Msg { return resultMsg(a.Confirm(token)) }
+		},
+		no: func(*Model) { _ = a.Cancel(token) }, // already gone (expired/answered elsewhere): nothing to do
+	})
 }
 
 // ---- help ----
