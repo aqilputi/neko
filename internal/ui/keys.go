@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 )
@@ -9,7 +11,7 @@ import (
 // hints, the help dialog and the command palette all read from it.
 type keyMap struct {
 	Up, Down, Top, Bottom, HalfDown, HalfUp, PageDown, PageUp     key.Binding
-	Collapse, Expand, Toggle, NextAttn, PrevAttn                  key.Binding
+	Collapse, Expand, Pick, NextAttn, PrevAttn                    key.Binding
 	TabSessions, TabInbox, TabTodos, TabArchive, NextTab, PrevTab key.Binding
 	Filter, ShowAll, Sort, Archive, Rename, Move                  key.Binding
 
@@ -38,7 +40,7 @@ var keys = keyMap{
 
 	Collapse: kb(ks("h", "left"), "h", "fecha nó"),
 	Expand:   kb(ks("l", "right"), "l", "abre nó"),
-	Toggle:   kb(ks("space"), "space", "alterna nó"),
+	Pick:     kb(ks("space"), "space", "seleciona (p/ :group); no contexto: alterna"),
 	NextAttn: kb(ks("a"), "a", "próxima te esperando"),
 	PrevAttn: kb(ks("A"), "A", "anterior te esperando"),
 
@@ -113,7 +115,13 @@ func (m *Model) shortHelp() []key.Binding {
 		r.SetHelp("X", "restaura (no contexto: todas)")
 		b = append(b, r, k.Open, k.Filter)
 	default:
-		b = append(b, k.Open, k.Reply, k.Archive, k.Rename, k.NextAttn, k.New, k.Move, k.Filter, k.ShowAll, k.Sort)
+		b = append(b, k.Open, k.Reply, k.Archive, k.Rename, k.NextAttn, k.New, k.Move, k.Pick, k.Filter, k.ShowAll, k.Sort)
+	}
+	if len(m.picked) > 0 { // picking: say what to do with them
+		g := keys.Palette
+		g.SetHelp(":group", fmt.Sprintf("agrupa %d", len(m.picked)))
+		esc := kb(ks("esc"), "esc", "limpa seleção")
+		b = append([]key.Binding{g, esc}, b...)
 	}
 	b = append(b, k.Switch, k.Palette, k.Usage)
 	// short labels for the bar; ctrl+/ shows the full descriptions
@@ -133,14 +141,14 @@ var barLabels = map[string]string{
 	"uso (/usage)": "uso", "INSERT no painel": "foca painel", "fecha painel": "fecha", "zoom do painel": "zoom",
 	"dispara agent": "agent", "todo↔jira": "jira", "busca jira": "busca jira", "abre no browser": "browser",
 	"tela cheia": "tela cheia", "renomeia sessão (no contexto: a seção)": "renomeia",
-	"muda a sessão de contexto": "contexto",
+	"muda a sessão de contexto": "contexto", "seleciona (p/ :group); no contexto: alterna": "seleciona",
 }
 
 // fullHelp is the help dialog, in columns.
 func fullHelp() [][]key.Binding {
 	k := keys
 	return [][]key.Binding{
-		{k.Down, k.Up, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Collapse, k.Expand, k.Toggle, k.NextAttn, k.PrevAttn},
+		{k.Down, k.Up, k.Top, k.Bottom, k.HalfDown, k.HalfUp, k.Collapse, k.Expand, k.Pick, k.NextAttn, k.PrevAttn},
 		{k.Open, k.Preview, k.Full, k.Insert, leaveInsert, k.Reply, k.New, k.Stop, k.Remove, k.Close, k.Zoom},
 		{k.TabSessions, k.TabInbox, k.TabTodos, k.TabArchive, k.NextTab, k.Filter, k.ShowAll, k.Sort, k.Archive, k.Rename, k.Move},
 		{k.Dispatch, k.Start, k.Done, k.Jira, k.JiraFetch, k.OpenURL, k.Switch, k.Palette, k.Usage, k.Theme, k.Refresh, k.Help, k.Quit},

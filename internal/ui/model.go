@@ -19,6 +19,7 @@ import (
 	"github.com/aqilputi/neko/internal/claude"
 	"github.com/aqilputi/neko/internal/config"
 	"github.com/aqilputi/neko/internal/events"
+	"github.com/aqilputi/neko/internal/groups"
 	"github.com/aqilputi/neko/internal/jira"
 	"github.com/aqilputi/neko/internal/store"
 	"github.com/aqilputi/neko/internal/term"
@@ -178,6 +179,12 @@ type Model struct {
 	events       map[string]events.Event // last event per session
 	hooksSeen    bool
 	refreshAgain bool
+
+	// groups of related sessions (see groups.go)
+	picked map[string]bool // sessions picked with space
+	grp    groups.File
+	mail   map[string]mailCue // ✉ next to sessions that sent/got a message
+	msgs   []peerMsg
 }
 
 func New(cfg config.Config) Model {
@@ -192,6 +199,7 @@ func New(cfg config.Config) Model {
 		sortMode: sortIndex(cfg.Sort), jira: jira.LoadCache(), perm: permIndex(cfg.PermissionMode),
 		focused: true, themeSet: cfg.Theme != "",
 		evTail: &events.Tail{}, events: map[string]events.Event{}, order: map[string]int{},
+		picked: map[string]bool{}, grp: groups.Load(), mail: map[string]mailCue{},
 	}
 }
 

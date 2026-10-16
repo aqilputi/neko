@@ -13,6 +13,7 @@ import (
 	"github.com/sahilm/fuzzy"
 
 	"github.com/aqilputi/neko/internal/config"
+	"github.com/aqilputi/neko/internal/groups"
 	"github.com/aqilputi/neko/internal/store"
 	"github.com/aqilputi/neko/internal/theme"
 )
@@ -187,8 +188,11 @@ type paletteDialog struct {
 	name    string
 	input   textinput.Model
 	items   []paletteItem
+	base    []paletteItem // items without the typed command
 	matches []fuzzy.Match
 	cur     int
+	// commands: the palette also runs group commands typed with arguments
+	commands bool
 }
 
 type paletteSource []paletteItem
@@ -199,9 +203,9 @@ func (s paletteSource) String(i int) string { return s[i].title + " " + s[i].hin
 func (m *Model) openPalette() tea.Cmd {
 	ti := textinput.New()
 	ti.Prompt = ": "
-	ti.Placeholder = "ação, sessão, tarefa ou tema…"
-	d := &paletteDialog{name: "comandos", input: ti, items: m.paletteItems()}
-	d.filter()
+	ti.Placeholder = "ação, sessão, tarefa, tema · group <tag> · ungroup · notify #tag msg"
+	d := &paletteDialog{name: "comandos", input: ti, items: m.paletteItems(), commands: true}
+	d.filter(m)
 	m.push(d)
 	return d.input.Focus()
 }
@@ -224,6 +228,30 @@ func (m *Model) paletteItems() []paletteItem {
 				return cmd
 			}})
 		}
+	}
+	// group commands take an argument: these reopen the palette with the
+	// command typed, waiting for it
+	what := "a sessão do cursor"
+	if len(m.picked) > 0 {
+		what = fmt.Sprintf("as %d selecionadas", len(m.picked))
+	}
+	items = append(items,
+		paletteItem{title: "group <tag> — agrupa " + what, hint: "space seleciona", run: func(m *Model) tea.Cmd { return m.openPaletteWith("group ") }},
+		paletteItem{title: "ungroup [tag] — tira " + what + " do grupo", hint: "grupos", run: func(m *Model) tea.Cmd { return m.openPaletteWith("ungroup ") }},
+		paletteItem{title: "notify #tag <mensagem> — avisa o grupo", hint: "grupos", run: func(m *Model) tea.Cmd { return m.openPaletteWith("notify #") }})
+	for _, tag := range m.grp.Tags() {
+		tg := tag
+		items = append(items, paletteItem{title: fmt.Sprintf("desfazer grupo #%s (%d sessões)", tg, len(m.grp.Groups[tg])), hint: "grupos", run: func(m *Model) tea.Cmd {
+			m.confirmThen("desfazer o grupo #"+tg+"? as sessões são avisadas na próxima ferramenta", func(m *Model) tea.Cmd {
+				m.grp = groups.Load()
+				delete(m.grp.Groups, tg)
+				if err := m.grp.Save(); err != nil {
+					return toastCmd(err.Error(), true)
+				}
+				return toastCmd("#"+tg+" desfeito", false)
+			})
+			return nil
+		}})
 	}
 	items = append(items, paletteItem{title: "limpar chats encerrados (claude rm)", hint: "processos que sobraram",
 		run: func(m *Model) tea.Cmd { return m.removeEnded() }})
@@ -269,17 +297,40 @@ func (m *Model) paletteItems() []paletteItem {
 	return items
 }
 
-func (d *paletteDialog) filter() {
+// filter matches what was typed. A command with arguments (group <tag>,
+// ungroup, notify #tag msg) shows on top as the item enter runs.
+func (d *paletteDialog) filter(m *Model) {
 	q := d.input.Value()
+	if d.base == nil {
+		d.base = d.items
+	}
+	d.items = d.base
+	d.matches = d.matches[:0]
+	if d.commands {
+		if it := m.groupCommand(q); it != nil {
+			d.items = append(d.base[:len(d.base):len(d.base)], *it)
+			d.matches = append(d.matches, fuzzy.Match{Index: len(d.base)})
+		}
+	}
 	if q == "" {
-		d.matches = d.matches[:0]
-		for i := range d.items {
+		for i := range d.base {
 			d.matches = append(d.matches, fuzzy.Match{Index: i})
 		}
 	} else {
-		d.matches = fuzzy.FindFrom(q, paletteSource(d.items))
+		d.matches = append(d.matches, fuzzy.FindFrom(q, paletteSource(d.base))...)
 	}
 	d.cur = clamp(d.cur, 0, len(d.matches)-1)
+}
+
+// openPaletteWith opens the palette with a command already typed.
+func (m *Model) openPaletteWith(q string) tea.Cmd {
+	cmd := m.openPalette()
+	if d, ok := m.top().(*paletteDialog); ok {
+		d.input.SetValue(q)
+		d.input.CursorEnd()
+		d.filter(m)
+	}
+	return cmd
 }
 
 func (d *paletteDialog) title() string      { return d.name }
@@ -292,6 +343,9 @@ func (d *paletteDialog) handle(m *Model, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "enter":
 		if d.cur < len(d.matches) {
 			it := d.items[d.matches[d.cur].Index]
+			if it.run == nil { // a command still missing its argument
+				return false, nil
+			}
 			m.pop() // close before running: the action may open a dialog
 			return false, it.run(m)
 		}
@@ -305,7 +359,7 @@ func (d *paletteDialog) handle(m *Model, k tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	d.input, cmd = d.input.Update(k)
-	d.filter()
+	d.filter(m)
 	return false, cmd
 }
 
@@ -393,7 +447,7 @@ func (m *Model) openSwitcher() tea.Cmd {
 	ti.Prompt = "⌕ "
 	ti.Placeholder = fmt.Sprintf("%d chats rodando ou te esperando…", len(items))
 	d := &paletteDialog{name: "ir para chat · ctrl+k", input: ti, items: items}
-	d.filter()
+	d.filter(m)
 	m.push(d)
 	return d.input.Focus()
 }

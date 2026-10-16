@@ -410,6 +410,7 @@ func (m *Model) treeView(t theme.Theme, w, h int) string {
 		return lipgloss.NewStyle().Foreground(t.Muted).Background(t.Bg).Padding(1, 2).Render(msg)
 	}
 	frame := m.catFrame()
+	peers := m.peersOfCursor()
 	start, end := scroll(m.cursor, len(m.rows), h)
 	var lines []string
 	barW := 4 // 8 levels per cell: 1–2% still shows
@@ -442,7 +443,19 @@ func (m *Model) treeView(t theme.Theme, w, h int) string {
 			s := r.sess
 			icon, ic := stateIcon(t, s, frame)
 			cc := t.ContextColor(m.ctxColor[r.ctx])
-			guide := base.Foreground(cc).Render("  │ ")
+			// the cell before the guide is the group bar: ▍ in the group's
+			// color, ┃ when it shares a group with the session under the cursor
+			tags := m.grp.Of(s.SessionID)
+			gbar := base.Render(" ")
+			if len(tags) > 0 {
+				gc := groupColor(t, tags[0])
+				if peers[s.SessionID] && !sel {
+					gbar = base.Foreground(gc).Bold(true).Render("┃")
+				} else {
+					gbar = base.Foreground(gc).Render("▍")
+				}
+			}
+			guide := base.Render(" ") + gbar + base.Foreground(cc).Render("│ ")
 			name := s.Label()
 			labelStyle := base.Foreground(t.Text)
 			if s.Attention != store.AttnNone {
@@ -454,7 +467,21 @@ func (m *Model) treeView(t theme.Theme, w, h int) string {
 			if s.Stale {
 				labelStyle = base.Foreground(t.Muted).Italic(true)
 			}
+			if m.picked[s.SessionID] { // picked with space, as in yazi
+				labelStyle = base.Foreground(t.Accent2).Bold(true)
+				name = "◆ " + name
+			}
 			sub := ""
+			if mark, mc := m.mailMark(t, s.SessionID); mark != "" {
+				sub += base.Foreground(mc).Bold(true).Render(" " + mark)
+			}
+			for i, tag := range tags {
+				if i == 1 {
+					sub += base.Foreground(t.Muted).Render(fmt.Sprintf(" +%d", len(tags)-1))
+					break
+				}
+				sub += base.Foreground(groupColor(t, tag)).Render(" #" + truncate(tag, 14))
+			}
 			running, done := 0, 0
 			for _, sa := range s.Subs {
 				if sa.Done {
@@ -549,6 +576,9 @@ func (m *Model) inboxView(t theme.Theme, w, h int) string {
 		head := lipgloss.NewStyle().Background(bgc).Foreground(ic).Bold(true).Render(" "+icon+" "+stateLabel(s)) +
 			lipgloss.NewStyle().Background(bgc).Foreground(cc).Render("  "+s.Context) +
 			lipgloss.NewStyle().Background(bgc).Foreground(t.Muted).Render("  "+ago(s.LastAt))
+		if mark, mc := m.mailMark(t, s.SessionID); mark != "" {
+			head += lipgloss.NewStyle().Background(bgc).Foreground(mc).Bold(true).Render("  " + mark)
+		}
 		title := lipgloss.NewStyle().Background(bgc).Foreground(t.Text).Bold(true).Render("   " + truncate(s.Label(), w-4))
 		what := s.LastText
 		switch {
@@ -737,6 +767,10 @@ func (m *Model) sessDetail(t theme.Theme, s *store.Session, w int) string {
 			what += " · " + e.Message
 		}
 		lines = append(lines, kv(t, "hook", truncate(what, w-14)+"  "+ago(e.At), t.Accent2))
+	}
+	if g := m.groupsDetail(t, s, w); len(g) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, g...)
 	}
 	if s.LastUser != "" {
 		lines = append(lines, "", b.Foreground(t.Accent).Bold(true).Render("você pediu"), wrap(t, s.LastUser, w, t.Subtle, false))

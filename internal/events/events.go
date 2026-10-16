@@ -1,7 +1,9 @@
 // Package events carries Claude Code hook events to neko in real time.
 //
 // `neko hook` is installed as a Claude Code hook command (Notification,
-// Stop, SubagentStop, UserPromptSubmit, SessionStart, SessionEnd). It reads
+// Stop, SubagentStop, UserPromptSubmit, SessionStart, SessionEnd). A message
+// from another session (SendMessage) arrives as a UserPromptSubmit and is
+// recorded as a "peer" event. It reads
 // the hook payload from stdin and appends one compact line to
 // ~/.local/state/neko/events.jsonl; neko tails that file and refreshes at
 // once instead of waiting for the next poll. The hook prints nothing and
@@ -12,9 +14,11 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"html"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -26,6 +30,9 @@ type Event struct {
 	Type      string    `json:"type,omitempty"` // notification_type
 	Message   string    `json:"message,omitempty"`
 	AgentID   string    `json:"agent_id,omitempty"`
+	// From is set on a message another session sent with SendMessage
+	// (Type "peer"): the sender's name; Message is the first line.
+	From string `json:"from,omitempty"`
 }
 
 // NeedsYou reports whether the event means a session is waiting on the user.
@@ -38,6 +45,44 @@ func (e Event) NeedsYou() bool {
 		return true
 	}
 	return e.Type == "" // older payloads: any notification asks for attention
+}
+
+// PeerMessage parses a prompt that is a cross-session message, as Claude
+// Code delivers it:
+//
+//	<cross-session-message from="uds:…" from-name="deploy rc 2" from-mode="…">
+//	[#deploy-rc] the body
+//	</cross-session-message>
+//
+// and returns the sender's name and the first line of the body.
+func PeerMessage(prompt string) (from, firstLine string, ok bool) {
+	const open = "<cross-session-message"
+	i := strings.Index(prompt, open)
+	if i < 0 {
+		return "", "", false
+	}
+	rest := prompt[i+len(open):]
+	end := strings.Index(rest, ">")
+	if end < 0 {
+		return "", "", false
+	}
+	attrs, body := rest[:end], rest[end+1:]
+	if k := strings.Index(attrs, `from-name="`); k >= 0 {
+		from = attrs[k+len(`from-name="`):]
+		if q := strings.Index(from, `"`); q >= 0 {
+			from = from[:q]
+		}
+	}
+	from = html.UnescapeString(from)
+	if k := strings.Index(body, "</cross-session-message>"); k >= 0 {
+		body = body[:k]
+	}
+	for _, l := range strings.Split(body, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			return from, l, true
+		}
+	}
+	return from, "", true
 }
 
 func Path() string {
@@ -61,11 +106,15 @@ func Record(stdin io.Reader) {
 		Type    string `json:"notification_type"`
 		Message string `json:"message"`
 		AgentID string `json:"agent_id"`
+		Prompt  string `json:"prompt"`
 	}
 	if json.Unmarshal(raw, &p) != nil || p.Event == "" {
 		return
 	}
 	ev := Event{At: time.Now(), Name: p.Event, SessionID: p.Session, Cwd: p.Cwd, Type: p.Type, Message: p.Message, AgentID: p.AgentID}
+	if from, line, ok := PeerMessage(p.Prompt); ok {
+		ev.Type, ev.From, ev.Message = "peer", from, line
+	}
 	if r := []rune(ev.Message); len(r) > 300 {
 		ev.Message = string(r[:300])
 	}

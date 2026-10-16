@@ -76,6 +76,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case snapMsg:
 		m.refreshing = false
 		m.snap = store.Snapshot(msg)
+		m.syncGroupNames()
 		m.rebuild()
 		cmds := []tea.Cmd{m.notice(), m.scheduleTick()}
 		if m.refreshAgain { // an event arrived while we were refreshing
@@ -241,7 +242,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		if d, ok := m.top().(*paletteDialog); ok {
 			var cmd tea.Cmd
 			d.input, cmd = d.input.Update(msg)
-			d.filter()
+			d.filter(m)
 			return cmd
 		}
 		switch m.mode {
@@ -289,7 +290,7 @@ func (m *Model) ensureAnim() tea.Cmd {
 	m.animGen++
 	gen := m.animGen
 	d := time.Second
-	if busy, waiting, _ := m.counts(); busy+waiting > 0 || m.cat.Awake() {
+	if busy, waiting, _ := m.counts(); busy+waiting > 0 || m.cat.Awake() || m.mailBlinking() {
 		d = 150 * time.Millisecond
 	}
 	return tea.Tick(d, func(time.Time) tea.Msg { return animMsg{gen} })
@@ -308,6 +309,10 @@ func (m *Model) onEvents(evs []events.Event) tea.Cmd {
 	var cmds []tea.Cmd
 	for _, e := range evs {
 		m.events[e.SessionID] = e
+		if e.Type == "peer" {
+			m.onPeer(e)
+			continue
+		}
 		if e.NeedsYou() {
 			msg := "miau! " + e.Message
 			if e.Message == "" {
@@ -510,8 +515,8 @@ func (m *Model) keyNormal(k tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.collapse()
 	case key.Matches(k, km.Expand):
 		m.expand()
-	case key.Matches(k, km.Toggle):
-		m.toggle()
+	case key.Matches(k, km.Pick):
+		m.togglePick()
 	case key.Matches(k, km.NextAttn):
 		m.jumpAttention(1)
 	case key.Matches(k, km.PrevAttn):
@@ -605,6 +610,10 @@ func (m *Model) keyNormal(k tea.KeyPressMsg) (bool, tea.Cmd) {
 			})
 		}
 	case k.String() == "esc":
+		if len(m.picked) > 0 { // esc first drops the picks, then the filter
+			m.picked = map[string]bool{}
+			return true, nil
+		}
 		if m.filter != "" {
 			m.filter = ""
 			m.rebuild()
