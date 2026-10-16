@@ -15,7 +15,6 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/store"
-	"github.com/aqilputi/nekuroddo/internal/term"
 	"github.com/aqilputi/nekuroddo/internal/theme"
 	"github.com/aqilputi/nekuroddo/internal/todo"
 )
@@ -329,11 +328,11 @@ func TestBehaviorToastLifecycle(t *testing.T) {
 
 func TestBehaviorPaneMessages(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	if m.update(term.OutputMsg{ID: "nope"}) != nil {
+	if m.update(paneOutputMsg{ID: "nope"}) != nil {
 		t.Fatal("output from an unknown pane is ignored")
 	}
 	bhPane(t, &m, "p1", "a")
-	if m.update(term.OutputMsg{ID: "p1"}) == nil {
+	if m.update(paneOutputMsg{ID: "p1"}) == nil {
 		t.Fatal("output keeps listening")
 	}
 	if _, ok := bhHasToast(m.update(enterMsg{pane: "gone"}), "resposta enviada"); !ok {

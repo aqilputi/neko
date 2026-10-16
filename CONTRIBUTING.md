@@ -71,6 +71,28 @@ O projeto é validado por testes, escritos **antes** do código:
 - Testes ao vivo (claude de verdade, Jira) ficam atrás de variáveis de ambiente e são pulados por padrão; veja o
   comentário no topo de cada `*live*_test.go`.
 
+## Pacotes de trabalho (vários agents em paralelo)
+
+A refatoração de arquitetura em [docs/plano-arquitetura.md](docs/plano-arquitetura.md) é dividida em **pacotes
+de trabalho (WP)**, pensados para vários agents trabalharem ao mesmo tempo sem pisar um no outro. Na prática,
+hoje isso funciona assim (diferente do fluxo de branch-por-PR de um contribuidor solo, acima):
+
+- Os agents de uma mesma "onda" trabalham **em paralelo, na mesma branch**, cada um dono de um escopo de
+  arquivos fechado e disjunto (ex.: um WP só mexe em `internal/core/**`, outro só em `internal/app/**`). Dentro
+  de uma onda, nenhum par de WPs compartilha arquivo.
+- `scripts/wp-scope.sh '<regex>'` confere que o diff do seu WP não saiu do escopo combinado
+  (`git diff --name-only` contra a base, filtrado pela regex do escopo).
+- Ordem **TDD** dentro do WP, igual ao resto do projeto: testes primeiro (vermelhos), depois o mínimo de
+  código, depois refatoração.
+- Pacote Go **novo** (ex. `internal/core`, `internal/app`) entra com **cobertura ≥ 90%**; a cobertura total do
+  projeto nunca pode cair mais de **0,5 ponto** em relação ao que estava antes do WP.
+- Um agent **integrador** roda `make ci` depois que os WPs de uma onda terminam e comita o resultado da onda
+  (não um commit por WP isolado); conflitos de rebase são resolvidos pelo dono do WP afetado.
+- Comentários de código em inglês; textos de interface **e documentação** em pt-BR — a mesma regra de
+  "Estilo", acima, vale dentro de um WP.
+- Cada WP que muda comportamento ou adiciona algo visível ganha sua própria linha em `## [Não lançado]` no
+  [CHANGELOG.md](CHANGELOG.md), para o integrador não ter que reconstruir o que mudou.
+
 ## Commits
 
 - Mensagens curtas, no imperativo ou descritivas, com o escopo na frente quando ajuda:

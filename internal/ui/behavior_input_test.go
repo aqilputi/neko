@@ -13,7 +13,6 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/store"
-	"github.com/aqilputi/nekuroddo/internal/term"
 	"github.com/aqilputi/nekuroddo/internal/todo"
 )
 
@@ -174,7 +173,7 @@ func TestBehaviorPaneOpenMsgStartsPane(t *testing.T) {
 		t.Fatal("focused, with the reply pending")
 	}
 	// the attach exits (claude is /bin/false): the pane closes
-	m.update(term.ExitMsg{ID: "cccc3333"})
+	m.update(paneExitMsg{ID: "cccc3333"})
 	if m.panes["cccc3333"] != nil || m.mode != modeNormal || m.active != "" {
 		t.Fatal("ExitMsg closes the pane and leaves INSERT")
 	}

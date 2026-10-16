@@ -16,7 +16,6 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/store"
-	"github.com/aqilputi/nekuroddo/internal/term"
 	"github.com/aqilputi/nekuroddo/internal/theme"
 	"github.com/aqilputi/nekuroddo/internal/todo"
 )
@@ -178,9 +177,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 
-	case term.OutputMsg:
+	case paneOutputMsg:
 		if p := m.panes[msg.ID]; p != nil {
-			cmds := []tea.Cmd{p.Listen()}
+			cmds := []tea.Cmd{listenPane(p)}
 			// claude copied something (OSC 52): hand it to the real terminal
 			for _, c := range p.TakeClipboard() {
 				cmds = append(cmds, tea.SetClipboard(c), toastCmd(fmt.Sprintf("copiado (%d caracteres)", len([]rune(c))), false))
@@ -189,7 +188,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		return nil
 
-	case term.ExitMsg:
+	case paneExitMsg:
 		// `claude attach` returned (← in claude, or the session ended).
 		m.closePane(msg.ID)
 		return m.refresh()

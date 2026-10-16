@@ -649,7 +649,7 @@ func (m *Model) startPane(s store.Session, id string, focus bool, reply string) 
 		m.mode = modeInsert
 	}
 	m.store.MarkSeen(s.SessionID, time.Now())
-	cmds := []tea.Cmd{p.Listen()}
+	cmds := []tea.Cmd{listenPane(p)}
 	if reply != "" {
 		m.pending[id] = reply
 		cmds = append(cmds, m.sendReplyLater(id, 1500*time.Millisecond))

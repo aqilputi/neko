@@ -4,8 +4,8 @@ title: Arquitetura
 description: Pacotes Go do nekuroddo, o fluxo dos dados do ~/.claude até a tela, os grupos de agents e o laço de atualização.
 resource: https://github.com/aqilputi/nekuroddo
 tags: [arquitetura, go, bubbletea, charm, grupos]
-timestamp: 2026-10-16T12:00:00Z
-generated: { by: agent:claude-code/claude-opus-5-5, at: 2026-10-16T12:00:00Z }
+timestamp: 2026-10-16T19:00:00Z
+generated: { by: agent:claude-code/claude-sonnet-5, at: 2026-10-16T19:00:00Z }
 status: stable
 ---
 
@@ -94,6 +94,56 @@ Do estudo do [crush](https://github.com/charmbracelet/crush) vieram: tela compos
 `key.Binding` como fonte única de teclas, ajuda e paleta, diálogos em overlay, paleta fuzzy, toasts com `seq`,
 OSC 7501 e título da janela, notificação só quando a janela está sem foco, debounce do resize do PTY e
 banner de saída. A seleção com `space` segue o [yazi](https://github.com/sxyazi/yazi).
+
+## Arquitetura alvo (planejado; fase 1 em andamento)
+
+O plano em [plano-arquitetura.md](plano-arquitetura.md) separa o domínio hoje preso em `internal/ui` do
+resto: regras puras (árvore, inbox, cor do grupo, resolução de opção) em `internal/core`, sem I/O; casos de
+uso com efeitos (arquivar, disparar, grupos, Jira, todos, notificação) em `internal/app`, que fala com o mundo
+só por **portas** implementadas pelos pacotes acima (`claude`, `store`, `term`, `groups`, `events`, `jira`,
+`todo`). Um registro de comandos e um barramento de eventos em `app` passam a ser a face comum da TUI, de um
+GUI futuro (três.js + xterm.js num shell Wails v3, com gatinhos 3D low-poly por cima da calçada) e de scripts
+em Lua (`gopher-lua`). Um servidor local (`internal/rpc`, HTTP+SSE+WS sobre Unix socket) fica **opcional**:
+o `nk` de hoje continua um processo só, sem socket.
+
+**Nada disto existe em código mergeado ainda.** A fase 1 (em andamento) só move regras puras para
+`internal/core` e monta o esqueleto de `internal/app`/`internal/wire`, sem mudar o comportamento da TUI atual;
+GUI, Lua e o servidor são fases 2 a 4 do plano.
+
+Árvore de pacotes alvo (resumida; tudo marcado "futuro" ainda não existe):
+
+```
+cmd/nekuroddo/      nk: TUI, nk hook, nk hook-context (hoje); futuro: nk serve, nk --listen, nk run <cmd>
+cmd/nekuroddo-gui/  futuro — nkg: shell Wails v3 com o frontend em gui/web/
+internal/core/      futuro — domínio puro: tipos, árvore, inbox, comando/evento como dados; sem I/O
+internal/app/       futuro — casos de uso + registro de comandos + pubsub; fala só com portas
+internal/wire/      futuro — raiz de composição: liga claude/store/term/... às portas de internal/app
+internal/tui/       futuro — a internal/ui de hoje, afinada: teclas → comandos, eventos → redraw
+internal/rpc/       futuro — servidor opcional: HTTP+SSE+WS sobre Unix socket
+internal/lua/       futuro — runtime gopher-lua, API nk.* (comandos e eventos para a TUI e o GUI)
+internal/{claude,store,term,groups,events,jira,todo,config,paths,theme,cat}   como hoje: adaptadores por papel
+internal/archtest/  futuro — teste que falha se a regra de dependência abaixo for violada
+```
+
+Regra de dependência alvo: `internal/core` nunca importa Bubble Tea, PTY ou rede, só tipos de dados dos
+pacotes acima; `internal/app` só fala com o mundo por portas; os "shells" (`tui`, `rpc`, `lua`, `guihost`) não
+chamam `claude`/`store`/`groups`/`jira`/`todo` diretamente — só por `internal/app`.
+
+```
+     cmd/nekuroddo   cmd/nekuroddo-gui
+           │                │
+  internal/tui  internal/rpc  internal/lua  internal/guihost     ← shells (teclas/HTTP/Lua → comandos)
+           │                │              │
+           └───────┬────────┴──────────────┘
+                    ▼
+            internal/app ──► portas ◄── internal/wire ──► claude, store, term, groups, events, jira, todo
+                    │
+                    ▼
+            internal/core   (só stdlib + tipos de dados; nunca chama funções dos pacotes acima)
+```
+
+Decisões completas, o protocolo do core, a cena do GUI, a API Lua e os pacotes de trabalho por fase (com dono
+de arquivos para agents trabalharem em paralelo) estão em [plano-arquitetura.md](plano-arquitetura.md).
 
 ## Riscos
 

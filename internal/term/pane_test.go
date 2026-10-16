@@ -46,35 +46,37 @@ func readFile(t *testing.T, path string, n int) string {
 	return ""
 }
 
-// listen runs the pane's Listen command with a timeout.
-func listen(t *testing.T, p *Pane) tea.Msg {
+// event is what a pane listener (the ui's listenPane) sees next: new output
+// or the exit.
+type event struct {
+	output bool
+	err    error
+}
+
+// listen waits for the pane's next output signal or its exit, like the ui.
+func listen(t *testing.T, p *Pane) event {
 	t.Helper()
-	ch := make(chan tea.Msg, 1)
-	go func() { ch <- p.Listen()() }()
 	select {
-	case m := <-ch:
-		return m
+	case err := <-p.Exited():
+		return event{err: err}
+	case <-p.Output():
+		return event{output: true}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Listen did not resolve")
-		return nil
+		t.Fatal("pane did not signal")
+		return event{}
 	}
 }
 
-// waitExit drains Listen until the ExitMsg.
-func waitExit(t *testing.T, p *Pane) ExitMsg {
+// waitExit drains output signals until the exit and returns its error.
+func waitExit(t *testing.T, p *Pane) error {
 	t.Helper()
 	for i := 0; i < 100; i++ {
-		switch m := listen(t, p).(type) {
-		case ExitMsg:
-			return m
-		case OutputMsg:
-			if m.ID != p.ID {
-				t.Fatalf("OutputMsg for %q", m.ID)
-			}
+		if e := listen(t, p); !e.output {
+			return e.err
 		}
 	}
-	t.Fatal("no ExitMsg")
-	return ExitMsg{}
+	t.Fatal("no exit")
+	return nil
 }
 
 // rowText reads row y of a drawn buffer as text (wide-char tails skipped).
@@ -103,17 +105,19 @@ func TestStartFailsForMissingProgram(t *testing.T) {
 
 func TestListenOutputThenExit(t *testing.T) {
 	p := startSh(t, 20, 5, "printf oi; read x; exit 0")
-	if m, ok := listen(t, p).(OutputMsg); !ok || m.ID != "p1" {
-		t.Fatalf("first message %#v, want OutputMsg{p1}", m)
+	if e := listen(t, p); !e.output {
+		t.Fatalf("first event %#v, want output", e)
+	}
+	if p.ID != "p1" || p.Process.ID() != "p1" || p.Title != "pane" {
+		t.Fatalf("pane id %q/%q title %q", p.ID, p.Process.ID(), p.Title)
 	}
 	waitFor(t, p, "oi")
 	if p.Done() {
 		t.Fatal("Done while the program still runs")
 	}
 	p.Type("\r")
-	m := waitExit(t, p)
-	if m.ID != "p1" || m.Err != nil {
-		t.Fatalf("exit %#v, want clean exit of p1", m)
+	if err := waitExit(t, p); err != nil {
+		t.Fatalf("exit %v, want clean exit", err)
 	}
 	if !p.Done() {
 		t.Fatal("Done false after exit")
@@ -123,7 +127,7 @@ func TestListenOutputThenExit(t *testing.T) {
 
 func TestExitCodeReported(t *testing.T) {
 	p := startSh(t, 20, 5, "exit 3")
-	if m := waitExit(t, p); m.Err == nil {
+	if err := waitExit(t, p); err == nil {
 		t.Fatal("non-zero exit should carry an error")
 	}
 }
@@ -132,7 +136,7 @@ func TestCloseKillsRunningProgram(t *testing.T) {
 	p := startSh(t, 20, 5, "printf go; sleep 30")
 	waitFor(t, p, "go")
 	p.Close()
-	if m := waitExit(t, p); m.Err == nil {
+	if err := waitExit(t, p); err == nil {
 		t.Fatal("killed program should report an error")
 	}
 	if !p.Done() {

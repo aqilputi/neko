@@ -27,6 +27,7 @@ O `index.md` e o `log.md` são arquivos reservados da spec.
 | [grupos.md](grupos.md) | Guide | Grupos de agents: `:group`, `nk hook-context`, `SendMessage` e o ✉ |
 | [hooks.md](hooks.md) | Guide | `nk hook` (eventos em tempo real) e `nk hook-context` (grupos) |
 | [arquitetura.md](arquitetura.md) | Architecture | Pacotes, fluxo de dados, grupos, laço de atualização |
+| [plano-arquitetura.md](plano-arquitetura.md) | Plan | Arquitetura alvo (core headless, GUI 3D de gatinhos low-poly, Lua) e os pacotes de trabalho por fase — planejado, fase 1 em andamento |
 | [fontes-de-dados.md](fontes-de-dados.md) | Reference | O que o nekuroddo lê de `~/.claude` e como calcula custo |
 | [painel-embutido.md](painel-embutido.md) | Design Note | PTY + `x/vt` rodando `claude attach`; bugs contornados |
 | [jira.md](jira.md) | Guide | Integração Jira sem token, via `claude -p` + conector |
@@ -44,4 +45,6 @@ Fora do bundle: o [README](../README.md), o [CHANGELOG](../CHANGELOG.md) e o
 e recebe eventos de [hooks.md](hooks.md). Os [grupos](grupos.md) usam os dois hooks para que sessões
 parecidas se avisem. O usuário instala com [instalacao.md](instalacao.md), ajusta em
 [configuracao.md](configuracao.md) e opera com [teclas.md](teclas.md). [jira.md](jira.md) estende os todos.
-As mudanças ficam registradas em [log.md](log.md), e cada versão tem notas em [releases/](releases/v0.1.0.md).
+[plano-arquitetura.md](plano-arquitetura.md) traça para onde [arquitetura.md](arquitetura.md) está migrando
+(core headless, GUI e Lua), por fases e pacotes de trabalho ainda em andamento. As mudanças ficam registradas
+em [log.md](log.md), e cada versão tem notas em [releases/](releases/v0.1.0.md).

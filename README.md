@@ -256,6 +256,14 @@ internal/
 
 Arquitetura e fluxo de dados em [docs/arquitetura.md](docs/arquitetura.md).
 
+### Roadmap
+
+Em planejamento: separar o domínio de `internal/ui` num core headless (`internal/core` + `internal/app`),
+servido localmente como opcional; um GUI com gatinhos 3D low-poly que embute os terminais reais do Claude
+Code; e scripts de automação em Lua, na TUI e no GUI. Nada disso existe em código ainda — a TUI atual e todos
+os atalhos continuam funcionando do mesmo jeito enquanto a refatoração avança. Plano completo em
+[docs/plano-arquitetura.md](docs/plano-arquitetura.md).
+
 ## Contribuindo
 
 Issues e PRs são bem-vindos. Leia o [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir um PR e o

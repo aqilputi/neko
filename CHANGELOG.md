@@ -8,6 +8,14 @@ incompatíveis podem acontecer em versões menores e serão sempre descritas aqu
 
 ## [Não lançado]
 
+### Alterado
+
+- **Início da refatoração de arquitetura.** Plano para separar o domínio de `internal/ui` num core headless
+  (`internal/core` + `internal/app`, falando só por portas), com um GUI opcional (gatinhos 3D low-poly,
+  terminais reais embutidos) e scripts em Lua, documentado em
+  [docs/plano-arquitetura.md](docs/plano-arquitetura.md). Fase 1 (mover regras puras para `internal/core` e
+  montar o esqueleto de `internal/app`) em andamento; comportamento, teclas e atalhos continuam os mesmos.
+
 ## [0.1.0] - 2026-10-16
 
 Primeira versão marcada. Até aqui o projeto se chamava `neko`.

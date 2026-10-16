@@ -5,6 +5,16 @@ e as entradas antigas mantêm o nome da época.
 
 ## 2026-10-16
 
+- **pesquisa + plano:** arquitetura alvo para separar o domínio de `internal/ui` em `internal/core` (regras
+  puras, sem I/O) e `internal/app` (casos de uso, fala só por portas), com um registro de comandos e um
+  barramento de eventos comuns à TUI, a um GUI novo (three.js + xterm.js num shell Wails v3, gatinhos 3D
+  low-poly) e a scripts em Lua (`gopher-lua`); servidor local (`internal/rpc`) opcional. Trabalho dividido em
+  fases e pacotes de trabalho (WP) com dono de arquivos, para um time de agents rodar em paralelo sem
+  conflito, guiado por TDD e por um teste de arquitetura (`internal/archtest`) que trava a regra de
+  dependência. Plano completo em [plano-arquitetura.md](plano-arquitetura.md); resumo e diagramas em
+  [arquitetura.md](arquitetura.md#arquitetura-alvo-planejado-fase-1-em-andamento). Fase 1, onda 1
+  (`internal/core`, `internal/app`, `internal/term` sem Bubble Tea e esta documentação) em andamento; nada do
+  GUI ou do Lua existe em código ainda.
 - **lançamento:** v0.1.0, a primeira versão marcada ([notas](releases/v0.1.0.md), `CHANGELOG.md` no formato
   Keep a Changelog).
 - **decisão:** o projeto passa a se chamar **nekuroddo**, com o comando curto `nk` (link simbólico para o
