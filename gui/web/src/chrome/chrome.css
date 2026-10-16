@@ -1,0 +1,603 @@
+/* The chrome: bold, few details, big hit targets, theme tokens only.
+ * Sizes come from metrics.ts as --nk-top-h / --nk-status-h / --nk-tree-w /
+ * --nk-calcada-h (set on :root at start). The calçada is the bottom strip;
+ * the status bar sits right above it. */
+
+.nk-top {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--nk-top-h, 56px);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px 0 8px;
+  background: var(--nk-surface);
+  border-bottom: 3px solid var(--nk-overlay);
+  z-index: 25;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.nk-brand {
+  font-weight: 800;
+  font-size: 17px;
+  background: linear-gradient(90deg, var(--nk-accent), var(--nk-accent2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.nk-icon-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--nk-text);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.nk-icon-btn:hover,
+.nk-icon-btn:focus-visible {
+  background: var(--nk-overlay);
+  outline: none;
+}
+
+.nk-pill {
+  font-weight: 800;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 2px solid currentColor;
+}
+
+.nk-pill-busy {
+  color: var(--nk-busy);
+}
+.nk-pill-blocked {
+  color: var(--nk-blocked);
+}
+.nk-pill-done {
+  color: var(--nk-done);
+}
+.nk-pill-accent {
+  color: var(--nk-accent);
+}
+
+.nk-usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nk-bar {
+  display: inline-block;
+  width: 110px;
+  height: 12px;
+  border-radius: 6px;
+  background: var(--nk-overlay);
+  overflow: hidden;
+}
+
+.nk-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 6px;
+}
+
+.nk-gap {
+  flex: 1;
+}
+
+.nk-muted {
+  color: var(--nk-muted);
+}
+.nk-accent2 {
+  color: var(--nk-accent2);
+}
+.nk-err {
+  color: var(--nk-error);
+  font-weight: bold;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nk-conn {
+  font-weight: bold;
+}
+.status-open {
+  color: var(--nk-done);
+}
+.status-connecting,
+.status-reconnecting {
+  color: var(--nk-busy);
+}
+.status-error,
+.status-closed {
+  color: var(--nk-error);
+}
+
+/* ---- layout ---- */
+
+.nk-app {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--nk-bg);
+}
+
+/* the scene: right of the tree, between the top bar and the status bar */
+.nk-scene-layer {
+  position: fixed;
+  top: var(--nk-top-h, 56px);
+  left: var(--nk-tree-w, 340px);
+  right: 0;
+  bottom: calc(var(--nk-status-h, 40px) + var(--nk-calcada-h, 72px));
+  z-index: 0;
+}
+
+.tree-closed .nk-scene-layer {
+  left: 0;
+}
+
+/* ---- tree column ---- */
+
+.nk-tree-col {
+  position: fixed;
+  top: var(--nk-top-h, 56px);
+  left: 0;
+  width: var(--nk-tree-w, 340px);
+  bottom: calc(var(--nk-status-h, 40px) + var(--nk-calcada-h, 72px));
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--nk-bg) 92%, transparent);
+  border-right: 3px solid var(--nk-overlay);
+  z-index: 25;
+}
+
+.nk-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px 4px;
+  flex-wrap: wrap;
+}
+
+.nk-tab {
+  border: 2px solid transparent;
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: transparent;
+  color: var(--nk-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.nk-tab.is-hot {
+  color: var(--nk-blocked);
+}
+
+.nk-tab.is-on {
+  background: var(--nk-accent);
+  color: var(--nk-bg);
+}
+
+.nk-tree-info {
+  padding: 2px 14px 6px;
+  font-size: 12px;
+  color: var(--nk-muted);
+}
+
+.nk-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 12px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.nk-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding-right: 10px;
+  border-left: 4px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.nk-row:hover {
+  background: var(--nk-surface);
+}
+
+.nk-row.is-cursor {
+  background: var(--nk-overlay);
+  border-left-color: var(--row-ctx, var(--nk-accent));
+}
+
+.nk-row.is-picked .nk-row-text {
+  color: var(--nk-accent);
+}
+
+.nk-row.is-stale {
+  opacity: 0.6;
+}
+
+.nk-row-ctx {
+  margin-top: 6px;
+  font-weight: 800;
+  color: var(--row-ctx, var(--nk-accent2));
+}
+
+.nk-row-ctx .nk-row-glyph {
+  color: var(--row-ctx) !important;
+}
+
+.nk-row-sess {
+  font-weight: 600;
+}
+
+.nk-row-sub {
+  font-size: 13px;
+  color: var(--nk-subtle);
+  min-height: 30px;
+}
+
+.nk-row-glyph {
+  width: 16px;
+  text-align: center;
+  font-weight: 900;
+  flex: none;
+}
+
+.nk-row-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+
+.nk-row-badge {
+  font-size: 12px;
+  color: var(--nk-muted);
+  flex: none;
+}
+
+.nk-row-cost {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--nk-muted);
+  flex: none;
+}
+
+.nk-chip {
+  font-size: 11px;
+  font-weight: 800;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--nk-bg);
+  background: var(--chip, var(--nk-accent));
+  flex: none;
+}
+
+.nk-mail {
+  color: var(--nk-accent);
+  font-weight: 900;
+  flex: none;
+}
+
+.nk-mail.is-blink {
+  animation: nk-blink 1s steps(2, start) infinite;
+}
+
+.nk-mail.is-dim {
+  opacity: 0.45;
+}
+
+@keyframes nk-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.nk-empty {
+  padding: 18px 14px;
+  color: var(--nk-muted);
+}
+
+/* ---- status bar ---- */
+
+.nk-status {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--nk-calcada-h, 72px);
+  height: var(--nk-status-h, 40px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px;
+  background: var(--nk-surface);
+  border-top: 3px solid var(--nk-overlay);
+  border-bottom: 3px solid var(--nk-overlay);
+  z-index: 25;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.nk-mode {
+  font-weight: 900;
+  letter-spacing: 1px;
+  padding: 4px 12px;
+  border-radius: 8px;
+  color: var(--nk-bg);
+  background: var(--nk-accent2);
+}
+
+.nk-mode-insert {
+  background: var(--nk-done);
+}
+
+.nk-hints {
+  display: flex;
+  gap: 16px;
+  color: var(--nk-subtle);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+kbd {
+  font: inherit;
+  font-weight: 800;
+  color: var(--nk-text);
+  background: var(--nk-overlay);
+  border-radius: 6px;
+  padding: 1px 7px;
+}
+
+.nk-seq {
+  color: var(--nk-accent);
+}
+
+/* ---- overlays ---- */
+
+.nk-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: rgb(0 0 0 / 0.35);
+  z-index: 50;
+}
+
+.nk-overlay-confirm {
+  align-items: center;
+  padding-top: 0;
+  z-index: 55;
+}
+
+.nk-pal,
+.nk-sheet,
+.nk-confirm {
+  width: min(720px, calc(100vw - 32px));
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--nk-surface);
+  border: 3px solid var(--nk-accent);
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.55);
+  overflow: hidden;
+}
+
+.nk-pal-input,
+.nk-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 3px solid var(--nk-overlay);
+}
+
+.nk-pal-prompt {
+  color: var(--nk-accent);
+  font-weight: 900;
+  font-size: 20px;
+}
+
+.nk-pal-input input,
+.nk-filter input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--nk-text);
+  font: inherit;
+  font-size: 18px;
+}
+
+.nk-pal-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.nk-pal-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.nk-pal-item.is-cur {
+  background: var(--nk-accent);
+  color: var(--nk-bg);
+}
+
+.nk-pal-item.is-cur kbd {
+  background: rgb(0 0 0 / 0.2);
+  color: inherit;
+}
+
+.nk-pal-item.is-usage {
+  color: var(--nk-muted);
+}
+
+.nk-pal-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nk-pal-empty {
+  padding: 14px;
+  color: var(--nk-muted);
+}
+
+.nk-filter {
+  position: fixed;
+  top: calc(var(--nk-top-h, 56px) + 8px);
+  left: 8px;
+  width: calc(var(--nk-tree-w, 340px) - 16px);
+  background: var(--nk-surface);
+  border: 3px solid var(--nk-accent);
+  border-radius: 12px;
+  z-index: 50;
+}
+
+.nk-sheet {
+  padding: 8px 22px 18px;
+  overflow-y: auto;
+}
+
+.nk-sheet h2 {
+  color: var(--nk-accent);
+  margin: 10px 0;
+}
+
+.nk-sheet h3 {
+  color: var(--nk-accent2);
+  margin: 14px 0 6px;
+  font-size: 14px;
+}
+
+.nk-help {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 4px 18px;
+  margin: 0;
+}
+
+.nk-help-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.nk-help-row dt {
+  min-width: 90px;
+}
+
+.nk-help-row dd {
+  margin: 0;
+  color: var(--nk-subtle);
+}
+
+.nk-usage-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+
+.nk-usage-name {
+  min-width: 220px;
+}
+
+.nk-confirm {
+  width: min(560px, calc(100vw - 32px));
+  padding: 22px 24px;
+  border-color: var(--nk-blocked);
+}
+
+.nk-confirm-q {
+  margin: 0 0 18px;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.nk-confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.nk-btn {
+  min-width: 120px;
+  min-height: 44px;
+  border-radius: 10px;
+  border: 3px solid var(--nk-overlay);
+  background: var(--nk-overlay);
+  color: var(--nk-text);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.nk-btn-yes {
+  background: var(--nk-blocked);
+  border-color: var(--nk-blocked);
+  color: var(--nk-bg);
+}
+
+.nk-btn kbd {
+  background: rgb(0 0 0 / 0.2);
+  color: inherit;
+}
+
+/* ---- toasts ---- */
+
+.nk-toasts {
+  position: fixed;
+  right: 16px;
+  bottom: calc(var(--nk-status-h, 40px) + var(--nk-calcada-h, 72px) + 12px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  z-index: 60;
+  pointer-events: none;
+}
+
+.nk-toast {
+  max-width: 520px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 3px solid var(--nk-done);
+  background: var(--nk-surface);
+  font-weight: 700;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.4);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.nk-toast.is-err {
+  border-color: var(--nk-error);
+  color: var(--nk-error);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nk-mail.is-blink {
+    animation: none;
+  }
+}

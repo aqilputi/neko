@@ -1,0 +1,158 @@
+/* Terminal windows: thick borders, a bold title bar, a lift while dragged. */
+
+.nk-windows {
+  position: fixed;
+  inset: 0;
+  pointer-events: none; /* the scene below stays clickable between windows */
+  z-index: 20;
+}
+
+.nk-win {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  background: var(--nk-surface);
+  border: 3px solid var(--nk-overlay);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgb(0 0 0 / 0.45);
+  overflow: hidden;
+  transform-origin: 50% 0;
+  transition:
+    box-shadow 120ms ease,
+    transform 120ms ease,
+    border-color 120ms ease;
+}
+
+.nk-win.is-active {
+  border-color: var(--nk-accent);
+}
+
+.nk-win.is-dragging {
+  transform: perspective(1200px) rotateX(2deg) translateY(-3px);
+  box-shadow: 0 22px 44px rgb(0 0 0 / 0.55);
+  transition: none;
+  cursor: grabbing;
+}
+
+.nk-win.is-zoomed {
+  border-radius: 6px;
+}
+
+.nk-win-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 6px 0 14px;
+  background: var(--nk-overlay);
+  color: var(--nk-text);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  flex: none;
+}
+
+.nk-win.is-active .nk-win-bar {
+  background: var(--nk-accent);
+  color: var(--nk-bg);
+}
+
+.nk-win-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--nk-bg);
+  flex: none;
+}
+
+.nk-win-title {
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nk-win-sub {
+  font-size: 13px;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nk-win-gap {
+  flex: 1;
+}
+
+.nk-win-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 17px;
+  font-weight: bold;
+  cursor: pointer;
+  flex: none;
+}
+
+.nk-win-btn:hover,
+.nk-win-btn:focus-visible {
+  background: rgb(0 0 0 / 0.18);
+  outline: none;
+}
+
+.nk-win-close:hover {
+  background: var(--nk-blocked);
+  color: var(--nk-bg);
+}
+
+.nk-win-body {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 4px 4px 8px;
+  background: var(--nk-surface);
+}
+
+.nk-win-body .xterm {
+  height: 100%;
+}
+
+.nk-win-note {
+  position: absolute;
+  inset: 40px 0 0 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--nk-surface);
+  color: var(--nk-subtle);
+  font-size: 16px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.nk-win-error {
+  color: var(--nk-error);
+}
+
+.nk-win-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 22px;
+  height: 22px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(135deg, transparent 55%, var(--nk-overlay) 55%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nk-win,
+  .nk-win.is-dragging {
+    transition: none;
+    transform: none;
+  }
+}

@@ -1,49 +1,48 @@
-// Minimal shell of the GUI (WP-6.1): "conectando…" until the first snapshot
-// and tree arrive, then the tree as plain text. The chrome, scene, inbox
-// and windows WPs replace the body; the store/sync wiring stays.
+// The GUI's composition (plan §4.1): the WebGL scene behind, the terminal
+// windows over it, the DOM chrome (top bar, tree column, status bar,
+// overlays, toasts) and the calçada with the inbox cat. "conectando…"
+// until the first snapshot and tree arrive.
 
-import type { TreeRow } from './client/types.ts';
-import type { NkState, Store } from './state/index.ts';
-import { stateToken } from './state/theme.ts';
+import { useEffect } from 'preact/hooks';
+import type { NkClient } from './client/client.ts';
+import { Chrome } from './chrome/index.ts';
+import { metricVars } from './chrome/metrics.ts';
+import { InboxWalk } from './inbox/index.ts';
+import type { KeyController } from './keymap/controller.ts';
+import type { Ui } from './keymap/ui.ts';
+import { Scene } from './scene/index.ts';
+import type { Store, Sync } from './state/index.ts';
+import { WindowLayer, openSessionWindow, type WindowManager } from './windows/index.ts';
 
-const STATUS_TEXT: Record<NkState['status'], string> = {
-  connecting: 'conectando…',
-  open: 'conectado',
-  reconnecting: 'reconectando…',
-  closed: 'desconectado',
-  error: 'erro de conexão',
-};
-
-function money(n: number | undefined): string {
-  return n ? `$${n.toFixed(2)}` : '';
+export interface AppProps {
+  store: Store;
+  client?: NkClient;
+  sync?: Sync;
+  keys?: KeyController;
+  ui?: Ui;
+  windows?: WindowManager;
 }
 
-/** One tree row as a line of text (the TUI's tree, without the art). */
-export function rowText(r: TreeRow): string {
-  switch (r.kind) {
-    case 'ctx':
-      return `${r.collapsed ? '▸' : '▾'} ${r.ctx}  ${money(r.ctx_cost)} (${r.ctx_n ?? 0})`;
-    case 'sess':
-      return `  ${r.label ?? r.short_id ?? r.session_id}  ${r.state ?? ''}  ${money(r.cost)}`.trimEnd();
-    default:
-      return `    └ ${r.label ?? r.sub?.id ?? ''}  ${r.state ?? ''}`.trimEnd();
-  }
+/** Where the inbox cat stops for a session: under its window when one is
+ * open, else under its cat in the scene (screenPos is canvas-local: the
+ * scene layer's offset is added). */
+export function positionOf(windows: WindowManager | undefined, id: string): number | undefined {
+  const w = windows?.state.value.wins.find((x) => x.id === id);
+  if (w) return w.x + w.w / 2;
+  const scene = (globalThis as { __nkScene?: { screenPos(id: string): { x: number } | null } }).__nkScene;
+  const p = scene?.screenPos(id);
+  if (!p) return undefined;
+  const layer = typeof document === 'undefined' ? null : document.querySelector('.nk-scene-layer');
+  return p.x + (layer?.getBoundingClientRect().left ?? 0);
 }
 
-function Tree({ rows }: { rows: readonly TreeRow[] }) {
-  return (
-    <ul class="tree" data-testid="tree">
-      {rows.map((r) => (
-        <li key={r.key} class={`row row-${r.kind}`} data-key={r.key} style={{ color: `var(--nk-${stateToken(r.state)})` }}>
-          {rowText(r)}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-export function App({ store }: { store: Store }) {
+export function App({ store, client, sync, keys, ui, windows }: AppProps) {
   const s = store.state.value;
+
+  useEffect(() => {
+    for (const [k, v] of Object.entries(metricVars())) document.documentElement.style.setProperty(k, v);
+  }, []);
+
   if (!s.ready) {
     return (
       <main class="boot">
@@ -52,16 +51,15 @@ export function App({ store }: { store: Store }) {
       </main>
     );
   }
+  const treeOpen = ui?.treeOpen.value ?? true;
   return (
-    <main>
-      <header class="top">
-        <span class="brand">ᓚᘏᗢ nekuroddo</span>
-        <span data-testid="status" class={`status status-${s.status}`}>
-          {STATUS_TEXT[s.status]}
-        </span>
-      </header>
-      <Tree rows={s.tree.rows} />
-      {s.error && <p class="error">{s.error}</p>}
-    </main>
+    <div class={`nk-app${treeOpen ? '' : ' tree-closed'}`}>
+      <div class="nk-scene-layer">
+        <Scene store={store} onOpenSession={(id) => openSessionWindow(id)} />
+      </div>
+      <WindowLayer store={store} {...(client ? { client } : {})} {...(sync ? { sync } : {})} />
+      <Chrome store={store} {...(client ? { client } : {})} {...(sync ? { sync } : {})} />
+      <InboxWalk store={store} sync={sync} onOpenSession={(id) => openSessionWindow(id)} positionOf={(id) => positionOf(windows, id)} />
+    </div>
   );
 }

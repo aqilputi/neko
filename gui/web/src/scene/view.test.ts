@@ -84,6 +84,8 @@ describe('SceneView', () => {
     const bout = view.frames - 1;
     expect(bout).toBeGreaterThanOrEqual(BOUT_MS / 100 - 2);
     expect(bout).toBeLessThanOrEqual(BOUT_MS / 100 + 2);
+    // the bout's frames are ambient ones (what reduced motion must never draw)
+    expect(view.ambientFrames).toBeGreaterThanOrEqual(bout - 1);
     const settled = view.frames;
     clock.advance(BOUT_EVERY_MS - BOUT_MS - 400);
     expect(view.frames).toBe(settled);
@@ -102,6 +104,7 @@ describe('SceneView', () => {
     view.wiggle();
     clock.advance(1000);
     expect(view.frames).toBe(2);
+    expect(view.ambientFrames).toBe(0);
   });
 
   it('a pose change tweens at 60 fps, then stops', () => {

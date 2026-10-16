@@ -15,6 +15,7 @@ interface Debug {
   kittens: number;
   poses: Record<string, string>;
   frames: number;
+  ambientFrames: number;
   reducedMotion: boolean;
   screenPos(id: string): { x: number; y: number } | null;
 }
@@ -106,11 +107,12 @@ test('prefers-reduced-motion: static poses, the scene stays still', async ({ pag
   await page.goto(pageURL());
   await expect.poll(() => dbg(page, (d) => d.cats)).toBe(6);
   expect(await dbg(page, (d) => d.reducedMotion)).toBe(true);
-  const settled = await waitIdle(page);
-  // no ambient bout (one would start within 9 s): a quiet stretch has ≤ the
-  // single frame a demo state change may cause
+  await waitIdle(page);
+  // no ambient bout (one would start within 9 s). Data changes in the shared
+  // demo (✉, windows other specs open) may still redraw: those frames are
+  // fine — only ambient motion is forbidden
   await page.waitForTimeout(10_000);
-  expect((await dbg(page, (d) => d.frames))! - settled).toBeLessThanOrEqual(2);
+  expect(await dbg(page, (d) => d.ambientFrames)).toBe(0);
 });
 
 test('flat mode: text cats ᓚᘏᗢ, still clickable', async ({ page }) => {
@@ -119,7 +121,8 @@ test('flat mode: text cats ᓚᘏᗢ, still clickable', async ({ page }) => {
   await expect(scene).toHaveAttribute('data-mode', 'flat');
   await expect(page.locator('.nk-flat-cat')).toHaveCount(6);
   await expect(page.locator(`.nk-flat-cat[data-session="${MIG}"]`)).toHaveAttribute('data-pose', 'alert');
-  await expect(page.locator(`.nk-flat-cat[data-session="${MIG}"] .cat`)).toHaveText('ᓚᘏᗢ !');
+  // "!" for the blocked session; a demo ✉ may have landed on it too
+  await expect(page.locator(`.nk-flat-cat[data-session="${MIG}"] .cat`)).toHaveText(/^ᓚᘏᗢ !( ✉)?$/);
   await expect(page.locator('canvas')).toHaveCount(0);
   await page.locator(`.nk-flat-cat[data-session="${REP}"]`).click();
   await expect.poll(() => page.evaluate(() => (globalThis as unknown as { nk: { opened: string[] } }).nk.opened)).toEqual([REP]);

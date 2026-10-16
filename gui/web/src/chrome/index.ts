@@ -1,5 +1,7 @@
-// WP-6.2 — DOM chrome: header (counts, usage bars from snapshot.usage),
-// the tree column (tree.rows), status bar (mode + keymap hints), toasts
-// (state.toasts, dismissToast), confirmation dialogs (state.pending →
-// sync.confirm) and the ":" palette (state.commands).
-export {};
+// WP-6.2 — DOM chrome: top bar (counts, usage), the tree column, the status
+// bar (NORMAL/INSERT + key hints), the ":" palette, the ctrl+k switcher,
+// the confirmation dialog and the toasts.
+export { Chrome, STATUS_TEXT, type ChromeProps } from './Chrome.tsx';
+export * from './format.ts';
+export * from './palette.ts';
+export * from './metrics.ts';

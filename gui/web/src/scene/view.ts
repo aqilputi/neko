@@ -153,6 +153,9 @@ export class SceneView {
     return this.loop.frames;
   }
 
+  /** Frames drawn with ambient motion (breathing, tail, typing): never under reduced motion. */
+  ambientFrames = 0;
+
   setSize(w: number, h: number): void {
     this.width = Math.max(1, w);
     this.height = Math.max(1, h);
@@ -330,6 +333,7 @@ export class SceneView {
 
   private draw(now: number): void {
     const ambientOn = !this.reduced && now < this.boutUntil;
+    if (ambientOn) this.ambientFrames++;
     const t = now / 1000;
     for (const e of this.cats.values()) {
       const pose = e.model.pose;

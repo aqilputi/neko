@@ -44,6 +44,8 @@ export interface SceneDebug {
   readonly kittens: number;
   readonly poses: Record<string, Pose>;
   readonly frames: number;
+  /** Frames with ambient motion (0 forever under prefers-reduced-motion). */
+  readonly ambientFrames: number;
   readonly reducedMotion: boolean;
   screenPos(id: string): { x: number; y: number } | null;
 }
@@ -116,6 +118,9 @@ export function Scene({ store, onOpenSession }: SceneProps) {
       },
       get frames() {
         return viewRef.current?.frames ?? 0;
+      },
+      get ambientFrames() {
+        return viewRef.current?.ambientFrames ?? 0;
       },
       get reducedMotion() {
         return reducedRef.current;
