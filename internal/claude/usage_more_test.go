@@ -106,8 +106,11 @@ func TestFetchUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := readArgv(t, argv); !reflect.DeepEqual(got, []string{"-p", "/usage"}) {
-		t.Fatalf("argv = %q", got)
+	// the poll must not become a session of its own: no transcript left in
+	// the cwd's project, and no hooks (ours would show it as an agent and meow)
+	want := []string{"-p", "/usage", "--no-session-persistence", "--settings", `{"disableAllHooks":true}`}
+	if got := readArgv(t, argv); !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
 	}
 	if l, ok := u.Find("session"); !ok || l.Pct != 33 || l.Resets != "Oct 15, 11:30am" {
 		t.Fatalf("limits = %+v", u.Limits)
