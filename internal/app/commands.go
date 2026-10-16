@@ -55,7 +55,6 @@ func clientCommands() []core.Command {
 		clientCommand("usage.show", "uso (/usage)", "u"),
 		clientCommand("help.open", "todos os comandos", "ctrl+/", "?", "ctrl+_"),
 		clientCommand("app.quit", "sai", "q", "ctrl+c"),
-		clientCommand("inbox.summon", "inbox: vai para quem te espera"),
 	}
 }
 
@@ -87,6 +86,12 @@ func (a *App) RegisterKeyCommands() error {
 			a.runSessionReply, []Option{hasSession}},
 		{core.Command{Name: "sessions.refresh", Title: "atualiza e reordena", Keys: []string{"R"}, Mode: core.ModeNormal},
 			func(Context, Args) (Result, error) { a.Refresh(); return Result{}, nil }, nil},
+		// core-scope so a compositor shortcut (`nk run inbox.summon`) and the
+		// GUI's shift+space reach the same pick; the TUI keeps its own
+		// handler (the inbox tab)
+		{core.Command{Name: "inbox.summon", Title: "inbox: vai para quem te espera", Keys: []string{"shift+space"},
+			Mode: core.ModeNormal, Hint: "a sessão mais urgente"},
+			func(Context, Args) (Result, error) { return a.InboxSummon(), nil }, nil},
 	}
 	for _, c := range cmds {
 		if err := a.reg.Register(c.c, c.run, c.opts...); err != nil {
