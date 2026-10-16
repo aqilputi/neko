@@ -13,14 +13,14 @@ import (
 
 func TestSwitcherListsLiveChatsOnly(t *testing.T) {
 	now := time.Now()
-	m := New(config.Default())
+	m := newTestModel(config.Default())
 	m.w, m.h = 120, 40
-	m.snap = store.Snapshot{Sessions: []store.Session{
+	setSnap(&m, store.Snapshot{Sessions: []store.Session{
 		{SessionID: "busy", Name: "migração zone presence", Context: "visio", State: "busy", Kind: "interactive", LastAt: now},
 		{SessionID: "wait", Name: "docker cleanup", Context: "visio", State: "blocked", Attention: store.AttnBlocked, Kind: "interactive", LastAt: now.Add(-time.Hour)},
 		{SessionID: "ended", Name: "scope-guard hook testing", Context: "visio", State: "ended", Ended: true, Stale: true},
 		{SessionID: "old", Name: "kanban", Context: "home", State: "history", Kind: "history"},
-	}}
+	}})
 	m.rebuild()
 	m.keyNormal(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
 	d, ok := m.top().(*paletteDialog)
@@ -52,11 +52,11 @@ func TestSwitcherListsLiveChatsOnly(t *testing.T) {
 
 // Ended chats never show in the tree (H reveals them) nor in the inbox.
 func TestEndedHidden(t *testing.T) {
-	m := New(config.Default())
-	m.snap = store.Snapshot{Sessions: []store.Session{
+	m := newTestModel(config.Default())
+	setSnap(&m, store.Snapshot{Sessions: []store.Session{
 		{SessionID: "ended", Context: "c", State: "ended", Ended: true, Stale: true},
 		{SessionID: "live", Context: "c", State: "busy"},
-	}}
+	}})
 	m.rebuild()
 	if got := sessOrder(&m); len(got) != 1 || got[0] != "live" || len(m.view.Inbox) != 0 {
 		t.Fatalf("rows %v inbox %d", got, len(m.view.Inbox))
@@ -70,7 +70,7 @@ func TestEndedHidden(t *testing.T) {
 // In INSERT, ctrl+k opens the switcher instead of reaching claude; esc
 // closes it and leaves you in INSERT.
 func TestCtrlKInsideClaude(t *testing.T) {
-	m := New(config.Default())
+	m := newTestModel(config.Default())
 	m.w, m.h = 120, 40
 	m.mode = modeInsert
 	m.key(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})

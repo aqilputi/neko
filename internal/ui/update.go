@@ -11,7 +11,6 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
-	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/theme"
 )
 
@@ -50,11 +49,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 
 	case tea.FocusMsg:
-		m.focused = true
+		m.app.SetFocused(true) // notifications and the bell only while away
 		return nil
 
 	case tea.BlurMsg:
-		m.focused = false
+		m.app.SetFocused(false)
 		return nil
 
 	case tea.BackgroundColorMsg:
@@ -69,10 +68,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 
 	case snapMsg:
 		m.refreshing = false
-		m.snap = store.Snapshot(msg)
-		m.syncGroupNames()
+		m.snap = msg.snap
 		m.rebuild()
-		cmds := []tea.Cmd{m.notice(), m.scheduleTick()}
+		cmds := []tea.Cmd{m.showNotices(msg.notices), m.scheduleTick()}
 		if m.refreshAgain { // an event arrived while we were refreshing
 			m.refreshAgain = false
 			cmds = append(cmds, m.refresh())
@@ -99,6 +97,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 
 	case jiraMsg:
 		return m.onJira(msg)
+
+	case confirmResolvedMsg:
+		return m.onConfirmResolved(msg)
 
 	case jiraCreatedMsg:
 		return m.onJiraCreated(msg)
@@ -420,7 +421,7 @@ func (m *Model) keyNormal(k tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 	case key.Matches(k, km.Preview):
 		if r := m.curRow(); todos && r != nil && r.issue != nil {
-			return true, openURL(r.issue.URL)
+			return true, m.openIssueURL(r.issue.URL)
 		}
 		if sel := m.selected(); sel != nil {
 			return true, m.openPane(*sel, false, "")

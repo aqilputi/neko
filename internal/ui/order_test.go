@@ -22,13 +22,13 @@ func sessOrder(m *Model) []string {
 // Activity must not reshuffle the tree; newcomers go on top; R re-sorts.
 func TestOrderIsFrozen(t *testing.T) {
 	now := time.Now()
-	m := New(config.Default())
-	m.snap = store.Snapshot{Sessions: []store.Session{
+	m := newTestModel(config.Default())
+	setSnap(&m, store.Snapshot{Sessions: []store.Session{
 		{SessionID: "a", Context: "c", LastAt: now.Add(-1 * time.Minute)},
 		{SessionID: "b", Context: "c", LastAt: now.Add(-2 * time.Minute)},
 		{SessionID: "c", Context: "c", LastAt: now.Add(-3 * time.Minute),
 			Subs: []store.Sub{{ID: "s1", Done: true}, {ID: "s2"}}},
-	}}
+	}})
 	m.rebuild()
 	if got := sessOrder(&m); got[0] != "a" || got[2] != "c" {
 		t.Fatalf("initial order %v", got)

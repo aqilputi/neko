@@ -14,13 +14,13 @@ import (
 func TestArchiveTabAndContextArchive(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 	t.Setenv("NEKO_CLAUDE", "/bin/false") // refresh must not touch the real claude
-	m := New(config.Default())
+	m := newTestModel(config.Default())
 	m.w, m.h = 120, 40
-	m.snap = store.Snapshot{Sessions: []store.Session{
+	setSnap(&m, store.Snapshot{Sessions: []store.Session{
 		{SessionID: "a", Context: "ctx1"},
 		{SessionID: "b", Context: "ctx1"},
 		{SessionID: "c", Context: "ctx2", Archived: true, Stale: true},
-	}}
+	}})
 	m.rebuild()
 	if m.view.ArchivedN != 1 || len(sessOrder(&m)) != 2 {
 		t.Fatalf("sessions tab should hide the archived one: %v", sessOrder(&m))

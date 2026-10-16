@@ -91,8 +91,8 @@ func TestBehaviorReplyPromptAndOpenPane(t *testing.T) {
 	}
 	m.input.SetValue("3")
 	cmd := bhEnter(&m)
-	if m.pending["aaaa1111"] != "talvez" {
-		t.Fatalf("the bare number turns into the option label: %q", m.pending["aaaa1111"])
+	if m.app.Panes().Replies()["aaaa1111"] != "talvez" {
+		t.Fatalf("the bare number turns into the option label: %q", m.app.Panes().Replies()["aaaa1111"])
 	}
 	if m.active != "aaaa1111" || m.mode != modeNormal {
 		t.Fatal("reply shows the pane without focusing it")
@@ -108,7 +108,7 @@ func TestBehaviorReplyPromptAndOpenPane(t *testing.T) {
 		t.Fatal("the reply is scheduled for the pane")
 	}
 	enter := m.update(replyMsg{pane: "aaaa1111"})
-	if _, ok := m.pending["aaaa1111"]; ok {
+	if _, ok := m.app.Panes().Replies()["aaaa1111"]; ok {
 		t.Fatal("the pending reply is consumed")
 	}
 	msgs := bhRun(enter)
@@ -167,10 +167,10 @@ func TestBehaviorPaneOpenMsgStartsPane(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("starting a pane listens to it")
 	}
-	if m.panes["cccc3333"] == nil || m.paneOf["c"] != "cccc3333" || m.active != "cccc3333" {
+	if m.panes["cccc3333"] == nil || m.app.Panes().PaneOf("c") != "cccc3333" || m.active != "cccc3333" {
 		t.Fatal("the resumed session gets a pane")
 	}
-	if m.mode != modeInsert || m.pending["cccc3333"] != "olá" {
+	if m.mode != modeInsert || m.app.Panes().Replies()["cccc3333"] != "olá" {
 		t.Fatal("focused, with the reply pending")
 	}
 	// the attach exits (claude is /bin/false): the pane closes
@@ -386,18 +386,21 @@ func bhTodoModel(t *testing.T, jiraOn bool) Model {
 	cfg.UsageRefresh = 0
 	cfg.Jira.Enabled = jiraOn
 	cfg.Jira.DefaultProject, cfg.Jira.DefaultType = "PROJ", "Task"
+	cfg.Jira.CacheMinutes = 60
 	m := bhModelCfg(t, cfg, bhSessions()...)
-	m.tasks = []todo.Group{{Group: "hoje", Tasks: []todo.Task{
+	bhSetTodos(t, &m, []todo.Group{{Group: "hoje", Tasks: []todo.Task{
 		{ID: 1, Title: "escrever testes", Contexts: []string{"@repo"}},
 		{ID: 2, Title: "já no jira", Refs: []todo.Ref{{Kind: "jira", Value: "PROJ-7"}}},
-	}}}
+	}}})
 	recent := time.Now().Add(-time.Hour).Format("2006-01-02T15:04:05.000-0700")
 	old := time.Now().Add(-200 * 24 * time.Hour).Format("2006-01-02T15:04:05.000-0700")
-	m.jira = jira.Cache{Issues: []jira.Issue{
-		{Key: "PROJ-7", Summary: "ligada", Updated: recent, URL: "https://x/PROJ-7"},
-		{Key: "PROJ-8", Summary: "solta", Updated: recent, URL: "https://x/PROJ-8"},
-		{Key: "PROJ-1", Summary: "velha", Updated: old},
-	}}
+	if jiraOn {
+		bhSetJira(t, &m, jira.Cache{Issues: []jira.Issue{
+			{Key: "PROJ-7", Summary: "ligada", Updated: recent, URL: "https://x/PROJ-7"},
+			{Key: "PROJ-8", Summary: "solta", Updated: recent, URL: "https://x/PROJ-8"},
+			{Key: "PROJ-1", Summary: "velha", Updated: old},
+		}})
+	}
 	m.tab = tabTodos
 	m.rebuildTodos()
 	return m
@@ -514,15 +517,16 @@ func TestBehaviorJiraActionRows(t *testing.T) {
 func TestBehaviorJiraFetchKey(t *testing.T) {
 	m := bhTodoModel(t, true)
 	_, cmd := m.keyNormal(bhRune('F'))
-	if cmd == nil || !m.jiraLoading {
+	if cmd == nil || !m.app.JiraLoading() {
 		t.Fatal("F fetches")
 	}
 	if m.fetchJira(true) != nil {
 		t.Fatal("one fetch at a time")
 	}
-	m.jiraLoading = false
-	m.cfg.Jira.CacheMinutes = 60
-	m.jira.FetchedAt = time.Now()
+	// the fetch ends with a fresh cache
+	_, jf := bhFakes(&m)
+	jf.Cache.FetchedAt, jf.Errs["Fetch"] = time.Now(), nil
+	bhRun(cmd)
 	if m.fetchJira(false) != nil {
 		t.Fatal("a fresh cache is not refetched")
 	}
@@ -622,7 +626,7 @@ func TestBehaviorTodoStartDoneAndBrowser(t *testing.T) {
 		t.Fatalf("without the todo skill the reload fails: %+v", msgs[0])
 	}
 	m.update(msgs[0])
-	if m.todoErr == nil {
+	if m.app.Todos().Error() == nil {
 		t.Fatal("the error is kept for the view")
 	}
 	m.keyNormal(bhRune('D'))
@@ -649,8 +653,10 @@ func TestBehaviorTodoStartDoneAndBrowser(t *testing.T) {
 		t.Fatal("D on an issue does nothing")
 	}
 	// todosMsg success replaces the tasks
-	m.update(todosMsg{groups: []todo.Group{{Group: "g", Tasks: []todo.Task{{ID: 9}}}}})
-	if m.todoErr != nil || len(m.tasks) != 1 || m.todos[0].task.ID != 9 {
+	td, _ := bhFakes(&m)
+	td.Groups, td.Errs["List"] = []todo.Group{{Group: "g", Tasks: []todo.Task{{ID: 9}}}}, nil
+	m.update(todosCmd(m.app.LoadTodos)())
+	if m.app.Todos().Error() != nil || len(m.app.Todos().Groups) != 1 || m.todos[0].task.ID != 9 {
 		t.Fatal("todosMsg loads the tasks")
 	}
 }
@@ -658,14 +664,14 @@ func TestBehaviorTodoStartDoneAndBrowser(t *testing.T) {
 func TestBehaviorTodosTabTriggersLoads(t *testing.T) {
 	m := bhTodoModel(t, true)
 	m.tab = tabSessions
-	m.keyNormal(bhRune('3'))
-	if !m.jiraLoading {
+	_, cmd := m.keyNormal(bhRune('3'))
+	if !m.app.JiraLoading() {
 		t.Fatal("opening todos fetches a stale jira cache")
 	}
-	m.jiraLoading = false
+	bhRun(cmd) // the fetch ends (claude missing: the cache stays stale)
 	m.tab = tabInbox
 	m.keyNormal(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.tab != tabTodos || !m.jiraLoading {
+	if m.tab != tabTodos || !m.app.JiraLoading() {
 		t.Fatal("tab into todos fetches too")
 	}
 	// n and m do nothing in todos

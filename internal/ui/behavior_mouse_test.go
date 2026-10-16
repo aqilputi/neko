@@ -105,10 +105,10 @@ func TestBehaviorClickInbox(t *testing.T) {
 
 func TestBehaviorClickTodos(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.tasks = []todo.Group{
+	bhSetTodos(t, &m, []todo.Group{
 		{Group: "g1", Tasks: []todo.Task{{ID: 1, Title: "um"}, {ID: 2, Title: "dois"}}},
 		{Group: "g2", Tasks: []todo.Task{{ID: 3, Title: "três"}}},
-	}
+	})
 	m.rebuildTodos()
 	m.tab = tabTodos
 	// lines: [g1] 1 2 [g2] 3

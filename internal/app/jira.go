@@ -90,20 +90,34 @@ func (a *App) JiraErr() error {
 // reports whether it did) and publishes jira.changed. A failure keeps the
 // last list.
 func (a *App) FetchJira(force bool) (c jira.Cache, ran bool, err error) {
+	run := a.BeginJiraFetch(force)
+	if run == nil {
+		return a.JiraCache(), false, nil
+	}
+	c, err = run()
+	return c, true, err
+}
+
+// BeginJiraFetch is FetchJira in two halves, for a client with a UI thread:
+// the guard runs now and, when it says fetch, JiraLoading turns true at
+// once; run (nil when there is nothing to fetch) then does the fetch off
+// that thread, keeps the result and publishes jira.changed.
+func (a *App) BeginJiraFetch(force bool) (run func() (jira.Cache, error)) {
 	cfg := a.cfg.Jira
 	s := a.tj()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	a.readCacheLocked(s)
 	if !JiraShouldFetch(cfg, s.cache, s.loading, force, a.clock.Now()) {
-		c = s.cache
-		s.mu.Unlock()
-		return c, false, nil
+		return nil
 	}
 	s.loading = true
-	s.mu.Unlock()
+	return func() (jira.Cache, error) { return a.endJiraFetch(cfg) }
+}
 
+func (a *App) endJiraFetch(cfg jira.Config) (c jira.Cache, err error) {
+	s := a.tj()
 	got, err := a.ports.Jira.Fetch(cfg)
-
 	s.mu.Lock()
 	s.loading, s.jiraErr = false, err
 	if err == nil {
@@ -116,7 +130,7 @@ func (a *App) FetchJira(force bool) (c jira.Cache, ran bool, err error) {
 		ev.Err = err.Error()
 	}
 	a.Publish(EvJiraChanged, ev)
-	return c, true, err
+	return c, err
 }
 
 func issueByKey(c jira.Cache, key string) *jira.Issue {

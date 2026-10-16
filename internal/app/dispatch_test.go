@@ -40,8 +40,9 @@ func TestDispatchPlainHasNoModeFlag(t *testing.T) {
 	if e := next(t, ev, app.EvDispatched); e.Data != (app.Dispatched{ID: "abcd1234", Dir: "/r", Name: "n"}) {
 		t.Fatalf("dispatched = %+v", e.Data)
 	}
-	if e := next(t, ev, app.EvToast); e.Data != (app.ToastData{Text: "agent abcd1234 disparado"}) {
-		t.Fatalf("toast = %+v", e.Data)
+	// the toast is the Result's alone: no toast event doubles it
+	if got := grpNamed(grpDrain(ev), app.EvToast); len(got) != 0 {
+		t.Fatalf("toast published: %+v", got)
 	}
 	if f.Todo.Count("Start") != 0 {
 		t.Fatal("no task: the todo list is left alone")

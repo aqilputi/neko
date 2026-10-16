@@ -20,13 +20,13 @@ func TestRenameAndMove(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 	t.Setenv("NEKO_CLAUDE", "/bin/false")
 	cfg := config.Default()
-	m := New(cfg)
+	m := newTestModel(cfg)
 	m.w, m.h = 120, 40
 	ctx := cfg.ContextFor("/tmp")
-	m.snap = store.Snapshot{Sessions: []store.Session{
+	setSnap(&m, store.Snapshot{Sessions: []store.Session{
 		{SessionID: "a", Name: "a", Cwd: "/tmp", Context: ctx},
 		{SessionID: "b", Name: "b", Cwd: "/tmp", Context: ctx},
-	}}
+	}})
 	m.rebuild()
 	pick := func(id string) {
 		for i, r := range m.rows {

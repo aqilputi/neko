@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/cat"
 	"github.com/aqilputi/nekuroddo/internal/claude"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
@@ -83,11 +84,11 @@ func TestBehaviorAnimClock(t *testing.T) {
 func TestBehaviorFocusAndBackground(t *testing.T) {
 	m := bhModel(t)
 	m.update(tea.BlurMsg{})
-	if m.focused {
+	if m.app.Focused() {
 		t.Fatal("blur")
 	}
 	m.update(tea.FocusMsg{})
-	if !m.focused {
+	if !m.app.Focused() {
 		t.Fatal("focus")
 	}
 	m.update(tea.BackgroundColorMsg{Color: color.Black})
@@ -111,7 +112,7 @@ func TestBehaviorSnapAndTick(t *testing.T) {
 		t.Fatal("no second refresh while one runs")
 	}
 	m.refreshAgain = true
-	cmd := m.update(snapMsg(store.Snapshot{Sessions: bhSessions()}))
+	cmd := m.update(snapMsg{snap: store.Snapshot{Sessions: bhSessions()}})
 	if cmd == nil || len(m.rows) == 0 {
 		t.Fatal("snapMsg rebuilds and schedules the next tick")
 	}
@@ -164,10 +165,11 @@ func TestBehaviorUsageMessages(t *testing.T) {
 	if !m.cat.Awake() {
 		t.Fatal("the cat meows at a threshold")
 	}
-	if m.usageErr != nil || m.usage.Raw == "" {
+	if rep, err := m.app.Usage(); err != nil || rep.Raw == "" {
 		t.Fatal("the report is kept")
 	}
-	if m.update(usageMsg{err: errors.New("boom")}) == nil || m.usageErr == nil || m.usage.Raw == "" {
+	next := m.update(usageMsg{err: errors.New("boom")})
+	if rep, err := m.app.Usage(); next == nil || err == nil || rep.Raw == "" {
 		t.Fatal("an error keeps the last report and still schedules the next poll")
 	}
 	if m.update(usageTickMsg{}) == nil {
@@ -192,7 +194,7 @@ func TestBehaviorEventsFlow(t *testing.T) {
 	if _, ok := msgs[0].(eventsMsg); !ok {
 		t.Fatalf("poll: %T", msgs[0])
 	}
-	if m.onEvents(nil) != nil || m.hooksSeen {
+	if m.onEvents(nil) != nil || m.app.HooksSeen() {
 		t.Fatal("no events: nothing")
 	}
 	if m.update(eventsMsg(nil)) == nil {
@@ -201,11 +203,11 @@ func TestBehaviorEventsFlow(t *testing.T) {
 
 	// a notification while refreshing: meow, refresh again after
 	m.update(eventsMsg{{Name: "Notification", Type: "permission_prompt", SessionID: "a", Message: "pode rodar?"}})
-	if !m.hooksSeen || m.events["a"].Message != "pode rodar?" || !m.cat.Awake() || !m.refreshAgain {
+	if e, _ := m.app.LastEvent("a"); !m.app.HooksSeen() || e.Message != "pode rodar?" || !m.cat.Awake() || !m.refreshAgain {
 		t.Fatal("a notification is recorded, meows and asks for a refresh")
 	}
 	// away from the terminal: bell + desktop notification (notify-send is not on PATH here)
-	m.focused = false
+	m.app.SetFocused(false)
 	cmd := m.onEvents([]events.Event{{Name: "Notification", SessionID: "b"}})
 	var raw bool
 	for _, msg := range bhRun(cmd) {
@@ -228,8 +230,8 @@ func TestBehaviorEventsFlow(t *testing.T) {
 }
 
 func TestBehaviorNotice(t *testing.T) {
-	m := bhModel(t, bhSessions()...)
-	if m.notice() != nil || m.cat.Awake() {
+	m := bhModel(t, bhSessions()...) // the core saw these states first (setSnap)
+	if msg := bhRefreshMsg(t, &m); m.showNotices(msg.notices) != nil || m.cat.Awake() {
 		t.Fatal("the first snapshot only records states")
 	}
 	cases := []struct {
@@ -244,19 +246,17 @@ func TestBehaviorNotice(t *testing.T) {
 		{"two return", func(ss []store.Session) { ss[0].State = "done"; ss[1].State = "blocked" }, true},
 	}
 	for _, c := range cases {
-		c.change(m.snap.Sessions)
-		fresh := bhModel(t)
-		fresh.app = m.app // the previous states live in app
-		fresh.snap = m.snap
-		fresh.notice()
-		if fresh.cat.Awake() != c.meow {
-			t.Errorf("%s: meow=%v want %v", c.name, fresh.cat.Awake(), c.meow)
+		c.change(m.snap.Sessions) // shared with the store the refresh reads
+		m.cat = cat.New()         // a fresh cat for each case
+		m.update(bhRefreshMsg(t, &m))
+		if m.cat.Awake() != c.meow {
+			t.Errorf("%s: meow=%v want %v", c.name, m.cat.Awake(), c.meow)
 		}
 	}
 	// away: bell and desktop notification
-	m.focused = false
+	m.app.SetFocused(false)
 	m.snap.Sessions[2].State = "blocked"
-	cmd := m.notice()
+	cmd := m.showNotices(bhRefreshMsg(t, &m).notices)
 	if cmd == nil {
 		t.Fatal("away from the terminal a return rings")
 	}
@@ -264,18 +264,29 @@ func TestBehaviorNotice(t *testing.T) {
 
 func TestBehaviorTodosAndJiraMessages(t *testing.T) {
 	m := bhTodoModel(t, true)
-	if tm, ok := bhHasToast(m.update(jiraMsg{err: errors.New("sem rede")}), "jira: sem rede"); !ok || !tm.err {
+	// each jiraMsg comes from a real fetch through the core
+	_, jf := bhFakes(&m)
+	fetched := func() tea.Msg {
+		msgs := bhRun(m.fetchJira(true))
+		if len(msgs) != 1 {
+			t.Fatalf("fetch: %v", msgs)
+		}
+		return msgs[0]
+	}
+	jf.Errs["Fetch"] = errors.New("sem rede")
+	if tm, ok := bhHasToast(m.update(fetched()), "jira: sem rede"); !ok || !tm.err {
 		t.Fatal("jira errors are shown")
 	}
-	if m.jiraErr == nil || m.jiraLoading {
+	if m.app.JiraErr() == nil || m.app.JiraLoading() {
 		t.Fatal("error kept, loading over")
 	}
-	m.jiraLoading = true
-	cmd := m.update(jiraMsg{cache: jira.Cache{CostUSD: 0.12, Issues: []jira.Issue{{Key: "N-1", Updated: time.Now().Format("2006-01-02T15:04:05.000-0700")}}}})
+	jf.Errs["Fetch"] = nil
+	jf.Cache = jira.Cache{CostUSD: 0.12, Issues: []jira.Issue{{Key: "N-1", Updated: time.Now().Format("2006-01-02T15:04:05.000-0700")}}}
+	cmd := m.update(fetched())
 	if _, ok := bhHasToast(cmd, "jira: 1 issues (custou $0.12)"); !ok {
 		t.Fatal("jira result announced")
 	}
-	if m.jiraErr != nil || m.jiraLoading || len(m.todos) != 3 {
+	if m.app.JiraErr() != nil || m.app.JiraLoading() || len(m.todos) != 3 {
 		t.Fatalf("todos rebuilt with the issue: %d", len(m.todos))
 	}
 }
@@ -293,11 +304,11 @@ func TestBehaviorJiraCreatedMessages(t *testing.T) {
 		t.Fatal("without a hint the error points to the log")
 	}
 	cmd := m.update(jiraCreatedMsg{task: 4, key: "PROJ-9", cost: 0.3})
+	if !m.app.JiraLoading() { // before running cmd, which ends the fetch
+		t.Fatal("creating refetches jira")
+	}
 	if _, ok := bhHasToast(cmd, "PROJ-9 criada e ligada ao #4 ($0.30)"); !ok {
 		t.Fatal("created and linked")
-	}
-	if !m.jiraLoading {
-		t.Fatal("creating refetches jira")
 	}
 }
 
@@ -392,7 +403,7 @@ func TestBehaviorWindowPctAndText(t *testing.T) {
 	if m.windowPct(s) != 0 {
 		t.Fatal("no usage report: 0")
 	}
-	m.usage = bhUsage(40)
+	m.app.OnUsage(bhUsage(40), nil)
 	if m.windowPct(s) != 0 {
 		t.Fatal("nothing in the snapshot used the window: 0")
 	}

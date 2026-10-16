@@ -18,10 +18,8 @@ const rhJiraTime = "2006-01-02T15:04:05.000-0700"
 // rhTodoModel: two initiatives of tasks and two Jira issues (one old).
 func rhTodoModel(t *testing.T) Model {
 	t.Helper()
-	m := rhModel(t)
-	m.todoAvail = true
-	m.cfg.Jira.Enabled = true
-	m.tasks = []todo.Group{
+	m := rhTodoBase(t)
+	bhSetTodos(t, &m, []todo.Group{
 		{Group: "trabalho", Tasks: []todo.Task{
 			{ID: 7, Title: "subir o rc", Status: "doing", Initiative: "trabalho", Priority: rhInt(1),
 				When: rhStr("2026-10-20"), Contexts: []string{"@neko"},
@@ -35,17 +33,30 @@ func rhTodoModel(t *testing.T) Model {
 			{ID: 10, Title: "pagar conta", Status: "done"},
 			{ID: 11, Title: "status estranho", Status: "???"},
 		}},
-	}
+	})
 	now := time.Now()
-	m.jira = jira.Cache{FetchedAt: now.Add(-10 * time.Minute), Issues: []jira.Issue{
+	bhSetJira(t, &m, jira.Cache{FetchedAt: now.Add(-10 * time.Minute), Issues: []jira.Issue{
 		{Key: "VIS-1", Summary: "rc quebrado", Status: "In Progress", StatusCat: "indeterminate", Type: "Bug",
 			Priority: "High", Updated: now.Add(-time.Hour).Format(rhJiraTime), URL: "https://jira/VIS-1", Desc: "o **rc** não sobe"},
 		{Key: "VIS-2", Summary: "issue nova", Status: "To Do", StatusCat: "new", Updated: now.Add(-2 * time.Hour).Format(rhJiraTime)},
 		{Key: "VIS-3", Summary: "fechada", Status: "Done", StatusCat: "done", Updated: now.Format(rhJiraTime)},
 		{Key: "VIS-4", Summary: "estranha", StatusCat: "weird", Updated: now.Format(rhJiraTime)},
 		{Key: "VIS-0", Summary: "velha demais", StatusCat: "new", Updated: now.Add(-200 * 24 * time.Hour).Format(rhJiraTime)},
-	}}
+	}})
 	m.rebuildTodos()
+	return m
+}
+
+// rhTodoBase is rhModel with Jira on and the todo skill installed, over the
+// fake todo and Jira ports of bhModel (empty list, nothing fetched).
+func rhTodoBase(t *testing.T) Model {
+	t.Helper()
+	rhEnv(t)
+	cfg := config.Default()
+	cfg.Jira.Enabled = true
+	m := newTestModel(cfg, withFakeTodoJira)
+	m.w, m.h = 140, 40
+	m.todoAvail = true
 	return m
 }
 
@@ -59,13 +70,16 @@ func rhTodoCur(m *Model, match func(todoRow) bool) {
 }
 
 func TestRhTodoViewStates(t *testing.T) {
-	m := rhModel(t)
+	m := rhTodoBase(t)
 	m.todoAvail = false
 	rhHas(t, m.todoView(m.t(), 50, 10), "skill todo não encontrada")
 	m.todoAvail = true
-	m.todoErr = errors.New("todo list: python explodiu")
+	td, _ := bhFakes(&m)
+	td.Errs["List"] = errors.New("todo list: python explodiu")
+	_, _ = m.app.LoadTodos()
 	rhHas(t, m.todoView(m.t(), 50, 10), "python explodiu")
-	m.todoErr = nil
+	td.Errs["List"] = nil
+	_, _ = m.app.LoadTodos()
 	rhHas(t, m.todoView(m.t(), 50, 10), "lista vazia")
 }
 
@@ -102,7 +116,7 @@ func TestRhTodoViewTasksAndIssues(t *testing.T) {
 	rhHasNot(t, out, "velha demais") // untouched for months: hidden unless H
 
 	m.view.ShowAll = true
-	m.jiraLoading = true
+	m.app.BeginJiraFetch(true) // a fetch starts (never run here)
 	m.rebuildTodos()
 	out = m.todoView(m.t(), 80, 40)
 	rhHas(t, out, "velha demais", "buscando…")
@@ -158,7 +172,7 @@ func TestRhTodoDetailNothingSelected(t *testing.T) {
 
 func TestRhLongDescriptionKeepsHintVisible(t *testing.T) {
 	m := rhTodoModel(t)
-	m.jira.Issues[0].Desc = strings.Repeat("linha de descrição comprida. ", 300)
+	m.app.JiraCache().Issues[0].Desc = strings.Repeat("linha de descrição comprida. ", 300) // the cache shares its issues
 	rhTodoCur(&m, func(r todoRow) bool { return r.issue != nil && r.issue.Key == "VIS-1" })
 	const h = 20
 	out := m.todoDetail(m.t(), 50, h)
@@ -216,7 +230,7 @@ func TestRhTodoSliceThroughTheCore(t *testing.T) {
 	a := app.New(cfg, f.Ports())
 	defer a.Close()
 	s := newTodoJiraSlice(a)
-	if !s.todoAvail || len(s.jira.Issues) != 0 {
+	if !s.todoAvail || len(a.JiraCache().Issues) != 0 {
 		t.Fatalf("starts from the core: %+v", s)
 	}
 	m := NewWithApp(a)

@@ -229,20 +229,32 @@ func TestOnHookEventsNeedsYou(t *testing.T) {
 }
 
 func TestOnHookEventsPeer(t *testing.T) {
-	a, _ := newApp(t)
+	a, f := newApp(t)
+	f.Sessions.SetSnapshot(store.Snapshot{Sessions: []store.Session{
+		{SessionID: "a", Name: "alpha"}, {SessionID: "b", Name: "bravo"}}})
+	a.Refresh()
+	a.SetFocused(false) // a peer message never rings, even away
 	ev := a.Subscribe(t.Context())
 	n, refresh := a.OnHookEvents([]events.Event{
 		{Name: "UserPromptSubmit", Type: "peer", SessionID: "b", From: "alpha", Message: "oi"},
 	})
-	if n != nil || !refresh {
-		t.Fatalf("a peer message is no notice but refreshes: %+v", n)
+	if len(n) != 1 || n[0] != (app.Notice{Meow: "✉ alpha → bravo"}) || !refresh {
+		t.Fatalf("a peer message meows who told whom and refreshes: %+v", n)
 	}
 	if e, ok := a.LastEvent("b"); !ok || e.From != "alpha" {
 		t.Fatal("recorded")
 	}
-	// the client hands it to OnPeer (app/groups.go), which publishes peer.message
-	if got := watchDrain(ev); len(got) != 0 {
-		t.Fatalf("only recorded: %+v", got)
+	// OnPeer (app/groups.go) ran: ✉ on both ends, peer.message for every client
+	if c, ok := a.MailCueOf("a"); !ok || !c.Sent {
+		t.Fatal("sender cue")
+	}
+	evs := watchDrain(ev)
+	pm := watchNamed(evs, app.EvPeerMessage)
+	if len(pm) != 1 || pm[0].Data != (app.PeerMessage{To: "b", From: "alpha", FromID: "a", Text: "oi"}) {
+		t.Fatalf("peer.message: %+v", evs)
+	}
+	if len(watchNamed(evs, app.EvNotice)) != 0 || len(f.Notify.Notes()) != 0 {
+		t.Fatalf("no notice event, no desktop notification: %+v", evs)
 	}
 }
 
@@ -340,5 +352,23 @@ func TestOnUsageError(t *testing.T) {
 	}
 	if _, err := a.Usage(); err != nil {
 		t.Fatal("a good report clears the error")
+	}
+}
+
+func TestPollHookEvents(t *testing.T) {
+	a, f := newApp(t)
+	f.Events.Push(events.Event{SessionID: "a", Name: "Stop"})
+	if got := a.PollHookEvents(); len(got) != 1 || got[0].SessionID != "a" {
+		t.Fatalf("poll: %+v", got)
+	}
+	if got := a.PollHookEvents(); len(got) != 0 {
+		t.Fatalf("only new events: %+v", got)
+	}
+	p := apptest.Ports()
+	p.Events = nil
+	b := app.New(config.Default(), p)
+	defer b.Close()
+	if b.PollHookEvents() != nil {
+		t.Fatal("no log: nothing")
 	}
 }

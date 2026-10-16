@@ -20,7 +20,9 @@ func sessApp(t *testing.T, ss ...store.Session) (*app.App, *apptest.Fakes) {
 	f := apptest.New()
 	a := app.New(config.Default(), f.Ports())
 	t.Cleanup(a.Close)
-	a.UseSnapshot(store.Snapshot{Sessions: ss})
+	f.Sessions.SetSnapshot(store.Snapshot{Sessions: ss})
+	a.Refresh()
+	f.Sessions.Reset()
 	return a, f
 }
 

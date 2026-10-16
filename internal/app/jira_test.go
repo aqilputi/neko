@@ -144,6 +144,24 @@ func TestFetchJiraFreshnessAndGuard(t *testing.T) {
 	}
 }
 
+func TestBeginJiraFetchMarksLoadingAtOnce(t *testing.T) {
+	a, f := tjApp(t)
+	f.Jira.Cache = jira.Cache{FetchedAt: f.Clock.Now(), Issues: []jira.Issue{{Key: "PROJ-8"}}}
+	run := a.BeginJiraFetch(false)
+	if run == nil || !a.JiraLoading() || f.Jira.Count("Fetch") != 0 {
+		t.Fatal("the guard said fetch: loading now, fetching later")
+	}
+	if a.BeginJiraFetch(true) != nil {
+		t.Fatal("one fetch at a time")
+	}
+	if c, err := run(); err != nil || len(c.Issues) != 1 || a.JiraLoading() {
+		t.Fatalf("run fetches and ends the loading: %v", err)
+	}
+	if a.BeginJiraFetch(false) != nil {
+		t.Fatal("fresh: nothing to run")
+	}
+}
+
 // slowJira blocks Fetch until released, to see the loading guard.
 type slowJira struct {
 	apptest.FakeJira

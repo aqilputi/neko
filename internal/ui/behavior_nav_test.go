@@ -523,7 +523,7 @@ func TestBehaviorPaneKeysWithPane(t *testing.T) {
 	if m.panes["aaaa1111"] != nil || m.active != "" || m.zoom || m.mode != modeNormal {
 		t.Fatal("w closes the pane, the zoom and INSERT")
 	}
-	if _, ok := m.paneOf["a"]; ok {
+	if m.app.Panes().PaneOf("a") != "" {
 		t.Fatal("closing forgets the session's pane")
 	}
 }

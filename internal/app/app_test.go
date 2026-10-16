@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/app/apptest"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
+	"github.com/aqilputi/nekuroddo/internal/groups"
 	"github.com/aqilputi/nekuroddo/internal/store"
 )
 
@@ -144,5 +146,81 @@ func TestContextTargets(t *testing.T) {
 	}
 	if got := (app.Context{}).Targets(); got != nil {
 		t.Fatal(got)
+	}
+}
+
+// planNames are plan §2.4's v1 command names (core and client scope).
+var planNames = strings.Fields(`session.open session.preview session.fullscreen session.insert session.reply
+	session.new session.stop session.remove session.archive session.rename session.move
+	sessions.archive_stale sessions.remove_ended sessions.refresh group.add group.remove
+	group.notify group.dissolve todo.dispatch todo.start todo.done jira.toggle jira.fetch
+	jira.open_url pane.close pane.zoom usage.show inbox.summon app.quit
+	nav.up nav.down nav.top nav.bottom nav.half_up nav.half_down nav.page_up nav.page_down
+	nav.collapse nav.expand nav.pick nav.next_attention nav.prev_attention
+	tab.sessions tab.inbox tab.todos tab.archive tab.next tab.prev view.filter view.show_all
+	view.sort view.theme palette.open switcher.open help.open`)
+
+func TestRegisterBuiltins(t *testing.T) {
+	a, f := newApp(t)
+	f.Sessions.SetSnapshot(store.Snapshot{Sessions: []store.Session{{SessionID: "a"}}})
+	a.Refresh()
+	if err := a.RegisterBuiltins(); err != nil {
+		t.Fatal(err)
+	}
+	inPlan := map[string]bool{}
+	for _, n := range planNames {
+		inPlan[n] = true
+	}
+	seen := map[string]bool{}
+	// a full selection, so no command hides behind Available
+	ctx := app.Context{SessionID: "a", TodoID: 1, IssueKey: "K-1"}
+	for _, c := range a.Registry().List(ctx) {
+		if seen[c.Name] {
+			t.Errorf("%s listed twice", c.Name)
+		}
+		seen[c.Name] = true
+		if !inPlan[c.Name] {
+			t.Errorf("%s is not a plan §2.4 name", c.Name)
+		}
+	}
+	for _, n := range []string{
+		"session.open", "session.preview", "session.fullscreen", "session.new", "session.stop",
+		"session.remove", "session.archive", "session.rename", "session.move",
+		"sessions.archive_stale", "sessions.remove_ended",
+		"group.add", "group.remove", "group.notify", "group.dissolve",
+		"todo.start", "todo.done", "jira.toggle", "jira.fetch", "jira.open_url",
+		"pane.close", "pane.zoom",
+	} {
+		if !seen[n] {
+			t.Errorf("%s not registered by RegisterBuiltins", n)
+		}
+	}
+	if err := a.RegisterBuiltins(); !errors.Is(err, app.ErrDuplicateCommand) {
+		t.Fatalf("twice: %v", err)
+	}
+}
+
+func TestRefreshNoticesObservesAndSyncsGroups(t *testing.T) {
+	a, f := newApp(t)
+	g := f.Groups.Load()
+	g.Add("t", groups.Member{SessionID: "a", Name: "velho"})
+	if err := f.Groups.Save(g); err != nil {
+		t.Fatal(err)
+	}
+	f.Sessions.SetSnapshot(store.Snapshot{Sessions: []store.Session{{SessionID: "a", Name: "alpha", State: "busy"}}})
+	if _, ns := a.RefreshNotices(); ns != nil {
+		t.Fatalf("first sight only records the states: %+v", ns)
+	}
+	if got := f.Groups.Load().Groups["t"][0].Name; got != "alpha" || a.Groups().Groups["t"][0].Name != "alpha" {
+		t.Fatalf("the refresh keeps the members' names in step: %q", got)
+	}
+	ev := a.Subscribe(t.Context())
+	f.Sessions.SetSnapshot(store.Snapshot{Sessions: []store.Session{{SessionID: "a", Name: "alpha", State: "blocked"}}})
+	snap, ns := a.RefreshNotices()
+	if len(snap.Sessions) != 1 || len(ns) != 1 || ns[0].Meow != "miau! alpha voltou" {
+		t.Fatalf("a return makes a notice: %+v", ns)
+	}
+	if e := next(t, ev, app.EvSessionState); e.Data != (app.SessionState{ID: "a", Prev: "busy", State: "blocked"}) {
+		t.Fatalf("session.state: %+v", e.Data)
 	}
 }

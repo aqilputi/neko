@@ -113,8 +113,8 @@ func TestRhTreeArchiveTab(t *testing.T) {
 
 func TestRhTreePickedAndGroups(t *testing.T) {
 	m := rhFilled(t)
-	m.grp.Add("deploy-rc", groups.Member{SessionID: "a", Name: "deploy do rc"}, groups.Member{SessionID: "b", Name: "migração"})
-	m.grp.Add("outro", groups.Member{SessionID: "a", Name: "deploy do rc"})
+	bhSaveGroup(t, &m, "deploy-rc", groups.Member{SessionID: "a", Name: "deploy do rc"}, groups.Member{SessionID: "b", Name: "migração"})
+	bhSaveGroup(t, &m, "outro", groups.Member{SessionID: "a", Name: "deploy do rc"})
 	m.picked["b"] = true
 	rhCursor(&m, "a")
 	out := m.treeView(m.t(), 80, 30)
@@ -139,9 +139,9 @@ func TestRhTreePickedAndGroups(t *testing.T) {
 
 func TestRhTreeMailMark(t *testing.T) {
 	m := rhFilled(t)
-	m.mail["a"] = mailCue{at: time.Now(), sent: true}
-	m.mail["b"] = mailCue{at: time.Now().Add(-5 * time.Minute)} // dim, still shown
-	m.mail["e"] = mailCue{at: time.Now().Add(-time.Hour)}       // gone
+	cue(t, &m, "a", time.Now(), true)
+	cue(t, &m, "b", time.Now().Add(-5*time.Minute), false) // dim, still shown
+	cue(t, &m, "e", time.Now().Add(-time.Hour), false)     // gone
 	out := m.treeView(m.t(), 80, 30)
 	if !strings.Contains(rhLineWith(out, "deploy do rc"), "✉→") || !strings.Contains(rhLineWith(out, "migração"), "✉←") {
 		t.Fatalf("mail cues missing:\n%s", ansi.Strip(out))

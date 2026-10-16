@@ -29,16 +29,6 @@ type SessionEffect struct {
 
 func refreshed(toast string) Result { return Result{Toast: toast, Data: SessionEffect{Refresh: true}} }
 
-// UseSnapshot makes snap the core's current snapshot without re-reading the
-// store: for a client that refreshes on its own (the TUI, until it follows
-// snapshot.changed). The session slice is shared, not copied, as with
-// Refresh: the session commands update it in place.
-func (a *App) UseSnapshot(snap store.Snapshot) {
-	a.mu.Lock()
-	a.snap = snap
-	a.mu.Unlock()
-}
-
 // session finds id in the snapshot; a.mu must be held.
 func (a *App) sessionLocked(id string) *store.Session {
 	if id == "" {

@@ -1,18 +1,27 @@
 package ui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/app"
+	"github.com/aqilputi/nekuroddo/internal/app/apptest"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
+	"github.com/aqilputi/nekuroddo/internal/events"
+	"github.com/aqilputi/nekuroddo/internal/groups"
+	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/term"
+	"github.com/aqilputi/nekuroddo/internal/todo"
+	"github.com/aqilputi/nekuroddo/internal/wire"
 )
 
 // bhEnv isolates a test from the real machine: state, config, cache and HOME
@@ -36,15 +45,149 @@ func bhEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(root, "claude"))
 }
 
+// testStore is the real session store, except that Refresh returns the
+// snapshot a test chose (setSnap): a real app.Refresh then hands it to the
+// core and the TUI alike, as in the program.
+type testStore struct {
+	*store.Store
+	mu   sync.Mutex
+	snap *store.Snapshot
+}
+
+func (s *testStore) Refresh() store.Snapshot {
+	s.mu.Lock()
+	snap := s.snap
+	s.mu.Unlock()
+	if snap == nil {
+		return s.Store.Refresh()
+	}
+	return *snap
+}
+
+// newTestModel is New (the real adapters, every builtin command) with the
+// session store wrapped in a testStore; edit swaps other ports (fakes).
+func newTestModel(cfg config.Config, edit ...func(*app.Ports)) Model {
+	p := wire.Default(cfg)
+	p.Sessions = &testStore{Store: p.Sessions.(*store.Store)}
+	for _, e := range edit {
+		e(&p)
+	}
+	a := app.New(cfg, p)
+	if err := a.RegisterBuiltins(); err != nil {
+		panic(err)
+	}
+	return NewWithApp(a)
+}
+
+// setSnap makes snap the core's snapshot through a real refresh
+// (app.Refresh) and the TUI's: they share its sessions, as in the program.
+func setSnap(m *Model, snap store.Snapshot) {
+	ts := m.app.Ports().Sessions.(*testStore)
+	ts.mu.Lock()
+	ts.snap = &snap
+	ts.mu.Unlock()
+	m.snap = m.app.Refresh()
+}
+
+// bhRefreshMsg runs the TUI's own refresh (app.RefreshNotices) and returns
+// the message it makes, not yet handled.
+func bhRefreshMsg(t *testing.T, m *Model) snapMsg {
+	t.Helper()
+	m.refreshing = false
+	cmd := m.refresh()
+	if cmd == nil {
+		t.Fatal("no refresh")
+	}
+	return cmd().(snapMsg)
+}
+
+// errNoSkill and errNoClaude are what the fakes answer where the real todo
+// skill and claude are missing (bhEnv).
+var (
+	errNoSkill  = errors.New("todo: skill não encontrada")
+	errNoClaude = errors.New("claude: exit status 1")
+)
+
+// bhFakes are the todo and Jira ports of a bhModel: fakes answering as if
+// the todo skill and claude were missing until a test says otherwise.
+func bhFakes(m *Model) (*apptest.FakeTodo, *apptest.FakeJira) {
+	p := m.app.Ports()
+	return p.Todo.(*apptest.FakeTodo), p.Jira.(*apptest.FakeJira)
+}
+
+func withFakeTodoJira(p *app.Ports) {
+	td := &apptest.FakeTodo{Errs: map[string]error{}}
+	for _, op := range []string{"List", "Start", "Done", "LinkJira", "AddFromJira", "AddNote"} {
+		td.Errs[op] = errNoSkill
+	}
+	p.Todo = td
+	p.Jira = &apptest.FakeJira{Errs: map[string]error{"Fetch": errNoClaude, "Create": errNoClaude}}
+}
+
+// bhSetTodos makes groups the core's todo list (a real app.LoadTodos), then
+// the skill goes missing again.
+func bhSetTodos(t *testing.T, m *Model, groups []todo.Group) {
+	t.Helper()
+	td, _ := bhFakes(m)
+	td.Groups, td.Errs["List"] = groups, nil
+	if _, err := m.app.LoadTodos(); err != nil {
+		t.Fatal(err)
+	}
+	td.Errs["List"] = errNoSkill
+}
+
+// bhSetJira makes c the core's Jira cache (a real fetch, which needs Jira
+// on), then claude goes missing again.
+func bhSetJira(t *testing.T, m *Model, c jira.Cache) {
+	t.Helper()
+	_, jf := bhFakes(m)
+	jf.Cache, jf.Errs["Fetch"] = c, nil
+	run := m.app.BeginJiraFetch(true)
+	if run == nil {
+		t.Fatal("jira is off")
+	}
+	if _, err := run(); err != nil {
+		t.Fatal(err)
+	}
+	jf.Errs["Fetch"] = errNoClaude
+}
+
+// bhSaveGroup adds members to group tag on disk (as `:group` in another
+// nekuroddo would) and has the core reload the groups.
+func bhSaveGroup(t *testing.T, m *Model, tag string, ms ...groups.Member) {
+	t.Helper()
+	g := groups.Load()
+	g.Add(tag, ms...)
+	if err := g.Save(); err != nil {
+		t.Fatal(err)
+	}
+	m.app.ReloadGroups()
+}
+
+// cue puts a ✉ next to session id through the core (app.OnPeer, as a hook
+// event would): received at at, or sent by id when sent.
+func cue(t *testing.T, m *Model, id string, at time.Time, sent bool) {
+	t.Helper()
+	e := events.Event{At: at, Type: "peer", SessionID: id}
+	if sent {
+		s := m.session(id)
+		if s == nil {
+			t.Fatalf("no session %s", id)
+		}
+		e.SessionID, e.From = "someone-else", s.Label()
+	}
+	m.app.OnPeer(e)
+}
+
 // bhModelCfg builds a sized model over sessions. refreshing is left on so
-// commands built from it never spawn a real store refresh.
+// commands built from it never spawn a refresh by themselves.
 func bhModelCfg(t *testing.T, cfg config.Config, sessions ...store.Session) Model {
 	t.Helper()
 	bhEnv(t)
-	m := New(cfg)
+	m := newTestModel(cfg, withFakeTodoJira)
 	m.w, m.h = 140, 40
+	setSnap(&m, store.Snapshot{Sessions: sessions})
 	m.refreshing = true
-	m.snap = store.Snapshot{Sessions: sessions}
 	m.rebuild()
 	return m
 }
@@ -152,7 +295,7 @@ func bhPane(t *testing.T, m *Model, id, sid string) *term.Pane {
 	t.Cleanup(p.Close)
 	m.panes[id] = p
 	if sid != "" {
-		m.paneOf[sid] = id
+		m.app.Panes().Started(app.AttachPlan{SessionID: sid, ID: id}) // the core binds the session to it
 	}
 	return p
 }

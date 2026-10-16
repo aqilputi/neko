@@ -42,8 +42,10 @@ func (a *App) DispatchNeedsConfirm(mode string) bool {
 
 // Dispatch launches a background agent. A bypass that is not the
 // configured default comes back as a Pending confirmation; otherwise (or on
-// Confirm) claude runs, dispatched and a toast are published and the todo
+// Confirm) claude runs, dispatched is published and the todo
 // in TaskID, if any, is started and gets a note with the attach command.
+// The toast is only in the Result: the client that ran it shows it, and the
+// other clients learn of the agent from dispatched (one source per toast).
 func (a *App) Dispatch(req DispatchReq) (Result, error) {
 	if a.DispatchNeedsConfirm(req.PermMode) {
 		q := fmt.Sprintf("disparar em BYPASS (sem nenhuma checagem de permissão) em %s?\nos hooks, como o guarded-access, continuam valendo", config.Tilde(req.Dir))
@@ -64,7 +66,6 @@ func (a *App) dispatchNow(req DispatchReq) (Result, error) {
 	d := Dispatched{ID: id, Dir: req.Dir, Name: req.Name, TaskID: req.TaskID}
 	text := "agent " + id + " disparado"
 	a.Publish(EvDispatched, d)
-	a.Toast(text, false)
 	if req.TaskID > 0 {
 		// best effort, as before: the agent runs even if the todo skill is missing
 		_ = a.ports.Todo.Start(req.TaskID)

@@ -12,7 +12,6 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/claude"
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
-	"github.com/aqilputi/nekuroddo/internal/groups"
 	"github.com/aqilputi/nekuroddo/internal/store"
 )
 
@@ -32,9 +31,9 @@ func rhEnv(t *testing.T) {
 func rhModel(t *testing.T) Model {
 	t.Helper()
 	rhEnv(t)
-	m := New(config.Default())
+	m := newTestModel(config.Default())
 	m.w, m.h = 140, 40
-	m.grp = groups.Load()
+
 	return m
 }
 
@@ -84,8 +83,8 @@ func rhSessions() []store.Session {
 func rhFilled(t *testing.T) Model {
 	t.Helper()
 	m := rhModel(t)
-	m.snap = store.Snapshot{Sessions: rhSessions(), At: time.Now()}
-	m.usage = rhUsage()
+	setSnap(&m, store.Snapshot{Sessions: rhSessions(), At: time.Now()})
+	m.app.OnUsage(rhUsage(), nil)
 	m.rebuild()
 	return m
 }

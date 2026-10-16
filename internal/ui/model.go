@@ -66,15 +66,17 @@ type todoRow struct {
 // Model is the TUI: shared view state here, and one embedded struct per slice
 // (wave 2 of docs/plano-arquitetura.md), each declared in the slice's file.
 type Model struct {
-	cfg   config.Config
-	app   *app.App
-	store app.SessionRepository // ports.Sessions: the one store, shared with app
-	th    int
+	cfg config.Config
+	app *app.App // the core: every use case and all domain state live there
+	th  int
 
 	w, h int
 	tab  tab
 	mode mode
 
+	// snap is the core's snapshot as the last refresh (app.RefreshNotices)
+	// handed it over; its sessions are shared with the core, so the session
+	// commands' in-place changes (archive, rename…) show at once.
 	snap       store.Snapshot
 	refreshing bool
 
@@ -113,24 +115,31 @@ type Model struct {
 	notifySlice   // notify.go
 }
 
-// New builds the TUI over the real world (wire.Default).
+// New builds the TUI over the real world: the core over wire.Default's
+// adapters, with every builtin command registered. This is the only place
+// internal/ui reaches internal/wire (internal/archtest checks).
 func New(cfg config.Config) Model {
-	return NewWithApp(app.New(cfg, wire.Default(cfg)))
+	a := app.New(cfg, wire.Default(cfg))
+	if err := a.RegisterBuiltins(); err != nil {
+		// the builtins are fixed at compile time: a clash is a bug the
+		// app tests catch, never a runtime condition
+		panic(err)
+	}
+	return NewWithApp(a)
 }
 
-// NewWithApp builds the TUI over an existing core: its config, and its
-// ports' session store and hook event log (so there is one of each).
+// NewWithApp builds the TUI over an existing core (its config, its state).
 func NewWithApp(a *app.App) Model {
-	cfg, ports := a.Config(), a.Ports()
+	cfg := a.Config()
 	return Model{
-		cfg: cfg, app: a, store: ports.Sessions, th: theme.ByName(cfg.Theme),
+		cfg: cfg, app: a, th: theme.ByName(cfg.Theme),
 		view: core.NewViewState(cfg.Sort), cat: cat.New(), themeSet: cfg.Theme != "",
 		groupsSlice:   newGroupsSlice(),
 		sessionsSlice: newSessionsSlice(),
 		inputSlice:    newInputSlice(cfg),
 		paneSlice:     newPaneSlice(),
-		todoJiraSlice: newTodoJiraSlice(),
-		notifySlice:   newNotifySlice(ports),
+		todoJiraSlice: newTodoJiraSlice(a),
+		notifySlice:   newNotifySlice(),
 	}
 }
 
@@ -138,12 +147,17 @@ func (m Model) t() theme.Theme { return theme.All[m.th] }
 
 // ---- messages ----
 
-type snapMsg store.Snapshot
-type tickMsg struct{}
-type todosMsg struct {
-	groups []todo.Group
-	err    error
+// snapMsg is a finished refresh: the core's new snapshot and the notices
+// its transitions made (app.RefreshNotices).
+type snapMsg struct {
+	snap    store.Snapshot
+	notices []app.Notice
 }
+type tickMsg struct{}
+
+// todosMsg says the core reloaded the todo list (app.Todos has it); err is
+// that load's error.
+type todosMsg struct{ err error }
 type toastMsg struct {
 	text string
 	err  bool
@@ -179,17 +193,23 @@ type paneOpenMsg struct {
 }
 
 func (m Model) Init() tea.Cmd {
-	m.evTail.Poll() // start at the end: only new events matter
+	m.app.PollHookEvents() // start at the end: only new events matter
 	return tea.Batch(m.refresh(), m.loadTodos(), tea.RequestBackgroundColor, func() tea.Msg { return eventsTickMsg{} }, m.fetchUsage(false))
 }
 
+// refresh asks the core for a new snapshot (app.RefreshNotices, off the UI
+// goroutine). One at a time: a refresh asked meanwhile is coalesced by the
+// caller (refreshAgain).
 func (m *Model) refresh() tea.Cmd {
 	if m.refreshing {
 		return nil
 	}
 	m.refreshing = true
-	st := m.store
-	return func() tea.Msg { return snapMsg(st.Refresh()) }
+	a := m.app
+	return func() tea.Msg {
+		snap, notices := a.RefreshNotices()
+		return snapMsg{snap: snap, notices: notices}
+	}
 }
 
 func (m Model) scheduleTick() tea.Cmd {
@@ -259,7 +279,7 @@ func (m Model) ExitBanner() string {
 // (core.WindowPct over the /usage session limit; 0 when unknown).
 func (m *Model) windowPct(s *store.Session) float64 {
 	pct := 0
-	if l, ok := m.usage.Find("session"); ok {
+	if l, ok := m.usage().Find("session"); ok {
 		pct = l.Pct
 	}
 	costs := make([]float64, len(m.snap.Sessions))

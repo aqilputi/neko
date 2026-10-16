@@ -23,13 +23,13 @@ func groupModel(t *testing.T) Model {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
 	t.Setenv("NEKO_CLAUDE", "/bin/false") // refresh must not touch the real claude
-	m := New(config.Default())
+	m := newTestModel(config.Default())
 	m.w, m.h = 140, 40
-	m.snap = store.Snapshot{Sessions: []store.Session{
+	setSnap(&m, store.Snapshot{Sessions: []store.Session{
 		{SessionID: "a", Name: "deploy rc 1", Context: "ctx", State: "busy", LastAt: time.Now()},
 		{SessionID: "b", Name: "deploy rc 2", Context: "ctx", State: "busy", LastAt: time.Now().Add(-time.Minute)},
 		{SessionID: "c", Name: "outra coisa", Context: "ctx", LastAt: time.Now().Add(-2 * time.Minute)},
-	}}
+	}})
 	m.rebuild()
 	return m
 }
@@ -120,10 +120,10 @@ func TestPeerMessageCue(t *testing.T) {
 	m := groupModel(t)
 	m.onEvents([]events.Event{{At: time.Now(), Name: "UserPromptSubmit", SessionID: "b", Type: "peer",
 		From: "deploy rc 1", Message: "[#deploy-rc] bug: tag errada"}})
-	if c, ok := m.mail["b"]; !ok || c.sent {
+	if c, ok := m.app.MailCueOf("b"); !ok || c.Sent {
 		t.Fatal("receiver should get ✉←")
 	}
-	if c, ok := m.mail["a"]; !ok || !c.sent {
+	if c, ok := m.app.MailCueOf("a"); !ok || !c.Sent {
 		t.Fatal("sender, found by name, should get ✉→")
 	}
 	if !m.mailBlinking() {
@@ -139,7 +139,7 @@ func TestPeerMessageCue(t *testing.T) {
 		t.Fatalf("details should list the message:\n%s", detail)
 	}
 	// old cues fade out
-	m.mail["b"] = mailCue{at: time.Now().Add(-mailKeep - time.Second)}
+	cue(t, &m, "b", time.Now().Add(-mailKeep-time.Second), false)
 	if mark, _ := m.mailMark(m.t(), "b"); mark != "" {
 		t.Fatal("cue should be gone after mailKeep")
 	}
@@ -147,11 +147,7 @@ func TestPeerMessageCue(t *testing.T) {
 
 func TestNotifyQueuesForMembers(t *testing.T) {
 	m := groupModel(t)
-	m.grp = groups.Load()
-	m.grp.Add("deploy-rc", groups.Member{SessionID: "a", Name: "deploy rc 1"}, groups.Member{SessionID: "b", Name: "deploy rc 2"})
-	if err := m.grp.Save(); err != nil {
-		t.Fatal(err)
-	}
+	bhSaveGroup(t, &m, "deploy-rc", groups.Member{SessionID: "a", Name: "deploy rc 1"}, groups.Member{SessionID: "b", Name: "deploy rc 2"})
 	typePalette(&m, "notify #deploy-rc o bucket mudou")
 	for _, id := range []string{"a", "b"} {
 		var out strings.Builder

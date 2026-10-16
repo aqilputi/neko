@@ -68,17 +68,12 @@ type PaneManager struct {
 	replies map[string]PendingReply
 }
 
-var paneManagers sync.Map // *App → *PaneManager
+func newPaneManager(a *App) *PaneManager {
+	return &PaneManager{a: a, of: map[string]string{}, open: map[string]string{}, replies: map[string]PendingReply{}}
+}
 
 // Panes is the core's pane table (one per App).
-func (a *App) Panes() *PaneManager {
-	if pm, ok := paneManagers.Load(a); ok {
-		return pm.(*PaneManager)
-	}
-	pm, _ := paneManagers.LoadOrStore(a, &PaneManager{a: a,
-		of: map[string]string{}, open: map[string]string{}, replies: map[string]PendingReply{}})
-	return pm.(*PaneManager)
-}
+func (a *App) Panes() *PaneManager { return a.panes }
 
 // Open decides how to show s: reuse its pane if alive, attach it if it runs
 // in the background, or resume it first if it is history. alive is the

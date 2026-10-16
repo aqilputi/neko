@@ -56,7 +56,7 @@ func TestRhSessDetailArchivedHookAndHints(t *testing.T) {
 	m := rhFilled(t)
 	s := m.session("e")
 	s.Archived, s.ArchivedAt = true, time.Date(2026, 3, 4, 5, 6, 0, 0, time.Local)
-	m.events["e"] = events.Event{At: time.Now(), Name: "Notification", Message: "Claude needs your permission"}
+	m.app.OnHookEvents([]events.Event{{At: time.Now(), Name: "Notification", SessionID: "e", Message: "Claude needs your permission"}})
 	out := m.sessDetail(m.t(), s, 70)
 	rhHas(t, out, "arquivada", "04/03 05:06 · X restaura", "hook", "Notification · Claude needs your permission",
 		"aberta num terminal (pid 42)")
@@ -67,8 +67,8 @@ func TestRhSessDetailArchivedHookAndHints(t *testing.T) {
 
 func TestRhSessDetailGroups(t *testing.T) {
 	m := rhFilled(t)
-	m.grp.Add("deploy-rc", groups.Member{SessionID: "a", Name: "deploy do rc", Label: "deploy do rc"}, groups.Member{SessionID: "b", Name: "migração"})
-	m.addMsg(peerMsg{at: time.Now(), from: "a", to: "b", fromName: "deploy do rc", text: "bucket mudou"})
+	bhSaveGroup(t, &m, "deploy-rc", groups.Member{SessionID: "a", Name: "deploy do rc", Label: "deploy do rc"}, groups.Member{SessionID: "b", Name: "migração"})
+	m.app.OnPeer(events.Event{At: time.Now(), Type: "peer", SessionID: "b", From: "deploy do rc", Message: "bucket mudou"})
 	out := m.sessDetail(m.t(), m.session("a"), 70)
 	rhHas(t, out, "▍#deploy-rc", "com migração", "✉ mensagens", "→ migração", "bucket mudou")
 	out = m.sessDetail(m.t(), m.session("b"), 70)
@@ -80,7 +80,7 @@ func TestRhWindowLine(t *testing.T) {
 	b := m.session("a")
 	rhHas(t, m.windowLine(m.t(), b, rhBase(m)), "≈30% de 40% usados")
 	rhHas(t, m.windowLine(m.t(), m.session("c"), rhBase(m)), "sem uso nesta janela (total 40%)")
-	m.usage = claude.UsageReport{}
+	m.app.OnUsage(claude.UsageReport{}, nil)
 	rhHas(t, m.windowLine(m.t(), b, rhBase(m)), "— (sem /usage)")
 }
 

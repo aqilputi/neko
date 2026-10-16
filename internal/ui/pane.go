@@ -30,13 +30,6 @@ func (m *Model) paneAlive(id string) bool {
 	return p != nil && !p.Done()
 }
 
-// syncPaneMirror copies app's pane table into paneOf/pending (read-only
-// mirrors, kept until WP-2.7 removes them).
-func (m *Model) syncPaneMirror() {
-	pm := m.app.Panes()
-	m.paneOf, m.pending = pm.Bindings(), pm.Replies()
-}
-
 // openPane shows the session in the embedded pane as app plans it: reuse
 // the open pane, attach a background session, or resume a history one into
 // the daemon first (off the UI thread).
@@ -48,7 +41,6 @@ func (m *Model) openPane(s store.Session, focus bool, reply string) tea.Cmd {
 	}
 	switch {
 	case plan.Reuse:
-		m.syncPaneMirror()
 		m.active = plan.ID
 		if focus {
 			m.mode = modeInsert
@@ -79,7 +71,6 @@ func (m *Model) startPane(plan app.AttachPlan) tea.Cmd {
 		m.mode = modeInsert
 	}
 	m.app.Panes().Started(plan)
-	m.syncPaneMirror()
 	cmds := []tea.Cmd{listenPane(p)}
 	if plan.Reply != "" {
 		cmds = append(cmds, m.sendReplyLater(plan.ID, plan.ReplyIn))
@@ -104,7 +95,7 @@ func (m *Model) syncActive() {
 			alive[id] = true
 		}
 	}
-	m.active = core.ActivePane(m.active, sid, short, m.paneOf, alive, m.mode == modeInsert, m.zoom)
+	m.active = core.ActivePane(m.active, sid, short, m.app.Panes().Bindings(), alive, m.mode == modeInsert, m.zoom)
 }
 
 func (m *Model) closePane(id string) {
@@ -113,7 +104,6 @@ func (m *Model) closePane(id string) {
 		delete(m.panes, id)
 	}
 	m.app.Panes().Close(id)
-	m.syncPaneMirror()
 	if m.active == id {
 		m.active = ""
 		m.zoom = false
@@ -176,7 +166,6 @@ func (m *Model) onPaneExit(msg paneExitMsg) tea.Cmd {
 func (m *Model) onReply(msg replyMsg) tea.Cmd {
 	if p := m.panes[msg.pane]; p != nil {
 		if text, ok := m.app.Panes().TakeReply(msg.pane); ok && text != "" {
-			m.syncPaneMirror()
 			p.Paste(text)
 			return tea.Tick(150*time.Millisecond, func(time.Time) tea.Msg { return enterMsg(msg) })
 		}
@@ -191,16 +180,12 @@ func (m *Model) onEnter(msg enterMsg) tea.Cmd {
 	return toastCmd("resposta enviada ✓", false)
 }
 
-// paneSlice is the embedded claude panes: presentation only. paneOf and
-// pending mirror app.PaneManager (syncPaneMirror) for the tests until WP-2.7.
+// paneSlice is the embedded claude panes: presentation only (which session
+// a pane shows and the replies waiting for it are app.PaneManager's).
 type paneSlice struct {
-	panes   map[string]*term.Pane
-	active  string // pane id shown on the right (follows the selection, see syncActive)
-	zoom    bool
-	paneOf  map[string]string // mirror: sessionId → pane id
-	pending map[string]string // mirror: pane id → reply to type once it is ready
+	panes  map[string]*term.Pane
+	active string // pane id shown on the right (follows the selection, see syncActive)
+	zoom   bool
 }
 
-func newPaneSlice() paneSlice {
-	return paneSlice{panes: map[string]*term.Pane{}, paneOf: map[string]string{}, pending: map[string]string{}}
-}
+func newPaneSlice() paneSlice { return paneSlice{panes: map[string]*term.Pane{}} }

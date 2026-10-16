@@ -9,12 +9,10 @@ package app
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-	"weak"
 
 	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
@@ -114,35 +112,25 @@ type NotifyResult struct {
 	Stopped int    `json:"stopped"` // not running: they get it when they resume
 }
 
-// groupState is the groups slice's state. It lives beside App (App's struct
-// belongs to app.go) and is created on first use.
+// groupState is the groups slice's state (App.grp): the groups as last read
+// or written, the ✉ cues and the message log.
 type groupState struct {
 	mu   sync.Mutex
 	file groups.File
 	mail map[string]MailCue
 	msgs []PeerMsg
-
-	regOnce sync.Once
-	regErr  error
 }
 
-// Keyed weakly, so the state goes away with its App.
-var groupStates sync.Map // weak.Pointer[App] → *groupState
-
-func (a *App) groupState() *groupState {
-	k := weak.Make(a)
-	v, ok := groupStates.Load(k)
-	if !ok {
-		var loaded bool
-		v, loaded = groupStates.LoadOrStore(k, &groupState{file: a.ports.Groups.Load(), mail: map[string]MailCue{}})
-		if !loaded {
-			runtime.AddCleanup(a, func(k weak.Pointer[App]) { groupStates.Delete(k) }, k)
-		}
+// init starts from the groups on disk (none without a store).
+func (g *groupState) init(gs GroupStore) {
+	g.file = groups.File{Groups: map[string][]groups.Member{}}
+	g.mail = map[string]MailCue{}
+	if gs != nil {
+		g.file = groupsCopy(gs.Load())
 	}
-	g := v.(*groupState)
-	g.regOnce.Do(func() { g.regErr = a.registerGroupCommands() })
-	return g
 }
+
+func (a *App) groupState() *groupState { return &a.grp }
 
 func groupsCopy(f groups.File) groups.File {
 	c := groups.File{Groups: make(map[string][]groups.Member, len(f.Groups))}
@@ -158,6 +146,24 @@ func (a *App) Groups() groups.File {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return groupsCopy(g.file)
+}
+
+// TagsOf lists the groups session id belongs to (File.Of; no copy of the
+// whole file: renderers call it once per row).
+func (a *App) TagsOf(id string) []string {
+	g := a.groupState()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.file.Of(id)
+}
+
+// MailCueOf is the ✉ cue next to session id, if any.
+func (a *App) MailCueOf(id string) (MailCue, bool) {
+	g := a.groupState()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	c, ok := g.mail[id]
+	return c, ok
 }
 
 // Mail is a copy of the ✉ cues by session id.
@@ -215,13 +221,8 @@ func PeersIn(f groups.File, id string) []string {
 	return out
 }
 
-// groupSessionsOr is ss, or the app's snapshot when the client passed none.
-func (a *App) groupSessionsOr(ss []store.Session) []store.Session {
-	if len(ss) > 0 {
-		return ss
-	}
-	return a.Snapshot().Sessions
-}
+// groupSessions are the sessions of the core's snapshot.
+func (a *App) groupSessions() []store.Session { return a.Snapshot().Sessions }
 
 func groupFindSession(ss []store.Session, id string) *store.Session {
 	for i := range ss {
@@ -275,8 +276,9 @@ func (a *App) saveGroups(f groups.File) error {
 	return nil
 }
 
-// reloadGroups re-reads the store (another nekuroddo may have changed it).
-func (a *App) reloadGroups() groups.File {
+// ReloadGroups re-reads the groups (another nekuroddo, or the user's
+// editor, may have changed them) and makes them the core's.
+func (a *App) ReloadGroups() groups.File {
 	f := a.ports.Groups.Load()
 	g := a.groupState()
 	g.mu.Lock()
@@ -290,11 +292,11 @@ func groupFail(prefix string, err error) (Result, error) {
 }
 
 // GroupTargets puts the client's targets (picked sessions, else the one
-// under the cursor) in group tag. ss is the client's view of the sessions
-// (the app's snapshot when empty); ids it does not know are skipped.
-func (a *App) GroupTargets(ctx Context, tag string, ss ...store.Session) (Result, error) {
+// under the cursor) in group tag. Ids the core's snapshot does not know are
+// skipped.
+func (a *App) GroupTargets(ctx Context, tag string) (Result, error) {
 	tag = core.CleanTag(tag)
-	ss = a.groupSessionsOr(ss)
+	ss := a.groupSessions()
 	var ms []groups.Member
 	for _, id := range ctx.Targets() {
 		if s := groupFindSession(ss, id); s != nil {
@@ -304,7 +306,7 @@ func (a *App) GroupTargets(ctx Context, tag string, ss ...store.Session) (Result
 	if tag == "" || len(ms) == 0 {
 		return Result{Toast: "group: escolha sessões com space (ou ponha o cursor numa)", Err: true}, ErrNoTargets
 	}
-	f := a.reloadGroups()
+	f := a.ReloadGroups()
 	f.Add(tag, ms...)
 	if err := a.saveGroups(f); err != nil {
 		return groupFail("group: ", err)
@@ -317,7 +319,7 @@ func (a *App) GroupTargets(ctx Context, tag string, ss ...store.Session) (Result
 // when tag is "").
 func (a *App) UngroupTargets(ctx Context, tag string) (Result, error) {
 	tag = core.CleanTag(tag)
-	f := a.reloadGroups()
+	f := a.ReloadGroups()
 	n := f.Remove(tag, ctx.Targets()...)
 	if err := a.saveGroups(f); err != nil {
 		return groupFail("ungroup: ", err)
@@ -335,7 +337,7 @@ func (a *App) DissolveGroup(tag string) (Result, error) {
 	if tag == "" {
 		return Result{Toast: "dissolve: qual grupo?", Err: true}, ErrNoGroup
 	}
-	f := a.reloadGroups()
+	f := a.ReloadGroups()
 	delete(f.Groups, tag)
 	if err := a.saveGroups(f); err != nil {
 		return groupFail("", err)
@@ -347,13 +349,13 @@ func (a *App) DissolveGroup(tag string) (Result, error) {
 // NotifyGroup queues text for every member of tag; each gets it at its next
 // tool call or prompt, so sessions not running only see it when they resume
 // (they are counted in NotifyResult.Stopped and in the toast).
-func (a *App) NotifyGroup(tag, text string, ss ...store.Session) (Result, error) {
+func (a *App) NotifyGroup(tag, text string) (Result, error) {
 	tag = core.CleanTag(tag)
-	ms := a.reloadGroups().Groups[tag]
+	ms := a.ReloadGroups().Groups[tag]
 	if len(ms) == 0 {
 		return Result{Toast: "notify: #" + tag + " não existe", Err: true}, ErrNoGroup
 	}
-	ss = a.groupSessionsOr(ss)
+	ss := a.groupSessions()
 	now := a.clock.Now()
 	stopped := 0
 	for _, mb := range ms {
@@ -374,9 +376,10 @@ func (a *App) NotifyGroup(tag, text string, ss ...store.Session) (Result, error)
 }
 
 // OnPeer records a message one session sent another (a "peer" hook event):
-// ✉ on both ends and the message in the log. The sender is found by name.
-func (a *App) OnPeer(e events.Event, ss ...store.Session) PeerSeen {
-	ss = a.groupSessionsOr(ss)
+// ✉ on both ends and the message in the log. The sender is found by name in
+// the core's snapshot. OnHookEvents calls it for every "peer" event.
+func (a *App) OnPeer(e events.Event) PeerSeen {
+	ss := a.groupSessions()
 	now := e.At
 	if now.IsZero() {
 		now = a.clock.Now()
@@ -419,7 +422,7 @@ func (a *App) logPeerMsg(p PeerMsg) {
 // session: they are the SendMessage addresses. It saves, and publishes
 // group.changed, only when something changed.
 func (a *App) SyncGroupNames(ss []store.Session) (changed bool, err error) {
-	f := a.reloadGroups()
+	f := a.ReloadGroups()
 	for _, ms := range f.Groups {
 		for i, mb := range ms {
 			if s := groupFindSession(ss, mb.SessionID); s != nil {
@@ -440,11 +443,8 @@ func (a *App) SyncGroupNames(ss []store.Session) (changed bool, err error) {
 }
 
 // RegisterGroupCommands registers group.add, group.remove, group.notify and
-// group.dissolve (plan §2.4). It runs once per App; the slice's first use
-// calls it too.
-func (a *App) RegisterGroupCommands() error { return a.groupState().regErr }
-
-func (a *App) registerGroupCommands() error {
+// group.dissolve (plan §2.4).
+func (a *App) RegisterGroupCommands() error {
 	tagArg := core.Arg{Name: "tag", Type: core.ArgTag, Prompt: "grupo"}
 	reqTag := tagArg
 	reqTag.Required = true

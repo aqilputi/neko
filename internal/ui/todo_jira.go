@@ -1,8 +1,9 @@
 package ui
 
-// Slice "jira/todo": the todos tab. The use cases live in app (todo.go,
-// jira.go); this file keeps the tab's rows and cursor, asks for input and
-// turns the core's answers into messages.
+// Slice "jira/todo": the todos tab. The use cases and the state (the task
+// list, the Jira cache and its fetch) live in app (todo.go, jira.go); this
+// file keeps the tab's rows and cursor, asks for input and turns the core's
+// answers into messages.
 
 import (
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/todo"
-	"github.com/aqilputi/nekuroddo/internal/wire"
 )
 
 func (m *Model) curRow() *todoRow {
@@ -39,33 +39,35 @@ func (m *Model) todoForKey(key string) *todo.Task {
 	return nil
 }
 
-// issueForKey is the cached Jira issue with that key, if any.
+// issueForKey is the core's cached Jira issue with that key, if any.
 func (m *Model) issueForKey(key string) *jira.Issue {
 	if key == "" {
 		return nil
 	}
-	for i := range m.jira.Issues {
-		if m.jira.Issues[i].Key == key {
-			return &m.jira.Issues[i]
+	issues := m.app.JiraCache().Issues
+	for i := range issues {
+		if issues[i].Key == key {
+			return &issues[i]
 		}
 	}
 	return nil
 }
 
-// rebuildTodos flattens tasks and Jira issues (as the core last handed them
-// over) into the todos tab.
+// rebuildTodos flattens the core's tasks and Jira issues into the todos tab.
 func (m *Model) rebuildTodos() {
 	m.todos = m.todos[:0]
-	for gi := range m.tasks {
-		g := &m.tasks[gi]
+	tasks := m.app.Todos().Groups
+	for gi := range tasks {
+		g := &tasks[gi]
 		for i := range g.Tasks {
 			m.todos = append(m.todos, todoRow{group: g.Group, task: &g.Tasks[i]})
 		}
 	}
 	if m.cfg.Jira.Enabled {
 		now := m.app.Clock().Now()
-		for i := range m.jira.Issues {
-			is := &m.jira.Issues[i]
+		issues := m.app.JiraCache().Issues
+		for i := range issues {
+			is := &issues[i]
 			// Issues untouched for months stay out of the way unless H.
 			if !m.view.ShowAll && app.IssueStale(*is, now) {
 				continue
@@ -76,12 +78,12 @@ func (m *Model) rebuildTodos() {
 	m.todoCur = min(m.todoCur, max(len(m.todos)-1, 0))
 }
 
-// todosCmd runs a todo use case in the background and hands the reloaded
-// list to onTodos.
+// todosCmd runs a todo use case in the background; the core keeps the
+// reloaded list and onTodos redraws it.
 func todosCmd(run func() ([]todo.Group, error)) tea.Cmd {
 	return func() tea.Msg {
-		g, err := run()
-		return todosMsg{g, err}
+		_, err := run()
+		return todosMsg{err}
 	}
 }
 
@@ -91,7 +93,7 @@ func todoResult(res app.Result) tea.Msg {
 		return toastMsg{text: res.Toast, err: true}
 	}
 	l, _ := res.Data.(app.TodoList)
-	return todosMsg{l.Groups, l.Error()}
+	return todosMsg{l.Error()}
 }
 
 func (m Model) loadTodos() tea.Cmd {
@@ -103,14 +105,14 @@ func (m Model) loadTodos() tea.Cmd {
 
 // fetchJira refreshes the Jira list through headless claude (~$0.1 a call),
 // so it only runs on demand or when the cache is older than cache_minutes.
+// The core marks the fetch as running at once (the tab says "buscando…").
 func (m *Model) fetchJira(force bool) tea.Cmd {
-	if !app.JiraShouldFetch(m.cfg.Jira, m.jira, m.jiraLoading, force, m.app.Clock().Now()) {
+	run := m.app.BeginJiraFetch(force)
+	if run == nil {
 		return nil
 	}
-	m.jiraLoading = true
-	a := m.app
 	return func() tea.Msg {
-		c, _, err := a.FetchJira(force)
+		c, err := run()
 		return jiraMsg{c, err}
 	}
 }
@@ -126,7 +128,7 @@ func (m *Model) jiraAction() tea.Cmd {
 		return nil
 	}
 	if r.issue != nil {
-		a, groups, is := m.app, m.tasks, *r.issue
+		a, groups, is := m.app, m.app.Todos().Groups, *r.issue
 		return func() tea.Msg { return todoResult(a.IssueToTodo(groups, is.Key, is.Summary)) }
 	}
 	if err := app.TaskHasIssue(*r.task); err != nil {
@@ -190,41 +192,31 @@ func (m *Model) doneTodo() {
 	}
 }
 
-// openURL opens u in the browser through the Opener port.
-// TODO(WP-2.7): update.go calls this free function, which cannot reach
-// m.app; once it calls m.openIssueURL(u) this shim goes away.
-func openURL(u string) tea.Cmd { return openWith(wire.Opener{}, u) }
-
-// openIssueURL opens u through the core (app.OpenURL).
-func (m *Model) openIssueURL(u string) tea.Cmd { return openWith(m.app, u) }
-
-func openWith(o app.Opener, u string) tea.Cmd {
+// openIssueURL opens u in the browser through the core (app.OpenURL, the
+// Opener port).
+func (m *Model) openIssueURL(u string) tea.Cmd {
+	a := m.app
 	return func() tea.Msg {
-		if err := o.OpenURL(u); err != nil {
+		if err := a.OpenURL(u); err != nil {
 			return toastMsg{text: err.Error(), err: true}
 		}
 		return nil
 	}
 }
 
-func (m *Model) onTodos(msg todosMsg) tea.Cmd {
-	m.todoErr = msg.err
-	if msg.err == nil {
-		m.tasks = msg.groups
-	}
+// onTodos redraws the tab from the core's list (a failed load keeps the
+// last good one; the view shows the error).
+func (m *Model) onTodos(todosMsg) tea.Cmd {
 	m.rebuildTodos()
 	return nil
 }
 
 func (m *Model) onJira(msg jiraMsg) tea.Cmd {
-	m.jiraLoading = false
-	m.jiraErr = msg.err
 	if msg.err != nil {
 		return toastCmd(app.JiraFetchText(msg.cache, msg.err), true)
 	}
-	m.jira = msg.cache
 	m.rebuildTodos()
-	return toastCmd(app.JiraFetchText(m.jira, nil), false)
+	return toastCmd(app.JiraFetchText(msg.cache, nil), false)
 }
 
 func (m *Model) onJiraCreated(msg jiraCreatedMsg) tea.Cmd {
@@ -238,28 +230,17 @@ func (m *Model) onJiraCreated(msg jiraCreatedMsg) tea.Cmd {
 		m.fetchJira(true))
 }
 
-// todoJiraSlice is the todos tab: the core's task list and Jira cache as
-// last received, the cursor, and the issue an agent is being asked for.
+// todoJiraSlice is the todos tab's own state: its rows (built from the
+// core's list and cache), the cursor, whether the todo skill is installed
+// (asked once, at start) and the issue an agent is being asked for.
 type todoJiraSlice struct {
-	todos     []todoRow
-	todoCur   int
-	todoErr   error
-	todoAvail bool
-	tasks     []todo.Group
-
-	jira        jira.Cache
-	jiraLoading bool
-	jiraErr     error
-	draftIssue  *jira.Issue
+	todos      []todoRow
+	todoCur    int
+	todoAvail  bool
+	draftIssue *jira.Issue
 }
 
-// newTodoJiraSlice starts the tab from the core: whether the todo skill is
-// there and the Jira list saved on disk.
-// TODO(WP-2.7): model.go calls it without the app; pass it
-// (newTodoJiraSlice(a)) and drop the fallback, which asks the adapters.
-func newTodoJiraSlice(a ...*app.App) todoJiraSlice {
-	if len(a) > 0 && a[0] != nil {
-		return todoJiraSlice{todoAvail: a[0].TodoAvailable(), jira: a[0].JiraCache()}
-	}
-	return todoJiraSlice{todoAvail: wire.Todo{}.Available(), jira: jira.LoadCache()}
+// newTodoJiraSlice starts the tab from the core.
+func newTodoJiraSlice(a *app.App) todoJiraSlice {
+	return todoJiraSlice{todoAvail: a.TodoAvailable()}
 }

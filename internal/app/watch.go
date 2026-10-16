@@ -58,9 +58,7 @@ type Notice struct {
 	ToastErr bool   `json:"toast_err,omitempty"`
 }
 
-// watchState is the slice's state. App has no field for it (app.go belongs
-// to wave 1), so it hangs off a side table keyed by *App; WP-2.7 may move it
-// into App.
+// watchState is the slice's state (App.watching).
 type watchState struct {
 	mu        sync.Mutex
 	unfocused bool // zero value: focused
@@ -75,15 +73,12 @@ type watchState struct {
 	notifying sync.WaitGroup
 }
 
-var watches sync.Map // *App → *watchState
-
-func (a *App) watch() *watchState {
-	if w, ok := watches.Load(a); ok {
-		return w.(*watchState)
-	}
-	w, _ := watches.LoadOrStore(a, &watchState{prev: map[string]string{}, last: map[string]events.Event{}})
-	return w.(*watchState)
+func (w *watchState) init() {
+	w.prev = map[string]string{}
+	w.last = map[string]events.Event{}
 }
+
+func (a *App) watch() *watchState { return &a.watching }
 
 // SetFocused tells app whether the user is looking at a client (terminal
 // focus): desktop notifications and the bell are only for when they are not.
@@ -165,14 +160,26 @@ func (a *App) notifyDesktop(body string) {
 // WaitNotifications waits for the desktop notifications in flight.
 func (a *App) WaitNotifications() { a.watch().notifying.Wait() }
 
+// PollHookEvents reads the hook events recorded since the last poll (the
+// EventLog port; none without one). The client polls on its own clock and
+// hands them to OnHookEvents.
+func (a *App) PollHookEvents() []events.Event {
+	if a.ports.Events == nil {
+		return nil
+	}
+	return a.ports.Events.Poll()
+}
+
 // OnHookEvents takes the events the hook log recorded since the last poll:
 // it keeps the last one per session (LastEvent), publishes
 // session.notification and a notice for each one that needs the user.
-// Messages between sessions (Type "peer") are only recorded here: the
-// client hands each to OnPeer (app/groups.go), which resolves the sender and
-// publishes peer.message. refresh says the sessions
-// changed and should be re-read now; the client coalesces it with a refresh
-// already in flight.
+// A message between sessions (Type "peer") goes to OnPeer (app/groups.go),
+// which records the ✉ cues and publishes peer.message; it comes back as a
+// Notice with only Meow set (who told whom: no bell, no desktop
+// notification, and no notice event, since peer.message already went out).
+// The notices are in the order of evs. refresh says the sessions changed and
+// should be re-read now; the client coalesces it with a refresh already in
+// flight.
 func (a *App) OnHookEvents(evs []events.Event) (notices []Notice, refresh bool) {
 	if len(evs) == 0 {
 		return nil, false
@@ -185,7 +192,12 @@ func (a *App) OnHookEvents(evs []events.Event) (notices []Notice, refresh bool) 
 	}
 	w.mu.Unlock()
 	for _, e := range evs {
-		if e.Type == "peer" || !e.NeedsYou() {
+		if e.Type == "peer" {
+			seen := a.OnPeer(e)
+			notices = append(notices, Notice{Meow: "✉ " + core.Truncate(seen.FromLabel, 16) + " → " + core.Truncate(seen.ToLabel, 16)})
+			continue
+		}
+		if !e.NeedsYou() {
 			continue
 		}
 		a.Publish(EvSessionNotification, SessionNotification{ID: e.SessionID, Type: e.Type, Message: e.Message})

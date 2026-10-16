@@ -179,11 +179,7 @@ func (m *Model) onDispatched(msg dispatchedMsg) tea.Cmd {
 	}
 	cmds := []tea.Cmd{m.refresh(), toastCmd("agent "+msg.id+" disparado", false)}
 	if msg.task != nil {
-		td := m.app.Ports().Todo
-		cmds = append(cmds, func() tea.Msg {
-			g, err := td.List()
-			return todosMsg{g, err}
-		})
+		cmds = append(cmds, todosCmd(m.app.LoadTodos)) // publishes todos.changed
 	}
 	return tea.Batch(cmds...)
 }

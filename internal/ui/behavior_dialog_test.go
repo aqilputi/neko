@@ -128,7 +128,7 @@ func TestBehaviorHelpAndUsageDialogs(t *testing.T) {
 	if next := m.update(um); next != nil {
 		t.Fatal("a manual fetch schedules nothing")
 	}
-	if m.usageErr == nil {
+	if _, err := m.app.Usage(); err == nil {
 		t.Fatal("the error is kept for the dialog")
 	}
 	m.key(bhRune('x'))
@@ -191,7 +191,7 @@ func TestBehaviorPaletteNavigateAndRunAction(t *testing.T) {
 
 func TestBehaviorPaletteItems(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.tasks = []todo.Group{{Group: "g", Tasks: []todo.Task{{ID: 5, Title: "tarefa"}}}}
+	bhSetTodos(t, &m, []todo.Group{{Group: "g", Tasks: []todo.Task{{ID: 5, Title: "tarefa"}}}})
 	m.rebuildTodos()
 	items := m.paletteItems()
 	find := func(prefix string) *paletteItem {
@@ -268,11 +268,7 @@ func TestBehaviorPaletteItems(t *testing.T) {
 
 func TestBehaviorPaletteUndoGroup(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.grp = groups.Load()
-	m.grp.Add("deploy", groups.Member{SessionID: "a"}, groups.Member{SessionID: "c"})
-	if err := m.grp.Save(); err != nil {
-		t.Fatal(err)
-	}
+	bhSaveGroup(t, &m, "deploy", groups.Member{SessionID: "a"}, groups.Member{SessionID: "c"})
 	var undo *paletteItem
 	for _, it := range m.paletteItems() {
 		if strings.HasPrefix(it.title, "desfazer grupo #deploy (2 sessões)") {
@@ -310,7 +306,7 @@ func TestBehaviorPaletteGroupCommands(t *testing.T) {
 		t.Fatal("notify without a group waits")
 	}
 	// notify without a tag uses the cursor's group
-	m.grp.Add("t1", groups.Member{SessionID: "a"})
+	bhSaveGroup(t, &m, "t1", groups.Member{SessionID: "a"})
 	bhSelect(t, &m, "a")
 	it := m.groupCommand("n oi pessoal")
 	if it == nil || it.run == nil || !strings.Contains(it.title, "#t1: oi pessoal") {
@@ -569,17 +565,17 @@ func TestBehaviorSyncGroupNames(t *testing.T) {
 	if err := g.Save(); err != nil {
 		t.Fatal(err)
 	}
-	m.syncGroupNames()
+	m.update(bhRefreshMsg(t, &m)) // the refresh syncs them (app.RefreshNotices)
 	got := groups.Load().Groups["t"]
 	if len(got) != 2 || got[0].Name != "alpha" || got[0].Cwd != "/tmp" || got[1].Name != "x" {
 		t.Fatalf("names follow the sessions, unknown members stay: %+v", got)
 	}
-	// a snapMsg also syncs them
+	// every refresh does
 	if err := os.Remove(groups.Path()); err != nil {
 		t.Fatal(err)
 	}
-	m.update(snapMsg(m.snap))
-	if len(m.grp.Groups) != 0 {
+	m.update(bhRefreshMsg(t, &m))
+	if len(m.app.Groups().Groups) != 0 {
 		t.Fatal("snapMsg reloads groups.json")
 	}
 }

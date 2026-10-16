@@ -24,8 +24,8 @@ func TestRenderSnapshot(t *testing.T) {
 	var mm tea.Model = m
 	mm, _ = mm.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	mm, _ = mm.Update(m.fetchUsage(true)()) // window start before the refresh
-	snap := m.store.Refresh()
-	mm, _ = mm.Update(snapMsg(snap))
+	snap, notices := m.app.RefreshNotices()
+	mm, _ = mm.Update(snapMsg{snap: snap, notices: notices})
 	if c := m.loadTodos(); c != nil {
 		mm, _ = mm.Update(c())
 	}

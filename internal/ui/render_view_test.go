@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aqilputi/nekuroddo/internal/claude"
+	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/term"
 )
@@ -125,7 +126,7 @@ func TestRhStatusLineModes(t *testing.T) {
 	rhHas(t, st, "NORMAL", "ctrl+/", "todos os comandos", "ᓚᘏᗢ")
 	rhHasNot(t, st, "↯")
 
-	m.hooksSeen = true
+	m.app.OnHookEvents([]events.Event{{Name: "PostToolUse", SessionID: "a"}}) // the hook is set up
 	rhHas(t, m.status(m.t()), "↯")
 
 	m.toast = "arquivada ✓"
@@ -162,7 +163,7 @@ func TestRhInboxView(t *testing.T) {
 		store.Session{SessionID: "r", Name: "voltou", Context: "gamma", State: "done", Attention: store.AttnReturned,
 			LastAt: time.Now(), LastText: "pronto, terminei"},
 	)
-	m.mail["q"] = mailCue{at: time.Now()}
+	cue(t, &m, "q", time.Now(), false)
 	m.tab = tabInbox
 	m.rebuild()
 	out := m.inboxView(m.t(), 60, 40)
@@ -211,12 +212,13 @@ func TestRhUsageDialogStates(t *testing.T) {
 	m := rhModel(t)
 	d := usageDialog{}
 	rhHas(t, d.view(&m, m.t(), 80), "consultando claude -p /usage")
-	m.usageErr = errors.New("exit status 1")
+	m.app.OnUsage(claude.UsageReport{}, errors.New("exit status 1"))
 	rhHas(t, d.view(&m, m.t(), 80), "não consegui ler o /usage: exit status 1")
 
 	// a long report is cut with … so the dialog fits the screen
-	m.usage = rhUsage()
-	m.usage.Raw = "What's contributing\n" + strings.Repeat("linha\n", 200)
+	rep := rhUsage()
+	rep.Raw = "What's contributing\n" + strings.Repeat("linha\n", 200)
+	m.app.OnUsage(rep, nil)
 	out := d.view(&m, m.t(), 80)
 	rhHas(t, out, " …")
 	if n := len(rhLines(out)); n > m.h {

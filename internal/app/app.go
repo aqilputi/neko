@@ -56,20 +56,47 @@ type App struct {
 
 	cmu     sync.Mutex
 	pending map[string]*pendingAction
+
+	// Each slice's state, declared next to its use cases.
+	grp      groupState    // groups.go
+	watching watchState    // watch.go
+	panes    *PaneManager  // panes.go
+	todoJira todoJiraState // todo.go, jira.go
 }
 
 // New builds the core over p. A nil Clock means wall time; the other ports
 // must be set for the use cases that need them (apptest.Ports has fakes).
+// The registry starts empty: RegisterBuiltins fills it.
 func New(cfg config.Config, p Ports) *App {
 	if p.Clock == nil {
 		p.Clock = wallClock{}
 	}
-	return &App{
+	a := &App{
 		cfg: cfg, ports: p, clock: p.Clock,
 		bus:     NewBroker(p.Clock),
 		reg:     NewRegistry(),
 		pending: map[string]*pendingAction{},
 	}
+	a.grp.init(p.Groups)
+	a.watching.init()
+	a.panes = newPaneManager(a)
+	return a
+}
+
+// RegisterBuiltins registers every builtin command (plan §2.4): sessions,
+// dispatch, panes, groups, todos and Jira. The composition root (ui.New
+// today, nk serve later) calls it once; a second call fails with
+// ErrDuplicateCommand.
+func (a *App) RegisterBuiltins() error {
+	for _, register := range []func() error{
+		a.RegisterSessionCommands, a.RegisterDispatch, a.RegisterPanes,
+		a.RegisterGroupCommands, a.RegisterTodoJira,
+	} {
+		if err := register(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) Config() config.Config { return a.cfg }
@@ -84,8 +111,23 @@ func (a *App) Snapshot() store.Snapshot {
 	return a.snap
 }
 
-// Refresh re-reads the sessions and publishes snapshot.changed.
+// Refresh is RefreshNotices for a caller that does not draw the notices
+// (they are published as notice anyway).
 func (a *App) Refresh() store.Snapshot {
+	snap, _ := a.RefreshNotices()
+	return snap
+}
+
+// RefreshNotices is the one refresh every client goes through: it re-reads
+// the sessions, makes them the core's snapshot and publishes
+// snapshot.changed; then it watches the state transitions (ObserveSessions:
+// session.state, and a notice for the sessions that came back to the user)
+// and keeps the group members' names in step (SyncGroupNames). The notices
+// go back to the caller, which draws them. The snapshot's session slice is
+// shared with the core, not copied: session commands (archive, rename…)
+// update it in place, so a client holding it shows them at once. Safe to
+// call off the client's UI goroutine.
+func (a *App) RefreshNotices() (store.Snapshot, []Notice) {
 	snap := a.ports.Sessions.Refresh()
 	a.mu.Lock()
 	a.snap = snap
@@ -95,7 +137,11 @@ func (a *App) Refresh() store.Snapshot {
 		d.Err = snap.Err.Error()
 	}
 	a.Publish(EvSnapshotChanged, d)
-	return snap
+	notices := a.ObserveSessions(snap.Sessions)
+	if a.ports.Groups != nil {
+		_, _ = a.SyncGroupNames(snap.Sessions) // best effort: a failed save is retried next refresh
+	}
+	return snap, notices
 }
 
 // Subscribe follows the event bus until ctx ends (see Broker.Subscribe).

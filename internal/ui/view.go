@@ -143,11 +143,12 @@ func (m Model) header(t theme.Theme) string {
 	// The subscription limits (claude -p /usage) are what matter on a plan;
 	// the $ figure is only an estimate at API prices.
 	var cost string
-	if l, ok := m.usage.Find("session"); ok {
+	usage := m.usage()
+	if l, ok := usage.Find("session"); ok {
 		cost = base.Foreground(t.Subtle).Render("  5h ") + costBar(t, float64(l.Pct), 100, 12, base) +
 			base.Foreground(usageColor(t, l.Pct)).Bold(true).Render(fmt.Sprintf(" %d%%", l.Pct)) +
 			base.Foreground(t.Muted).Render(" ↻"+l.ShortReset())
-		if w, ok := m.usage.Find("all models"); ok {
+		if w, ok := usage.Find("all models"); ok {
 			cost += base.Foreground(t.Subtle).Render("  semana ") + base.Foreground(usageColor(t, w.Pct)).Bold(true).Render(fmt.Sprintf("%d%%", w.Pct))
 		}
 	} else {
@@ -436,7 +437,7 @@ func (m *Model) treeView(t theme.Theme, w, h int) string {
 			cc := t.ContextColor(m.view.CtxColor[r.Ctx])
 			// the cell before the guide is the group bar: ▍ in the group's
 			// color, ┃ when it shares a group with the session under the cursor
-			tags := m.grp.Of(s.SessionID)
+			tags := m.app.TagsOf(s.SessionID)
 			gbar := base.Render(" ")
 			if len(tags) > 0 {
 				gc := groupColor(t, tags[0])
@@ -590,8 +591,8 @@ func (m *Model) todoView(t theme.Theme, w, h int) string {
 	if !m.todoAvail {
 		return lipgloss.NewStyle().Foreground(t.Muted).Background(t.Bg).Padding(1, 2).Render("skill todo não encontrada em ~/.claude/skills/todo")
 	}
-	if m.todoErr != nil {
-		return lipgloss.NewStyle().Foreground(t.Error).Background(t.Bg).Padding(1, 2).Render(m.todoErr.Error())
+	if err := m.app.Todos().Error(); err != nil {
+		return lipgloss.NewStyle().Foreground(t.Error).Background(t.Bg).Padding(1, 2).Render(err.Error())
 	}
 	if len(m.todos) == 0 {
 		return lipgloss.NewStyle().Foreground(t.Done).Background(t.Bg).Padding(1, 2).Render("lista vazia 🎉")
@@ -610,10 +611,10 @@ func (m *Model) todoView(t theme.Theme, w, h int) string {
 			head := " ▾ " + group
 			if r.issue != nil {
 				head = " ▾ ⚑ jira · minhas issues"
-				if !m.jira.FetchedAt.IsZero() {
-					head += fmt.Sprintf(" (há %s)", ago(m.jira.FetchedAt))
+				if at := m.app.JiraCache().FetchedAt; !at.IsZero() {
+					head += fmt.Sprintf(" (há %s)", ago(at))
 				}
-				if m.jiraLoading {
+				if m.app.JiraLoading() {
 					head += " · buscando…"
 				}
 			}
@@ -752,7 +753,7 @@ func (m *Model) sessDetail(t theme.Theme, s *store.Session, w int) string {
 	if s.Archived {
 		lines = append(lines, kv(t, "arquivada", s.ArchivedAt.Format("02/01 15:04")+" · X restaura", t.Muted))
 	}
-	if e, ok := m.events[s.SessionID]; ok {
+	if e, ok := m.app.LastEvent(s.SessionID); ok {
 		what := e.Name
 		if e.Message != "" {
 			what += " · " + e.Message
@@ -998,13 +999,13 @@ func (m Model) status(t theme.Theme) string {
 		h.ShortSeparator = " · "
 		h.SetWidth(room)
 		mid = h.ShortHelpView(m.shortHelp())
-		if m.hooksSeen {
+		if m.app.HooksSeen() {
 			room -= 2
 		}
 	}
 	mid = lipgloss.NewStyle().MaxWidth(room).Render(mid)
 	live := ""
-	if m.hooksSeen {
+	if m.app.HooksSeen() {
 		live = base.Foreground(t.Done).Render("↯")
 	}
 	gap := max(m.w-lipgloss.Width(left)-lipgloss.Width(mid)-lipgloss.Width(live)-lipgloss.Width(kitty), 0)
@@ -1031,7 +1032,7 @@ func orDash(s string) string {
 
 // windowLine is the session's share of the 5-hour window in the details.
 func (m *Model) windowLine(t theme.Theme, s *store.Session, b lipgloss.Style) string {
-	l, ok := m.usage.Find("session")
+	l, ok := m.usage().Find("session")
 	if !ok {
 		return kv(t, "janela 5h", "— (sem /usage)", t.Muted)
 	}

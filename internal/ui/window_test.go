@@ -11,13 +11,13 @@ import (
 
 // The window's % is split by what each session consumed in the window.
 func TestWindowShare(t *testing.T) {
-	m := New(config.Default())
-	m.usage = claude.ParseUsage("Current session: 12% used · resets Oct 15, 11:30am (America/Sao_Paulo)")
-	m.snap = store.Snapshot{Sessions: []store.Session{
+	m := newTestModel(config.Default())
+	m.app.OnUsage(claude.ParseUsage("Current session: 12% used · resets Oct 15, 11:30am (America/Sao_Paulo)"), nil)
+	setSnap(&m, store.Snapshot{Sessions: []store.Session{
 		{SessionID: "a", WindowCost: 3},
 		{SessionID: "b", WindowCost: 1},
 		{SessionID: "c"},
-	}}
+	}})
 	if p := m.windowPct(&m.snap.Sessions[0]); p != 9 {
 		t.Fatalf("a: %v want 9", p)
 	}

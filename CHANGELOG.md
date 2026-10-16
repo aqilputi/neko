@@ -36,6 +36,10 @@ incompatíveis podem acontecer em versões menores e serão sempre descritas aqu
   confirmação e `LinkJira`, cache do Jira com validade e uma busca por vez, abrir no browser (porta
   `Opener`), com eventos `todos.changed`, `jira.changed` e comandos `todo.start`, `todo.done`,
   `jira.toggle`, `jira.fetch`, `jira.open_url`; a TUI só monta as linhas da aba e traduz.
+- Fim da fase 1: todo o estado de domínio vive no `App` (sem espelhos na TUI), todos os comandos nativos
+  são registrados na partida (`app.RegisterBuiltins`), o refresh passa por `app.RefreshNotices` (transições
+  e nomes dos grupos para qualquer cliente) e `internal/archtest` garante que a TUI só fala com o mundo por
+  `internal/app`; sem mudança de comportamento.
 
 ## [0.1.0] - 2026-10-16
 

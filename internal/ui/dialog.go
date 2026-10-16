@@ -14,7 +14,6 @@ import (
 
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
-	"github.com/aqilputi/nekuroddo/internal/groups"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/theme"
 )
@@ -48,9 +47,10 @@ func dialogBox(t theme.Theme, title, body string, w int) string {
 // ---- confirm ----
 
 type confirmDialog struct {
-	q   string
-	yes func(m *Model) tea.Cmd
-	no  func(m *Model) // optional: any other key
+	q     string
+	yes   func(m *Model) tea.Cmd
+	no    func(m *Model) // optional: any other key
+	token string         // a confirmation parked in the core (app.Ask); "" for a local one
 }
 
 func (d *confirmDialog) title() string { return "confirma?" }
@@ -91,12 +91,31 @@ func (m *Model) confirmThen(q string, yes func(m *Model) tea.Cmd) {
 // Result into messages; any other key answers app.Cancel(token).
 func (m *Model) confirmToken(q, token string) {
 	a := m.app
-	m.push(&confirmDialog{q: q,
+	m.push(&confirmDialog{q: q, token: token,
 		yes: func(*Model) tea.Cmd {
 			return func() tea.Msg { return resultMsg(a.Confirm(token)) }
 		},
 		no: func(*Model) { _ = a.Cancel(token) }, // already gone (expired/answered elsewhere): nothing to do
 	})
+}
+
+// confirmResolvedMsg says a confirmation parked in the core was answered or
+// expired (the confirm.resolved event), maybe by another client.
+type confirmResolvedMsg struct{ token string }
+
+// onConfirmResolved closes the dialogs still asking for token: the question
+// is no longer open. The TUI does not follow the event bus yet; WP-3.1
+// turns confirm.resolved into this message when it does.
+func (m *Model) onConfirmResolved(msg confirmResolvedMsg) tea.Cmd {
+	kept := m.dialogs[:0]
+	for _, d := range m.dialogs {
+		if c, ok := d.(*confirmDialog); ok && msg.token != "" && c.token == msg.token {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	m.dialogs = kept
+	return nil
 }
 
 // ---- help ----
@@ -138,22 +157,23 @@ func (usageDialog) handle(*Model, tea.KeyPressMsg) (bool, tea.Cmd) { return true
 
 func (usageDialog) view(m *Model, t theme.Theme, w int) string {
 	b := lipgloss.NewStyle().Background(t.Bg)
-	if m.usage.Raw == "" {
+	rep, err := m.app.Usage()
+	if rep.Raw == "" {
 		msg := "consultando claude -p /usage…"
-		if m.usageErr != nil {
-			msg = "não consegui ler o /usage: " + m.usageErr.Error()
+		if err != nil {
+			msg = "não consegui ler o /usage: " + err.Error()
 		}
 		return b.Foreground(t.Muted).Padding(0, 1).Render(msg)
 	}
 	var lines []string
-	for _, l := range m.usage.Limits {
+	for _, l := range rep.Limits {
 		lines = append(lines, b.Foreground(t.Text).Bold(true).Width(30).Render(" "+l.Name)+
 			costBar(t, float64(l.Pct), 100, 24, b)+
 			b.Foreground(usageColor(t, l.Pct)).Bold(true).Render(fmt.Sprintf(" %3d%%", l.Pct))+
 			b.Foreground(t.Muted).Render("  reseta "+l.Resets))
 	}
 	lines = append(lines, "")
-	rest := m.usage.Raw
+	rest := rep.Raw
 	if i := strings.Index(rest, "What's contributing"); i >= 0 {
 		rest = rest[i:]
 	}
@@ -165,7 +185,7 @@ func (usageDialog) view(m *Model, t theme.Theme, w int) string {
 		}
 		lines = append(lines, b.Foreground(t.Subtle).Width(w-4).Render(" "+l))
 	}
-	lines = append(lines, "", b.Foreground(t.Muted).Italic(true).Render(fmt.Sprintf(" atualizado há %s · a cada %.0fs", ago(m.usage.At), m.cfg.UsageRefresh)))
+	lines = append(lines, "", b.Foreground(t.Muted).Italic(true).Render(fmt.Sprintf(" atualizado há %s · a cada %.0fs", ago(rep.At), m.cfg.UsageRefresh)))
 	return strings.Join(lines, "\n")
 }
 
@@ -263,16 +283,12 @@ func (m *Model) paletteItems() []paletteItem {
 		paletteItem{title: "group <tag> — agrupa " + what, hint: "space seleciona", run: func(m *Model) tea.Cmd { return m.openPaletteWith("group ") }},
 		paletteItem{title: "ungroup [tag] — tira " + what + " do grupo", hint: "grupos", run: func(m *Model) tea.Cmd { return m.openPaletteWith("ungroup ") }},
 		paletteItem{title: "notify #tag <mensagem> — avisa o grupo", hint: "grupos", run: func(m *Model) tea.Cmd { return m.openPaletteWith("notify #") }})
-	for _, tag := range m.grp.Tags() {
+	grp := m.app.Groups()
+	for _, tag := range grp.Tags() {
 		tg := tag
-		items = append(items, paletteItem{title: fmt.Sprintf("desfazer grupo #%s (%d sessões)", tg, len(m.grp.Groups[tg])), hint: "grupos", run: func(m *Model) tea.Cmd {
+		items = append(items, paletteItem{title: fmt.Sprintf("desfazer grupo #%s (%d sessões)", tg, len(grp.Groups[tg])), hint: "grupos", run: func(m *Model) tea.Cmd {
 			m.confirmThen("desfazer o grupo #"+tg+"? as sessões são avisadas na próxima ferramenta", func(m *Model) tea.Cmd {
-				m.grp = groups.Load()
-				delete(m.grp.Groups, tg)
-				if err := m.grp.Save(); err != nil {
-					return toastCmd(err.Error(), true)
-				}
-				return toastCmd("#"+tg+" desfeito", false)
+				return resultCmd(m.app.DissolveGroup(tg))
 			})
 			return nil
 		}})

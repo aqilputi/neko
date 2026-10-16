@@ -4,7 +4,7 @@ title: Arquitetura
 description: Pacotes Go do nekuroddo, o fluxo dos dados do ~/.claude até a tela, os grupos de agents e o laço de atualização.
 resource: https://github.com/aqilputi/nekuroddo
 tags: [arquitetura, go, bubbletea, charm, grupos]
-timestamp: 2026-10-16T19:00:00Z
+timestamp: 2026-10-16T23:00:00Z
 generated: { by: agent:claude-code/claude-sonnet-5, at: 2026-10-16T19:00:00Z }
 status: stable
 ---
@@ -31,8 +31,12 @@ nativo do Claude Code; o nekuroddo só apresenta os pares e mostra as mensagens.
 | `internal/store` | junta CLI e transcripts num `Snapshot` imutável: sessões, subagents, atenção, custo, arquivadas, overrides |
 | `internal/events` | grava e lê `~/.local/state/nekuroddo/events.jsonl`; reconhece `<cross-session-message>` (`PeerMessage`) |
 | `internal/groups` | `groups.json`, a fila de notas do `:notify` e o corpo do `nk hook-context` (ver [grupos.md](grupos.md)) |
-| `internal/term` | PTY + `charmbracelet/x/vt`, filtro de OSC e codificação de teclas (ver [painel-embutido.md](painel-embutido.md)) |
-| `internal/ui` | modelo Bubble Tea v2: árvore, inbox, todos, seleção e grupos, diálogos, paleta, mouse, render |
+| `internal/term` | `Process` (PTY e fan-out dos bytes, sem Bubble Tea) + `Screen` (`charmbracelet/x/vt`, filtro de OSC, teclas); ver [painel-embutido.md](painel-embutido.md) |
+| `internal/core` | domínio puro, sem I/O: árvore e inbox (`BuildTree`), helpers, comando/evento/confirmação como dados |
+| `internal/app` | o core: casos de uso por fatia, registro de comandos, barramento de eventos, confirmação por token e o estado de domínio (snapshot, grupos, ✉, painéis, avisos, `/usage`, todos, Jira); fala com o mundo só por portas |
+| `internal/wire` | raiz de composição: adaptadores finos que ligam `claude`, `store`, `term`, `groups`, `events`, `jira`, `todo`, `notify-send` e `xdg-open` às portas de `app` |
+| `internal/ui` | a TUI Bubble Tea v2, um tradutor: teclas e mensagens viram chamadas a `app`; desenha árvore, inbox, todos, diálogos, paleta, painéis e o gato |
+| `internal/archtest` | testes que falham se a regra de dependência (abaixo) for violada |
 | `internal/theme` | 5 temas e a escolha automática claro/escuro |
 | `internal/cat` | o gatinho `ᓚᘏᗢ` no canto inferior direito |
 | `internal/config` | carga do TOML, padrões (ver [configuracao.md](configuracao.md)) e a migração dos diretórios do `neko` |
@@ -45,20 +49,24 @@ nativo do Claude Code; o nekuroddo só apresenta os pares e mostra as mensagens.
 ```
 claude agents --json --all ─┐
 ~/.claude/sessions/*.json  ─┤
-~/.claude/jobs/*/state.json ─┼─► store.Refresh ─► Snapshot ─► ui.Model ─► uv.ScreenBuffer
-~/.claude/projects/**.jsonl ─┤   (goroutine própria)       ▲      ▲
-events.jsonl (nk hook) ──────┘                             │      │
-groups.json ───────────────────────────────────────────────┘      │
-                                     term.Pane (PTY: claude attach) ┘ Emulator.Draw célula a célula
+~/.claude/jobs/*/state.json ─┼─► store.Refresh ─► app.RefreshNotices ─► ui.Model ─► uv.ScreenBuffer
+~/.claude/projects/**.jsonl ─┤   (goroutine própria: Snapshot,  ▲         ▲
+events.jsonl (nk hook) ──────┘    transições, nomes dos grupos)  │         │
+groups.json ─────────────────────────────────────► app (grupos) ─┘         │
+                                     term.Pane (PTY: claude attach) ────────┘ Emulator.Draw célula a célula
 ```
 
 - **Refresh incremental:** os transcripts são lidos a partir do último offset, e uma linha ainda incompleta
   espera o próximo ciclo. Só entram arquivos modificados nos últimos `show_history_days`, com no máximo
   64 MB por arquivo.
-- **Concorrência:** cada `Store` pertence a uma goroutine de cada vez (o comando de refresh). A UI só enxerga
-  o `Snapshot` que ele devolve.
-- **Eventos:** o `events.Tail` lê o que foi acrescentado ao `events.jsonl` a cada 400 ms. Um evento comum
-  antecipa o refresh; um evento `peer` vai para `ui.onPeer` (✉ e miado).
+- **Concorrência:** cada `Store` pertence a uma goroutine de cada vez (o comando de refresh). O refresh passa
+  por `app.RefreshNotices`, que guarda o `Snapshot` como o do core, publica `snapshot.changed`, compara os
+  estados (avisos de "voltou") e atualiza os nomes nos grupos; a UI desenha o `Snapshot` que ele devolve.
+  As sessões são compartilhadas com o core, então arquivar ou renomear aparece na hora, antes do próximo
+  refresh.
+- **Eventos:** o `events.Tail` (porta `EventLog`, lida por `app.PollHookEvents`) traz o que foi acrescentado
+  ao `events.jsonl` a cada 400 ms. `app.OnHookEvents` decide: um evento comum antecipa o refresh; um evento
+  `peer` vai para `app.OnPeer` (✉ dos dois lados, `peer.message`); a UI só mia e toca o sino.
 - **Relógio único de animação:** 150 ms quando algo anima (spinner, `◆` piscando, `✉` recente) e 1 s com o gato
   dormindo.
 - **Atenção** (menor = mais urgente): bloqueada (pergunta/permissão) > voltou (terminou e você não viu) >
@@ -67,12 +75,12 @@ groups.json ──────────────────────�
 ## Grupos de agents
 
 ```
-ui (:group / :ungroup) ──► groups.json ◄── ui.syncGroupNames (renomeações do Claude)
-ui (:notify) ────────────► mail/<sid>.jsonl
+ui (:group / :ungroup) ─► app ─► groups.json ◄── app.SyncGroupNames (a cada refresh: renomeações do Claude)
+ui (:notify) ──► app ────────► mail/<sid>.jsonl
                                 │
 nk hook-context ◄───────────────┘  (SessionStart · UserPromptSubmit · PostToolUse)
    └─► additionalContext na sessão: pares + combinado + notas
-sessão A ──SendMessage──► sessão B ──UserPromptSubmit──► nk hook ──► events.jsonl (type=peer) ──► ui
+sessão A ──SendMessage──► sessão B ──UserPromptSubmit──► nk hook ──► events.jsonl (type=peer) ──► app.OnPeer ──► ui (miau)
 ```
 
 - `groups.json` é escrito de forma atômica (arquivo temporário + `rename`), porque o hook pode lê-lo a qualquer
@@ -95,44 +103,80 @@ Do estudo do [crush](https://github.com/charmbracelet/crush) vieram: tela compos
 OSC 7501 e título da janela, notificação só quando a janela está sem foco, debounce do resize do PTY e
 banner de saída. A seleção com `space` segue o [yazi](https://github.com/sxyazi/yazi).
 
-## Arquitetura alvo (planejado; fase 1 em andamento)
+## Arquitetura alvo (fase 1 feita; onda 3 a seguir)
 
-O plano em [plano-arquitetura.md](plano-arquitetura.md) separa o domínio hoje preso em `internal/ui` do
-resto: regras puras (árvore, inbox, cor do grupo, resolução de opção) em `internal/core`, sem I/O; casos de
-uso com efeitos (arquivar, disparar, grupos, Jira, todos, notificação) em `internal/app`, que fala com o mundo
-só por **portas** implementadas pelos pacotes acima (`claude`, `store`, `term`, `groups`, `events`, `jira`,
-`todo`). Um registro de comandos e um barramento de eventos em `app` passam a ser a face comum da TUI, de um
-GUI futuro (três.js + xterm.js num shell Wails v3, com gatinhos 3D low-poly por cima da calçada) e de scripts
-em Lua (`gopher-lua`). Um servidor local (`internal/rpc`, HTTP+SSE+WS sobre Unix socket) fica **opcional**:
-o `nk` de hoje continua um processo só, sem socket.
+O plano em [plano-arquitetura.md](plano-arquitetura.md) separa o domínio do resto: regras puras em
+`internal/core`, sem I/O; casos de uso com efeitos em `internal/app`, que fala com o mundo só por **portas**
+implementadas pelos pacotes acima. Um registro de comandos e um barramento de eventos em `app` são a face
+comum da TUI, de um GUI futuro (three.js + xterm.js num shell Wails v3, com gatinhos 3D low-poly por cima da
+calçada) e de scripts em Lua (`gopher-lua`). Um servidor local (`internal/rpc`, HTTP+SSE+WS sobre Unix socket)
+fica **opcional**: o `nk` continua um processo só, sem socket.
 
-**Nada disto existe em código mergeado ainda.** A fase 1 (em andamento) só move regras puras para
-`internal/core` e monta o esqueleto de `internal/app`/`internal/wire`, sem mudar o comportamento da TUI atual;
-GUI, Lua e o servidor são fases 2 a 4 do plano.
+### O que já existe (fase 1)
 
-Árvore de pacotes alvo (resumida; tudo marcado "futuro" ainda não existe):
+- **`internal/core`**: árvore e inbox (`BuildTree`, ordem congelada, `SortInbox`), helpers (`Truncate`,
+  `ResolveOption`, `WindowPct`, `GroupColorIndex`, `ActivePane`…) e os tipos `Command`, `Event`,
+  `PendingConfirmation`, `ExecRequest`.
+- **`internal/app`**: `App` com as portas (`ports.go`), o snapshot do core (`Refresh`/`RefreshNotices`,
+  `snapshot.changed`), o barramento (`Subscribe`/`Publish`), o registro de comandos (`Registry`, preenchido
+  por `RegisterBuiltins`) e confirmações por token (`Ask`/`Confirm`/`Cancel`). Todo o estado de domínio é
+  campo do `App`, uma fatia por arquivo:
+
+  | fatia | `internal/app` | `internal/ui` (só traduz e desenha) | comandos | eventos |
+  |---|---|---|---|---|
+  | sessões | `sessions.go` | `sessions.go` | `session.archive/stop/remove/rename/move`, `sessions.archive_stale/remove_ended` | `snapshot.changed` |
+  | disparo | `dispatch.go`, `confirm.go` | `input.go` | `session.new` | `dispatched`, `confirm.*` |
+  | painéis | `panes.go` (`PaneManager`) | `pane.go` | `session.open/preview/fullscreen`, `pane.close/zoom` | `pane.*` |
+  | grupos | `groups.go` | `groups.go` | `group.add/remove/notify/dissolve` | `group.changed`, `peer.message`, `mail.cue` |
+  | todos e Jira | `todo.go`, `jira.go` | `todo_jira.go` | `todo.start/done`, `jira.toggle/fetch/open_url` | `todos.changed`, `jira.changed` |
+  | avisos | `watch.go` | `notify.go` | — | `session.state`, `session.notification`, `notice`, `usage.updated` |
+
+- **`internal/wire`**: `wire.Default(cfg)` liga os adaptadores reais às portas; `ui.New` é o único lugar da
+  TUI que o usa (e chama `RegisterBuiltins`). `internal/app/apptest` tem fakes de todas as portas.
+- **`internal/term`**: `Process` (PTY e fan-out de bytes, sem Bubble Tea) e `Screen` (emulador e teclas, da
+  TUI).
+- **`internal/ui`** é um tradutor: teclas e mensagens viram chamadas a `app`, e a tela lê o estado por
+  acessores de `app` (`Groups`, `Mail`, `Messages`, `Usage`, `LastEvent`, `HooksSeen`, `Panes()`, `Todos`,
+  `JiraCache`…). Fica nela só o que é do cliente: cursor, dobras, filtro, ordem congelada, seleção com
+  `space`, diálogos, o painel desenhado e o gato.
+- **`internal/archtest`**: `core` e `app` não alcançam Bubble Tea, PTY, `os/exec`, rede, `term` nem a UI;
+  `internal/ui` só importa `app`, `core`, `theme`, `cat`, `term`, `config` e os **tipos** de `store`,
+  `claude`, `events`, `groups`, `jira` e `todo` (funções só `jira.AgentPrompt` e `todo.Prompt`); `wire` só
+  dentro de `ui.New`; `os/exec` só em `ui/pane.go`, para o `tea.ExecProcess` da tela cheia que
+  `app.Fullscreen` descreve.
+
+### Próximos passos (onda 3 em diante)
+
+- **WP-3.1:** o registro de comandos substitui o `switch` de teclas: cada tecla e item da paleta resolve
+  para um nome de comando (`keyMap` derivado de `core.Keymap`, `paletteItems()` lendo `Registry.List()`), e
+  a TUI passa a seguir o barramento (um `tea.Cmd` sobre `app.Subscribe`).
+- **WP-3.2:** `internal/rpc` (HTTP+SSE+WS sobre Unix socket) expõe o mesmo registro e o barramento.
+- **WP-3.3:** `internal/lua` (`gopher-lua`, API `nk.*`) registra comandos e assina eventos.
+- Depois: `nk serve`/`--listen`/`run`, o rename `internal/ui` → `internal/tui` e o GUI (fases 2 a 4).
+
+Árvore de pacotes (resumida; "futuro" ainda não existe):
 
 ```
-cmd/nekuroddo/      nk: TUI, nk hook, nk hook-context (hoje); futuro: nk serve, nk --listen, nk run <cmd>
+cmd/nekuroddo/      nk: TUI, nk hook, nk hook-context; futuro: nk serve, nk --listen, nk run <cmd>
 cmd/nekuroddo-gui/  futuro — nkg: shell Wails v3 com o frontend em gui/web/
-internal/core/      futuro — domínio puro: tipos, árvore, inbox, comando/evento como dados; sem I/O
-internal/app/       futuro — casos de uso + registro de comandos + pubsub; fala só com portas
-internal/wire/      futuro — raiz de composição: liga claude/store/term/... às portas de internal/app
-internal/tui/       futuro — a internal/ui de hoje, afinada: teclas → comandos, eventos → redraw
+internal/core/      domínio puro: tipos, árvore, inbox, comando/evento como dados; sem I/O
+internal/app/       casos de uso + registro de comandos + pubsub + confirmações; fala só com portas
+internal/wire/      raiz de composição: liga claude/store/term/... às portas de internal/app
+internal/ui/        a TUI: teclas → chamadas a app, estado de app → tela (vira internal/tui na onda 4)
 internal/rpc/       futuro — servidor opcional: HTTP+SSE+WS sobre Unix socket
 internal/lua/       futuro — runtime gopher-lua, API nk.* (comandos e eventos para a TUI e o GUI)
-internal/{claude,store,term,groups,events,jira,todo,config,paths,theme,cat}   como hoje: adaptadores por papel
-internal/archtest/  futuro — teste que falha se a regra de dependência abaixo for violada
+internal/{claude,store,term,groups,events,jira,todo,config,paths,theme,cat}   adaptadores por papel
+internal/archtest/  testes que falham se a regra de dependência abaixo for violada
 ```
 
-Regra de dependência alvo: `internal/core` nunca importa Bubble Tea, PTY ou rede, só tipos de dados dos
-pacotes acima; `internal/app` só fala com o mundo por portas; os "shells" (`tui`, `rpc`, `lua`, `guihost`) não
+Regra de dependência: `internal/core` nunca importa Bubble Tea, PTY ou rede, só tipos de dados dos pacotes
+acima; `internal/app` só fala com o mundo por portas; os "shells" (`ui`/`tui`, `rpc`, `lua`, `guihost`) não
 chamam `claude`/`store`/`groups`/`jira`/`todo` diretamente — só por `internal/app`.
 
 ```
      cmd/nekuroddo   cmd/nekuroddo-gui
            │                │
-  internal/tui  internal/rpc  internal/lua  internal/guihost     ← shells (teclas/HTTP/Lua → comandos)
+  internal/ui   internal/rpc  internal/lua  internal/guihost     ← shells (teclas/HTTP/Lua → comandos)
            │                │              │
            └───────┬────────┴──────────────┘
                     ▼

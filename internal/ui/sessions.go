@@ -2,7 +2,8 @@ package ui
 
 // Slice "sessions": archive, stop, remove, rename and move sessions. The use
 // cases live in app (app/sessions.go); this file maps keys and prompts to
-// m.app calls and their Results to tea.Cmds.
+// m.app calls and their Results to tea.Cmds. The commands read the core's
+// snapshot, which m.snap shares: their in-place changes show at once.
 
 import (
 	"sort"
@@ -12,11 +13,6 @@ import (
 	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/core"
 )
-
-// syncApp hands the TUI's snapshot to the core, which the session commands
-// read (and update in place). Until the TUI follows snapshot.changed (WP-2.7)
-// the TUI refreshes on its own.
-func (m *Model) syncApp() { m.app.UseSnapshot(m.snap) }
 
 // toggleArchive is X: on a session it archives or restores it; on a context
 // row it archives (or, in the archive tab, restores) every session listed
@@ -31,7 +27,6 @@ func (m *Model) toggleArchive() tea.Cmd {
 	if r == nil {
 		return nil
 	}
-	m.syncApp()
 	if r.Kind == core.RowCtx {
 		var ids []string
 		for _, x := range m.rows {
@@ -56,7 +51,6 @@ func (m *Model) toggleArchive() tea.Cmd {
 
 // archiveStale archives every stale session not archived yet, asking first.
 func (m *Model) archiveStale() tea.Cmd {
-	m.syncApp()
 	res, err := m.app.ArchiveStale()
 	return m.sessionResult(res, err, false)
 }
@@ -64,14 +58,12 @@ func (m *Model) archiveStale() tea.Cmd {
 // removeEnded runs `claude rm` on background chats whose conversation was
 // ended, asking first; their panes close on yes.
 func (m *Model) removeEnded() tea.Cmd {
-	m.syncApp()
 	res, err := m.app.RemoveEnded()
 	return m.sessionResult(res, err, true)
 }
 
 // removeSelected is dd: removes the selected background session, asking first.
 func (m *Model) removeSelected() tea.Cmd {
-	m.syncApp()
 	res, err := m.app.Remove(m.selectedCtx())
 	return m.sessionResult(res, err, true)
 }
@@ -79,7 +71,6 @@ func (m *Model) removeSelected() tea.Cmd {
 // stop is x: stops the selected background session, asking first (any other
 // session: nothing happens).
 func (m *Model) stop() {
-	m.syncApp()
 	if res, err := m.app.Stop(m.selectedCtx()); err == nil && res.Pending != nil {
 		m.askApp(res, true)
 	}
@@ -120,7 +111,7 @@ func (m *Model) sessionResult(res app.Result, err error, async bool) tea.Cmd {
 func (m *Model) askApp(res app.Result, async bool) {
 	tok := res.Pending.Token
 	eff, _ := res.Data.(app.SessionEffect)
-	m.push(&confirmDialog{q: res.Pending.Question,
+	m.push(&confirmDialog{q: res.Pending.Question, token: tok,
 		yes: func(m *Model) tea.Cmd {
 			for _, id := range eff.ClosePanes {
 				m.closePane(id)
@@ -153,7 +144,6 @@ func confirmedMsg(res app.Result, err error) tea.Msg {
 
 // submitRename applies the session name typed at R (empty: back to claude's).
 func (m *Model) submitRename(val string) tea.Cmd {
-	m.syncApp()
 	res, err := m.app.Rename(m.draftDir, val)
 	m.rebuild()
 	return m.sessionResult(res, err, false)
@@ -161,7 +151,6 @@ func (m *Model) submitRename(val string) tea.Cmd {
 
 // submitMove applies the context typed at m (empty: back to the directory rule).
 func (m *Model) submitMove(val string) tea.Cmd {
-	m.syncApp()
 	res, err := m.app.Move(m.draftDir, val)
 	m.rebuild()
 	return m.sessionResult(res, err, false)
@@ -177,7 +166,6 @@ func (m *Model) submitRenameCtx(val string) tea.Cmd {
 			m.view.CtxColor[val] = c // keep the section's color
 		}
 	}
-	m.syncApp()
 	res, err := m.app.RenameContext(m.draftDir, val)
 	m.rebuild()
 	return m.sessionResult(res, err, false)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/app/apptest"
+	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/groups"
@@ -22,6 +23,15 @@ func grpSessions() []store.Session {
 		{SessionID: "b", Name: "deploy rc 2", Cwd: "/b", State: "busy"},
 		{SessionID: "c", Name: "outra coisa", Cwd: "/c"},
 	}
+}
+
+// grpApp is an app whose snapshot (taken by a real Refresh) holds grpSessions.
+func grpApp(t *testing.T) (*app.App, *apptest.Fakes) {
+	t.Helper()
+	a, f := newApp(t)
+	f.Sessions.SetSnapshot(store.Snapshot{Sessions: grpSessions()})
+	a.Refresh()
+	return a, f
 }
 
 func grpSeed(t *testing.T, f *apptest.Fakes, tag string, ids ...string) {
@@ -59,9 +69,9 @@ func grpNamed(evs []core.Event, name string) []core.Event {
 }
 
 func TestGroupTargetsAddsPickedAndPublishes(t *testing.T) {
-	a, f := newApp(t)
+	a, f := grpApp(t)
 	ev := a.Subscribe(t.Context())
-	res, err := a.GroupTargets(app.Context{SessionID: "c", Picked: []string{"a", "b"}}, "#Deploy RC", grpSessions()...)
+	res, err := a.GroupTargets(app.Context{SessionID: "c", Picked: []string{"a", "b"}}, "#Deploy RC")
 	if err != nil || res.Err {
 		t.Fatal(res, err)
 	}
@@ -81,11 +91,11 @@ func TestGroupTargetsAddsPickedAndPublishes(t *testing.T) {
 	}
 }
 
-func TestGroupTargetsSnapshotFallback(t *testing.T) {
+func TestGroupTargetsFromSnapshot(t *testing.T) {
 	a, f := newApp(t)
-	f.Sessions.SetSnapshot(store.Snapshot{Sessions: grpSessions()})
+	f.Sessions.SetSnapshot(store.Snapshot{Sessions: append(grpSessions(), store.Session{SessionID: "d", CustomName: "meu"})})
 	a.Refresh()
-	// no sessions given: the app's snapshot is used; unknown ids are skipped
+	// the app's snapshot is used; unknown ids are skipped
 	if _, err := a.GroupTargets(app.Context{Picked: []string{"c", "zz"}}, "x"); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +103,7 @@ func TestGroupTargetsSnapshotFallback(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	// a session with no Claude name is kept under its label
-	if _, err := a.GroupTargets(app.Context{SessionID: "d"}, "y", store.Session{SessionID: "d", CustomName: "meu"}); err != nil {
+	if _, err := a.GroupTargets(app.Context{SessionID: "d"}, "y"); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.Groups.Load().Groups["y"]; len(got) != 1 || got[0].Name != "meu" {
@@ -102,18 +112,18 @@ func TestGroupTargetsSnapshotFallback(t *testing.T) {
 }
 
 func TestGroupTargetsErrors(t *testing.T) {
-	a, f := newApp(t)
+	a, f := grpApp(t)
 	for _, c := range []struct {
 		ctx app.Context
 		tag string
 	}{{app.Context{}, "x"}, {app.Context{SessionID: "a"}, " # "}, {app.Context{SessionID: "zz"}, "x"}} {
-		res, err := a.GroupTargets(c.ctx, c.tag, grpSessions()...)
+		res, err := a.GroupTargets(c.ctx, c.tag)
 		if !errors.Is(err, app.ErrNoTargets) || !res.Err || !strings.HasPrefix(res.Toast, "group: escolha") {
 			t.Fatalf("%+v: %+v %v", c, res, err)
 		}
 	}
 	f.Groups.Errs = map[string]error{"Save": errGrpBoom}
-	res, err := a.GroupTargets(app.Context{SessionID: "a"}, "x", grpSessions()...)
+	res, err := a.GroupTargets(app.Context{SessionID: "a"}, "x")
 	if !errors.Is(err, errGrpBoom) || res.Toast != "group: boom" || !res.Err {
 		t.Fatal(res, err)
 	}
@@ -167,10 +177,10 @@ func TestDissolveGroup(t *testing.T) {
 }
 
 func TestNotifyGroupQueuesAndCountsStopped(t *testing.T) {
-	a, f := newApp(t)
+	a, f := grpApp(t)
 	grpSeed(t, f, "deploy-rc", "a", "c", "gone")
 	ev := a.Subscribe(t.Context())
-	res, err := a.NotifyGroup("deploy-rc", "o bucket mudou", grpSessions()...)
+	res, err := a.NotifyGroup("deploy-rc", "o bucket mudou")
 	if err != nil || res.Err {
 		t.Fatal(res, err)
 	}
@@ -200,7 +210,7 @@ func TestNotifyGroupQueuesAndCountsStopped(t *testing.T) {
 	}
 	// all running: no "paradas"
 	grpSeed(t, f, "run", "a", "b")
-	if res, _ := a.NotifyGroup("#run", "x", grpSessions()...); strings.Contains(res.Toast, "paradas") || res.Err {
+	if res, _ := a.NotifyGroup("#run", "x"); strings.Contains(res.Toast, "paradas") || res.Err {
 		t.Fatal(res.Toast)
 	}
 }
@@ -220,10 +230,10 @@ func TestNotifyGroupErrors(t *testing.T) {
 }
 
 func TestOnPeerResolvesSender(t *testing.T) {
-	a, _ := newApp(t)
+	a, _ := grpApp(t)
 	ev := a.Subscribe(t.Context())
 	at := apptest.Epoch.Add(-time.Minute)
-	seen := a.OnPeer(events.Event{At: at, SessionID: "b", Type: "peer", From: "deploy rc…", Message: "oi"}, grpSessions()...)
+	seen := a.OnPeer(events.Event{At: at, SessionID: "b", Type: "peer", From: "deploy rc…", Message: "oi"})
 	if seen.FromLabel != "deploy rc 1" || seen.ToLabel != "deploy rc 2" || seen.Msg.From != "a" || seen.Msg.Text != "oi" {
 		t.Fatalf("%+v", seen)
 	}
@@ -240,7 +250,7 @@ func TestOnPeerResolvesSender(t *testing.T) {
 		t.Fatalf("%+v", evs)
 	}
 	// unknown sender and receiver; zero time uses the clock
-	seen = a.OnPeer(events.Event{SessionID: "zz", From: "ninguém", Message: "x"}, grpSessions()...)
+	seen = a.OnPeer(events.Event{SessionID: "zz", From: "ninguém", Message: "x"})
 	if seen.FromLabel != "ninguém" || seen.ToLabel != "?" || seen.Msg.From != "" || !seen.Msg.At.Equal(apptest.Epoch) {
 		t.Fatalf("%+v", seen)
 	}
@@ -263,8 +273,8 @@ func TestSessionNamed(t *testing.T) {
 }
 
 func TestMailCueByClock(t *testing.T) {
-	a, f := newApp(t)
-	a.OnPeer(events.Event{SessionID: "b", From: "x"}, grpSessions()...)
+	a, f := grpApp(t)
+	a.OnPeer(events.Event{SessionID: "b", From: "x"})
 	now := func() time.Time { return a.Clock().Now() }
 	c := a.Mail()["b"]
 	if c.State(now()) != app.CueBlink || !a.MailBlinking() {
@@ -284,9 +294,9 @@ func TestMailCueByClock(t *testing.T) {
 }
 
 func TestMessagesKeepLast100(t *testing.T) {
-	a, _ := newApp(t)
+	a, _ := grpApp(t)
 	for i := 0; i < 105; i++ {
-		a.OnPeer(events.Event{SessionID: "b", From: "x", Message: string(rune('a' + i%26))}, grpSessions()...)
+		a.OnPeer(events.Event{SessionID: "b", From: "x", Message: string(rune('a' + i%26))})
 	}
 	if n := len(a.Messages()); n != 100 {
 		t.Fatal(n)
@@ -360,8 +370,8 @@ func TestGroupCommandsRegistered(t *testing.T) {
 	if err := a.RegisterGroupCommands(); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.RegisterGroupCommands(); err != nil {
-		t.Fatal("registering twice is a no-op")
+	if err := a.RegisterGroupCommands(); !errors.Is(err, app.ErrDuplicateCommand) {
+		t.Fatalf("registering twice: %v", err)
 	}
 	for _, n := range []string{"group.add", "group.remove", "group.notify", "group.dissolve"} {
 		if _, ok := a.Registry().Lookup(n); !ok {
@@ -403,10 +413,42 @@ func TestGroupCommandsRegistered(t *testing.T) {
 	}
 }
 
-func TestGroupsLazyRegistration(t *testing.T) {
+func TestGroupsNoLazyRegistration(t *testing.T) {
 	a, _ := newApp(t)
-	_ = a.Groups() // the slice's first use registers its commands
-	if _, ok := a.Registry().Lookup("group.add"); !ok {
-		t.Fatal("lazy registration")
+	_ = a.Groups() // using the slice registers nothing: RegisterBuiltins does
+	if len(a.Registry().List(app.Context{})) != 0 {
+		t.Fatal("the registry stays empty until asked")
 	}
+}
+
+func TestReloadGroupsFollowsTheStore(t *testing.T) {
+	a, f := newApp(t)
+	grpSeed(t, f, "t", "a")
+	if len(a.Groups().Groups["t"]) != 0 {
+		t.Fatal("the core keeps what it read until it reloads")
+	}
+	if got := a.ReloadGroups(); len(got.Groups["t"]) != 1 || len(a.Groups().Groups["t"]) != 1 {
+		t.Fatalf("reloaded: %+v", got)
+	}
+	if tags := a.TagsOf("a"); len(tags) != 1 || tags[0] != "t" || a.TagsOf("zz") != nil {
+		t.Fatalf("TagsOf: %v", tags)
+	}
+	if _, ok := a.MailCueOf("a"); ok {
+		t.Fatal("no cue yet")
+	}
+	a.OnPeer(events.Event{SessionID: "a", From: "x"})
+	if c, ok := a.MailCueOf("a"); !ok || c.Sent {
+		t.Fatalf("cue: %+v", c)
+	}
+}
+
+func TestNewWithoutGroupStore(t *testing.T) {
+	p := apptest.Ports()
+	p.Groups = nil
+	a := app.New(config.Default(), p)
+	defer a.Close()
+	if len(a.Groups().Groups) != 0 {
+		t.Fatal("no store: no groups")
+	}
+	a.Refresh() // no SyncGroupNames without a store
 }

@@ -6,9 +6,7 @@ package app
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
-	"weak"
 
 	"github.com/aqilputi/nekuroddo/internal/config"
 	"github.com/aqilputi/nekuroddo/internal/core"
@@ -35,8 +33,8 @@ func (l TodoList) Error() error {
 	return errors.New(l.Err)
 }
 
-// todoJiraState is what the slice keeps per App: the last todo list and the
-// Jira cache with its loading guard.
+// todoJiraState is what the slice keeps (App.todoJira): the last todo list
+// and the Jira cache with its loading guard.
 type todoJiraState struct {
 	mu        sync.Mutex
 	todos     TodoList
@@ -46,21 +44,7 @@ type todoJiraState struct {
 	jiraErr   error
 }
 
-// The App struct belongs to app.go; the slice's state hangs off it here,
-// keyed weakly so it goes away with its App.
-var todoJiraStates sync.Map // weak.Pointer[App] → *todoJiraState
-
-func (a *App) tj() *todoJiraState {
-	k := weak.Make(a)
-	if v, ok := todoJiraStates.Load(k); ok {
-		return v.(*todoJiraState)
-	}
-	v, loaded := todoJiraStates.LoadOrStore(k, &todoJiraState{})
-	if !loaded {
-		runtime.AddCleanup(a, func(k weak.Pointer[App]) { todoJiraStates.Delete(k) }, k)
-	}
-	return v.(*todoJiraState)
-}
+func (a *App) tj() *todoJiraState { return &a.todoJira }
 
 // TodoAvailable reports whether the todo skill is installed.
 func (a *App) TodoAvailable() bool { return a.ports.Todo != nil && a.ports.Todo.Available() }
