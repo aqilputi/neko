@@ -5,6 +5,21 @@ e as entradas antigas mantêm o nome da época.
 
 ## 2026-10-16
 
+- **documentação:** [gui.md](gui.md) sai de "planejado/em construção" para **implementado** — a Fase 3 do GUI
+  fechou enquanto o guia ainda descrevia o esqueleto. Reescrito contra o código real desta vez (não o plano):
+  `cmd/nekuroddo-gui` existe e `make run-gui-browser` abre de verdade (`vite build` + `nkg --browser --demo
+  --dev`, `xdg-open`, link de uso único); `internal/guihost` serve o frontend e faz proxy de `/v1`
+  (embutido, ou `--connect unix://…`/`tcp://…` para um `nk serve`/`nk --listen`, ou `--listen` para o
+  caminho contrário); `gui/web/src/{scene,inbox,windows,chrome,keymap}` estão todos montados em `App.tsx`,
+  não só em módulos soltos com teste. Bundle medido com `make gui-build`: 291 KB gzip de JS + 4,7 KB de CSS
+  (meta do plano era 1 MB). Achado que corrige o guia anterior: `cmd/nekuroddo-gui/host.go` agora declara
+  `guiCaps` com `"scene"` para o core que o próprio `nkg` embute — `nk.ui.has("scene")` finalmente responde
+  `true`, mas só nesse caso; via `--connect` a um `nk serve` (`serveCaps`) ou a uma TUI com `--listen`
+  (`tuiCaps`), nenhum dos dois ganhou `"scene"`, então continua `false` ali. A janela nativa (Wails v3
+  beta.30 + WebKitGTK 6.0) está implementada e compila sob a tag `wails`, mas **não foi verificada em
+  hardware** — nenhuma máquina usada até agora tinha o WebKitGTK 6.0 instalado; o guia diz isso sem
+  rodeio em vez de presumir que funciona. Seção do GUI em [instalacao.md](instalacao.md#gui-nkg) atualizada
+  junto (o pacote do Debian/Ubuntu ganhou `libgtk-4-dev`, que faltava).
 - **documentação:** fase 3 (WP-6.6): [gui.md](gui.md), o guia de uso do GUI (`nkg`) — como rodar hoje (o
   frontend num navegador comum, contra `nk serve --demo`, já que `cmd/nekuroddo-gui` ainda não existe) e como
   está planejado (`nkg --browser`/`--demo`/`--connect`, WebKitGTK por distro); a cena, o gato da inbox (com a

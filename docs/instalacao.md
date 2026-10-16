@@ -88,25 +88,36 @@ O projeto se chamava `neko` até a v0.1.0. Para atualizar:
 
 ## GUI (`nkg`)
 
-**Em construção** (Fase 3 do [plano](plano-arquitetura.md); guia de uso completo em [gui.md](gui.md)). O `nkg`
-ainda não tem binário — `cmd/nekuroddo-gui` não existe no repositório hoje. Quando existir, o modo
-`nkg --browser` (sem WebKitGTK, abre no navegador padrão) não vai precisar de nada além do Go; só o modo de
-janela nativa (`nkg` sozinho, via Wails v3) vai pedir GTK4 + WebKitGTK 6.0:
+O GUI gráfico (Fase 3 do [plano](plano-arquitetura.md); guia de uso completo em [gui.md](gui.md)) funciona de
+ponta a ponta. O jeito do dia a dia não precisa de nada além do Go e do Node para o build do frontend:
+
+```sh
+make run-gui-browser
+```
+
+Isso builda o frontend (`gui/web`) e abre `nkg --browser --demo` no navegador padrão do sistema — sem
+WebKitGTK, sem janela nativa. Sem `--demo`, `nkg` mostra suas sessões reais (o mesmo core de `nk`); `nkg
+--connect unix://…`/`tcp://…` conecta num `nk serve`/`nk --listen` já rodando. Veja [gui.md](gui.md) para
+todas as flags.
+
+Só o modo de **janela nativa** (`nkg` sozinho, via Wails v3) pede GTK4 + WebKitGTK 6.0:
 
 | distro | pacote |
 |---|---|
 | Arch / CachyOS | `sudo pacman -S webkitgtk-6.0` |
-| Debian / Ubuntu | `sudo apt install libwebkitgtk-6.0-dev` |
-| Fedora | `sudo dnf install webkitgtk6.0` |
-
-Hoje já dá para ver o frontend do GUI (ainda em construção) num navegador comum, contra um `nk serve --demo`
-de verdade:
+| Debian / Ubuntu | `sudo apt install libwebkitgtk-6.0-dev libgtk-4-dev` |
+| Fedora | `sudo dnf install webkitgtk6.0-devel gtk4-devel` |
 
 ```sh
-cd gui/web && npm ci && npm run demo
+make build-gui && bin/nkg
 ```
 
-Veja [gui.md](gui.md) para o que já funciona, o que é só o esqueleto, e solução de problemas de WebGL.
+Essa janela nativa está implementada em código, mas **ainda não foi verificada em hardware** — nenhuma
+máquina usada até agora teve o WebKitGTK 6.0 instalado. O caminho `--browser` acima é o que de fato foi
+testado.
+
+Veja [gui.md](gui.md) para a cena, o gato da inbox, janelas, chrome, teclado, Lua, acessibilidade e solução de
+problemas de WebGL.
 
 ## Ferramenta de diagnóstico
 
