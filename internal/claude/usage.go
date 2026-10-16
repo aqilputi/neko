@@ -37,11 +37,14 @@ func ParseUsage(raw string) UsageReport {
 	return u
 }
 
-// FetchUsage runs `claude -p /usage`.
+// FetchUsage runs `claude -p /usage` without persisting a session or firing
+// hooks: otherwise every poll leaves a transcript in the cwd's project and
+// shows up (via neko's own hook) as a short-lived session that notifies.
 func FetchUsage() (UsageReport, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, Bin(), "-p", "/usage").Output()
+	out, err := exec.CommandContext(ctx, Bin(), "-p", "/usage",
+		"--no-session-persistence", "--settings", `{"disableAllHooks":true}`).Output()
 	if err != nil {
 		return UsageReport{}, err
 	}
