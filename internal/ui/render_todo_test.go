@@ -98,7 +98,7 @@ func TestRhTodoViewTasksAndIssues(t *testing.T) {
 	}
 	rhHasNot(t, out, "velha demais") // untouched for months: hidden unless H
 
-	m.showAll = true
+	m.view.ShowAll = true
 	m.jiraLoading = true
 	m.rebuildTodos()
 	out = m.todoView(m.t(), 80, 40)

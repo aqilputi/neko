@@ -15,6 +15,9 @@ incompatíveis podem acontecer em versões menores e serão sempre descritas aqu
   terminais reais embutidos) e scripts em Lua, documentado em
   [docs/plano-arquitetura.md](docs/plano-arquitetura.md). Fase 1 (mover regras puras para `internal/core` e
   montar o esqueleto de `internal/app`) em andamento; comportamento, teclas e atalhos continuam os mesmos.
+- `internal/ui` fatiada por assunto (sessões, painéis, entrada/disparo, Jira/todos, avisos, navegação) e
+  ligada a `internal/core` (árvore, inbox e helpers) e a `internal/app` (um só store e log de eventos, via
+  `internal/wire`), sem mudança de comportamento.
 
 ## [0.1.0] - 2026-10-16
 

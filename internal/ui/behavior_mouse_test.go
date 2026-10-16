@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/todo"
 )
 
@@ -43,11 +44,11 @@ func TestBehaviorClickTabs(t *testing.T) {
 
 func TestBehaviorClickListSelectsThenOpens(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.cursor = 0
+	m.view.Cursor = 0
 	// row 2 is session b (interactive): first click selects
 	m.update(bhClick(5, bhListY(&m, 2)))
-	if r := m.cur(); r.sess == nil || r.sess.SessionID != "b" {
-		t.Fatalf("click selects: %v", rowKey(*r))
+	if r := m.cur(); r.Sess == nil || r.Sess.SessionID != "b" {
+		t.Fatalf("click selects: %v", core.RowKey(*r))
 	}
 	// second click opens it (interactive: a toast)
 	cmd := m.update(bhClick(5, bhListY(&m, 2)))
@@ -60,8 +61,8 @@ func TestBehaviorClickListSelectsThenOpens(t *testing.T) {
 		bhClick(5, m.rects().left.Min.Y),
 		{X: 5, Y: bhListY(&m, 0), Button: tea.MouseRight},
 	} {
-		before := m.cursor
-		if m.update(msg) != nil || m.cursor != before {
+		before := m.view.Cursor
+		if m.update(msg) != nil || m.view.Cursor != before {
 			t.Errorf("click %+v should do nothing", msg)
 		}
 	}
@@ -69,19 +70,19 @@ func TestBehaviorClickListSelectsThenOpens(t *testing.T) {
 
 func TestBehaviorWheelScrollsList(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.cursor = 0
+	m.view.Cursor = 0
 	y := bhListY(&m, 0)
 	m.update(tea.MouseWheelMsg{X: 5, Y: y, Button: tea.MouseWheelDown})
-	if m.cursor != 3 {
-		t.Fatalf("wheel down moves 3: %d", m.cursor)
+	if m.view.Cursor != 3 {
+		t.Fatalf("wheel down moves 3: %d", m.view.Cursor)
 	}
 	m.update(tea.MouseWheelMsg{X: 5, Y: y, Button: tea.MouseWheelUp})
-	if m.cursor != 0 {
-		t.Fatalf("wheel up moves back: %d", m.cursor)
+	if m.view.Cursor != 0 {
+		t.Fatalf("wheel up moves back: %d", m.view.Cursor)
 	}
 	// over the right side (no pane) the wheel does nothing to the list
 	m.update(tea.MouseWheelMsg{X: 100, Y: y, Button: tea.MouseWheelDown})
-	if m.cursor != 0 {
+	if m.view.Cursor != 0 {
 		t.Fatal("wheel outside the list")
 	}
 }
@@ -90,14 +91,14 @@ func TestBehaviorClickInbox(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
 	m.tab = tabInbox
 	m.update(bhClick(5, bhListY(&m, 4))) // second card (4 lines each)
-	if m.inboxCur != 1 {
-		t.Fatalf("click selects the second card: %d", m.inboxCur)
+	if m.view.InboxCursor != 1 {
+		t.Fatalf("click selects the second card: %d", m.view.InboxCursor)
 	}
 	cmd := m.update(bhClick(5, bhListY(&m, 5)))
 	if cmd == nil {
 		t.Fatal("clicking the selected card opens it (c resumes)")
 	}
-	if m.update(bhClick(5, bhListY(&m, 12))) != nil || m.inboxCur != 1 {
+	if m.update(bhClick(5, bhListY(&m, 12))) != nil || m.view.InboxCursor != 1 {
 		t.Fatal("past the last card: nothing")
 	}
 }

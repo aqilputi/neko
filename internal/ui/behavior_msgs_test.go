@@ -12,6 +12,7 @@ import (
 
 	"github.com/aqilputi/nekuroddo/internal/claude"
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/store"
@@ -404,8 +405,8 @@ func TestBehaviorWindowPctAndText(t *testing.T) {
 		p    float64
 		want string
 	}{{0, ""}, {-1, ""}, {0.2, "<1%"}, {1, "1%"}, {12.4, "12%"}, {99.6, "100%"}} {
-		if got := pctText(c.p); got != c.want {
-			t.Errorf("pctText(%v)=%q want %q", c.p, got, c.want)
+		if got := core.PctText(c.p); got != c.want {
+			t.Errorf("core.PctText(%v)=%q want %q", c.p, got, c.want)
 		}
 	}
 }

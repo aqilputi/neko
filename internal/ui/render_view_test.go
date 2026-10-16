@@ -107,7 +107,7 @@ func TestRhTabs(t *testing.T) {
 	rhFits(t, out, m.w)
 	rhHas(t, out, "1 Sessões", "2 Inbox (2)", "3 Todos (0)", "4 Arquivo (0)", "ativas ≤3d", "ordem: atividade", "1 ocultas (H)")
 	rhHasNot(t, out, "filtro")
-	m.showAll, m.filter = true, "dep"
+	m.view.ShowAll, m.view.Filter = true, "dep"
 	m.rebuild()
 	out = m.tabs(m.t())
 	rhHas(t, out, "tudo", "filtro: /dep")
@@ -169,16 +169,16 @@ func TestRhInboxView(t *testing.T) {
 	rhFits(t, out, 60)
 	rhHas(t, out, "❓ qual bucket usar?", "❓ Posso apagar?", "🔐 Bash(ls)", "pronto, terminei", "no prompt", "✉←")
 	// 4 lines per item
-	if n := len(rhLines(out)); n != 4*len(m.inbox) {
-		t.Fatalf("want %d lines, got %d", 4*len(m.inbox), n)
+	if n := len(rhLines(out)); n != 4*len(m.view.Inbox) {
+		t.Fatalf("want %d lines, got %d", 4*len(m.view.Inbox), n)
 	}
 	// short panel: only as many items as fit, around the cursor
-	m.inboxCur = len(m.inbox) - 1
+	m.view.InboxCursor = len(m.view.Inbox) - 1
 	out = m.inboxView(m.t(), 60, 8)
 	if n := len(rhLines(out)); n != 8 {
 		t.Fatalf("2 items of 4 lines expected, got %d", n)
 	}
-	rhHas(t, out, m.inbox[len(m.inbox)-1].Label())
+	rhHas(t, out, m.view.Inbox[len(m.view.Inbox)-1].Label())
 
 	rhHas(t, m.left(m.t(), 50, 20), "inbox · quem te espera")
 }

@@ -164,10 +164,10 @@ func TestBehaviorPaletteNavigateAndRunAction(t *testing.T) {
 	if d.items[d.matches[0].Index].title != "desce" {
 		t.Fatalf("first item: %q", d.items[d.matches[0].Index].title)
 	}
-	m.cursor = 0
+	m.view.Cursor = 0
 	bhEnter(&m)
-	if m.top() != nil || m.cursor != 1 {
-		t.Fatalf("enter runs the action and closes: cursor %d", m.cursor)
+	if m.top() != nil || m.view.Cursor != 1 {
+		t.Fatalf("enter runs the action and closes: cursor %d", m.view.Cursor)
 	}
 	// esc and ctrl+c close it
 	for _, k := range []tea.KeyPressMsg{{Code: tea.KeyEscape}, {Code: 'c', Mod: tea.ModCtrl}} {
@@ -217,7 +217,7 @@ func TestBehaviorPaletteItems(t *testing.T) {
 	}
 	m.tab = tabInbox
 	it.run(&m)
-	if r := m.cur(); m.tab != tabSessions || r.sess == nil || r.sess.SessionID != "c" {
+	if r := m.cur(); m.tab != tabSessions || r.Sess == nil || r.Sess.SessionID != "c" {
 		t.Fatal("ir: selects the session")
 	}
 	// jump to a task
@@ -317,7 +317,7 @@ func TestBehaviorPaletteGroupCommands(t *testing.T) {
 		t.Fatalf("notify defaults to the cursor's group: %+v", it)
 	}
 	// group with nothing selected
-	m.cursor = 0
+	m.view.Cursor = 0
 	if tm, ok := bhHasToast(m.groupTargets("x"), "group: escolha"); !ok || !tm.err {
 		t.Fatal("group needs a target")
 	}
@@ -464,7 +464,7 @@ func TestBehaviorSwitcherRunsItem(t *testing.T) {
 	if _, ok := bhHasToast(cmd, "pid 42"); !ok {
 		t.Fatal("interactive chat: points to its terminal")
 	}
-	if r := m.cur(); r.sess.SessionID != "b" {
+	if r := m.cur(); r.Sess.SessionID != "b" {
 		t.Fatal("selects it in the tree")
 	}
 	// the background one attaches focused
@@ -489,7 +489,7 @@ func TestBehaviorToggleArchiveSession(t *testing.T) {
 	}
 	// in the inbox X archives the selected one
 	m.tab = tabInbox
-	m.inboxCur = 0
+	m.view.InboxCursor = 0
 	_, cmd = m.keyNormal(bhRune('X'))
 	if _, ok := bhHasToast(cmd, "aba 4 Arquivo"); !ok {
 		t.Fatal("X in the inbox archives")
@@ -506,7 +506,7 @@ func TestBehaviorToggleArchiveSession(t *testing.T) {
 	}
 	// context row in the archive tab: restore all, asking
 	m.rebuild()
-	m.cursor = 0
+	m.view.Cursor = 0
 	if m.toggleArchive() != nil {
 		t.Fatal("asks first")
 	}
@@ -523,9 +523,9 @@ func TestBehaviorToggleArchiveSession(t *testing.T) {
 	}
 	// a context row with all its sessions folded away has none listed
 	m2 := bhModel(t, bhSessions()...)
-	m2.collapsed["ctx:c1"] = true
+	m2.view.Collapsed["ctx:c1"] = true
 	m2.rebuild()
-	m2.cursor = 0
+	m2.view.Cursor = 0
 	if m2.toggleArchive() != nil || m2.top() != nil {
 		t.Fatal("a folded context lists no sessions to archive")
 	}

@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
 )
 
@@ -29,8 +30,8 @@ func TestRenameAndMove(t *testing.T) {
 	m.rebuild()
 	pick := func(id string) {
 		for i, r := range m.rows {
-			if r.kind == "sess" && r.sess.SessionID == id {
-				m.cursor = i
+			if r.Kind == core.RowSess && r.Sess.SessionID == id {
+				m.view.Cursor = i
 				return
 			}
 		}
@@ -60,8 +61,8 @@ func TestRenameAndMove(t *testing.T) {
 
 	// n on a section header renames the section
 	for i, r := range m.rows {
-		if r.kind == "ctx" && r.ctx == ctx {
-			m.cursor = i
+		if r.Kind == core.RowCtx && r.Ctx == ctx {
+			m.view.Cursor = i
 		}
 	}
 	m.keyNormal(keyPress("n"))

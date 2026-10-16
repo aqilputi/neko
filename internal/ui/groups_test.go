@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/groups"
 	"github.com/aqilputi/nekuroddo/internal/store"
@@ -33,8 +34,8 @@ func groupModel(t *testing.T) Model {
 
 func (m *Model) cursorOn(id string) {
 	for i, r := range m.rows {
-		if r.kind == "sess" && r.sess.SessionID == id {
-			m.cursor = i
+		if r.Kind == core.RowSess && r.Sess.SessionID == id {
+			m.view.Cursor = i
 		}
 	}
 }
@@ -89,18 +90,18 @@ func TestEscClearsPicksFirst(t *testing.T) {
 	m := groupModel(t)
 	m.cursorOn("a")
 	m.key(keyPress("space"))
-	m.filter = "x"
+	m.view.Filter = "x"
 	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if len(m.picked) != 0 || m.filter != "x" {
-		t.Fatalf("esc should drop the picks and keep the filter: %v %q", m.picked, m.filter)
+	if len(m.picked) != 0 || m.view.Filter != "x" {
+		t.Fatalf("esc should drop the picks and keep the filter: %v %q", m.picked, m.view.Filter)
 	}
 }
 
 func TestSpaceOnContextFolds(t *testing.T) {
 	m := groupModel(t)
-	m.cursor = 0
+	m.view.Cursor = 0
 	m.key(keyPress("space"))
-	if !m.collapsed["ctx:ctx"] || len(m.picked) != 0 {
+	if !m.view.Collapsed["ctx:ctx"] || len(m.picked) != 0 {
 		t.Fatal("space on a context row should fold it, not pick")
 	}
 }

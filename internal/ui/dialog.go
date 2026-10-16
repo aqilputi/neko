@@ -13,6 +13,7 @@ import (
 	"github.com/sahilm/fuzzy"
 
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/groups"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/theme"
@@ -265,15 +266,15 @@ func (m *Model) paletteItems() []paletteItem {
 		run: func(m *Model) tea.Cmd { return m.archiveStale() }})
 	for i := range m.snap.Sessions {
 		s := m.snap.Sessions[i]
-		if s.Stale && !m.showAll {
+		if s.Stale && !m.view.ShowAll {
 			continue
 		}
 		sid := s.SessionID
 		items = append(items, paletteItem{title: "ir: " + s.Label(), hint: s.Context + " · " + config.Tilde(s.Cwd), run: func(m *Model) tea.Cmd {
 			m.tab = tabSessions
 			for j, r := range m.rows {
-				if r.kind == "sess" && r.sess.SessionID == sid {
-					m.cursor = j
+				if r.Kind == core.RowSess && r.Sess.SessionID == sid {
+					m.view.Cursor = j
 				}
 			}
 			return nil
@@ -325,7 +326,7 @@ func (d *paletteDialog) filter(m *Model) {
 	} else {
 		d.matches = append(d.matches, fuzzy.FindFrom(q, paletteSource(d.base))...)
 	}
-	d.cur = clamp(d.cur, 0, len(d.matches)-1)
+	d.cur = core.Clamp(d.cur, 0, len(d.matches)-1)
 }
 
 // openPaletteWith opens the palette with a command already typed.
@@ -357,10 +358,10 @@ func (d *paletteDialog) handle(m *Model, k tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case "down", "ctrl+n", "ctrl+j":
-		d.cur = clamp(d.cur+1, 0, len(d.matches)-1)
+		d.cur = core.Clamp(d.cur+1, 0, len(d.matches)-1)
 		return false, nil
 	case "up", "ctrl+p", "ctrl+k":
-		d.cur = clamp(d.cur-1, 0, len(d.matches)-1)
+		d.cur = core.Clamp(d.cur-1, 0, len(d.matches)-1)
 		return false, nil
 	}
 	var cmd tea.Cmd
@@ -388,14 +389,14 @@ func (d *paletteDialog) view(m *Model, t theme.Theme, w int) string {
 			hit[j] = true
 		}
 		var title strings.Builder
-		for j, r := range []rune(truncate(it.title, w-24)) {
+		for j, r := range []rune(core.Truncate(it.title, w-24)) {
 			c := st.Foreground(t.Text)
 			if hit[j] {
 				c = st.Foreground(t.Accent).Bold(true)
 			}
 			title.WriteString(c.Render(string(r)))
 		}
-		hint := st.Foreground(t.Muted).Render(truncate(it.hint, 20))
+		hint := st.Foreground(t.Muted).Render(core.Truncate(it.hint, 20))
 		gap := max(w-4-lipgloss.Width(title.String())-lipgloss.Width(hint)-2, 1)
 		lines = append(lines, st.Render(" ")+title.String()+st.Render(strings.Repeat(" ", gap))+hint+st.Render(" "))
 	}
@@ -438,8 +439,8 @@ func (m *Model) openSwitcher() tea.Cmd {
 				m.tab = tabSessions
 				m.rebuild()
 				for j, r := range m.rows {
-					if r.kind == "sess" && r.sess.SessionID == sess.SessionID {
-						m.cursor = j
+					if r.Kind == core.RowSess && r.Sess.SessionID == sess.SessionID {
+						m.view.Cursor = j
 					}
 				}
 				if sess.Kind == "interactive" {

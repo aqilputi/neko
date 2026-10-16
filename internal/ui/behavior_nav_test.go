@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/theme"
 )
@@ -18,35 +19,35 @@ func TestBehaviorRebuildLayout(t *testing.T) {
 	if got := bhKinds(&m); !reflect.DeepEqual(got, want) {
 		t.Fatalf("rows %v want %v", got, want)
 	}
-	if m.hidden != 1 {
-		t.Fatalf("stale session should be counted as hidden: %d", m.hidden)
+	if m.view.Hidden != 1 {
+		t.Fatalf("stale session should be counted as hidden: %d", m.view.Hidden)
 	}
-	if len(m.inbox) != 2 || m.inbox[0].SessionID != "a" || m.inbox[1].SessionID != "c" {
-		t.Fatalf("inbox: blocked first, then returned: %v", m.inbox)
+	if len(m.view.Inbox) != 2 || m.view.Inbox[0].SessionID != "a" || m.view.Inbox[1].SessionID != "c" {
+		t.Fatalf("inbox: blocked first, then returned: %v", m.view.Inbox)
 	}
-	if m.rows[0].ctxN != 2 {
-		t.Fatalf("context row counts its sessions: %d", m.rows[0].ctxN)
+	if m.rows[0].CtxN != 2 {
+		t.Fatalf("context row counts its sessions: %d", m.rows[0].CtxN)
 	}
 	// the cursor follows the selected row when rows move
 	bhSelect(t, &m, "c")
-	m.collapsed["ctx:c1"] = true
+	m.view.Collapsed["ctx:c1"] = true
 	m.rebuild()
-	if r := m.cur(); r == nil || r.sess == nil || r.sess.SessionID != "c" {
+	if r := m.cur(); r == nil || r.Sess == nil || r.Sess.SessionID != "c" {
 		t.Fatalf("cursor should stay on c: %v", bhKinds(&m))
 	}
 }
 
 func TestBehaviorFilterMatchesAndBypassesStale(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.filter = "delta"
+	m.view.Filter = "delta"
 	m.rebuild()
 	if got := sessOrder(&m); !reflect.DeepEqual(got, []string{"d"}) {
 		t.Fatalf("a filter also finds stale sessions: %v", got)
 	}
-	m.filter = "zzzzqqq"
+	m.view.Filter = "zzzzqqq"
 	m.rebuild()
-	if len(m.rows) != 0 || m.cursor != 0 {
-		t.Fatalf("nothing matches: %v cursor %d", bhKinds(&m), m.cursor)
+	if len(m.rows) != 0 || m.view.Cursor != 0 {
+		t.Fatalf("nothing matches: %v cursor %d", bhKinds(&m), m.view.Cursor)
 	}
 }
 
@@ -71,8 +72,8 @@ func TestBehaviorSortModes(t *testing.T) {
 	}
 	for _, s := range steps {
 		_, cmd := m.keyNormal(bhRune('S'))
-		if sortModes[m.sortMode] != s.mode {
-			t.Fatalf("S should cycle to %s, got %s", s.mode, sortModes[m.sortMode])
+		if core.SortModes[m.view.SortMode] != s.mode {
+			t.Fatalf("S should cycle to %s, got %s", s.mode, core.SortModes[m.view.SortMode])
 		}
 		if _, ok := bhHasToast(cmd, "ordem: "+s.mode); !ok {
 			t.Fatalf("S should announce %s", s.mode)
@@ -88,8 +89,8 @@ func TestBehaviorSortIndex(t *testing.T) {
 		in   string
 		want int
 	}{{"atividade", 0}, {"custo", 1}, {"nome", 2}, {"", 0}, {"bogus", 0}} {
-		if got := sortIndex(tc.in); got != tc.want {
-			t.Errorf("sortIndex(%q)=%d want %d", tc.in, got, tc.want)
+		if got := core.SortIndex(tc.in); got != tc.want {
+			t.Errorf("core.SortIndex(%q)=%d want %d", tc.in, got, tc.want)
 		}
 	}
 	for _, tc := range []struct {
@@ -108,7 +109,7 @@ func TestBehaviorSortInbox(t *testing.T) {
 	c := &store.Session{SessionID: "c", Attention: store.AttnBlocked}
 	d := &store.Session{SessionID: "d", Attention: store.AttnReturned}
 	xs := []*store.Session{a, b, c, d}
-	sortInbox(xs, map[string]int{"sess:c": -1, "sess:b": 5})
+	core.SortInbox(xs, map[string]int{"sess:c": -1, "sess:b": 5})
 	var got []string
 	for _, s := range xs {
 		got = append(got, s.SessionID)
@@ -150,12 +151,12 @@ func TestBehaviorMovementKeys(t *testing.T) {
 		{"ctrl+b", []tea.KeyPressMsg{{Code: 'b', Mod: tea.ModCtrl}}, last, last - m.listHeight()},
 	}
 	for _, c := range cases {
-		m.cursor = c.start
+		m.view.Cursor = c.start
 		for _, k := range c.keys {
 			m.key(k)
 		}
-		if m.cursor != c.want {
-			t.Errorf("%s: cursor %d want %d", c.name, m.cursor, c.want)
+		if m.view.Cursor != c.want {
+			t.Errorf("%s: cursor %d want %d", c.name, m.view.Cursor, c.want)
 		}
 	}
 	if m.pendingG {
@@ -167,12 +168,12 @@ func TestBehaviorMoveInboxAndTodos(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
 	m.tab = tabInbox
 	m.move(5)
-	if m.inboxCur != 1 {
-		t.Fatalf("inbox cursor clamps to the last: %d", m.inboxCur)
+	if m.view.InboxCursor != 1 {
+		t.Fatalf("inbox cursor clamps to the last: %d", m.view.InboxCursor)
 	}
 	m.move(-5)
-	if m.inboxCur != 0 {
-		t.Fatalf("inbox cursor clamps to 0: %d", m.inboxCur)
+	if m.view.InboxCursor != 0 {
+		t.Fatalf("inbox cursor clamps to 0: %d", m.view.InboxCursor)
 	}
 	m.tab = tabTodos
 	m.move(3)
@@ -185,8 +186,8 @@ func TestBehaviorClamp(t *testing.T) {
 	for _, c := range []struct{ v, lo, hi, want int }{
 		{5, 0, 3, 3}, {-1, 0, 3, 0}, {2, 0, 3, 2}, {7, 0, -1, 0},
 	} {
-		if got := clamp(c.v, c.lo, c.hi); got != c.want {
-			t.Errorf("clamp(%d,%d,%d)=%d want %d", c.v, c.lo, c.hi, got, c.want)
+		if got := core.Clamp(c.v, c.lo, c.hi); got != c.want {
+			t.Errorf("core.Clamp(%d,%d,%d)=%d want %d", c.v, c.lo, c.hi, got, c.want)
 		}
 	}
 }
@@ -235,7 +236,7 @@ func TestBehaviorUpdateRebuildsOnTabChange(t *testing.T) {
 func TestBehaviorShowAllToggle(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
 	_, cmd := m.keyNormal(bhRune('H'))
-	if !m.showAll {
+	if !m.view.ShowAll {
 		t.Fatal("H shows all")
 	}
 	if _, ok := bhHasToast(cmd, "mostrando tudo"); !ok {
@@ -246,7 +247,7 @@ func TestBehaviorShowAllToggle(t *testing.T) {
 	}
 	subs := 0
 	for _, r := range m.rows {
-		if r.kind == "sub" {
+		if r.Kind == core.RowSub {
 			subs++
 		}
 	}
@@ -254,7 +255,7 @@ func TestBehaviorShowAllToggle(t *testing.T) {
 		t.Fatalf("finished subagents shown with H: %d", subs)
 	}
 	_, cmd = m.keyNormal(bhRune('H'))
-	if _, ok := bhHasToast(cmd, "só as ativas"); !ok || m.showAll {
+	if _, ok := bhHasToast(cmd, "só as ativas"); !ok || m.view.ShowAll {
 		t.Fatal("H again hides")
 	}
 }
@@ -262,50 +263,50 @@ func TestBehaviorShowAllToggle(t *testing.T) {
 func TestBehaviorCollapseExpand(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
 	bhSelect(t, &m, "b")
-	m.collapsed["sess:b"] = true
+	m.view.Collapsed["sess:b"] = true
 	m.rebuild()
 	// h on a folded session folds its context
 	m.keyNormal(bhRune('h'))
-	if !m.collapsed["ctx:c1"] {
+	if !m.view.Collapsed["ctx:c1"] {
 		t.Fatal("h on a folded session folds the context")
 	}
 	if got := bhKinds(&m); !reflect.DeepEqual(got, []string{"ctx:c1", "ctx:c2", "sess:c"}) {
 		t.Fatalf("rows %v", got)
 	}
 	// l opens the context again
-	m.cursor = 0
+	m.view.Cursor = 0
 	m.keyNormal(bhRune('l'))
-	if m.collapsed["ctx:c1"] {
+	if m.view.Collapsed["ctx:c1"] {
 		t.Fatal("l on a context opens it")
 	}
 	// l on the session opens its subs
 	bhSelect(t, &m, "b")
 	m.keyNormal(bhRune('l'))
-	if m.collapsed["sess:b"] {
+	if m.view.Collapsed["sess:b"] {
 		t.Fatal("l on a session opens its subagents")
 	}
 	// h on a session without visible subs folds the context
 	bhSelect(t, &m, "a")
 	m.keyNormal(bhRune('h'))
-	if !m.collapsed["ctx:c1"] {
+	if !m.view.Collapsed["ctx:c1"] {
 		t.Fatal("h on a leaf session folds its context")
 	}
 	// h on a context row folds it
-	m.collapsed = map[string]bool{}
+	m.view.Collapsed = map[string]bool{}
 	m.rebuild()
 	for i, r := range m.rows {
-		if r.kind == "ctx" && r.ctx == "c2" {
-			m.cursor = i
+		if r.Kind == core.RowCtx && r.Ctx == "c2" {
+			m.view.Cursor = i
 		}
 	}
 	m.keyNormal(bhRune('h'))
-	if !m.collapsed["ctx:c2"] {
+	if !m.view.Collapsed["ctx:c2"] {
 		t.Fatal("h on a context folds it")
 	}
 	// h on a session with subs folds the session only
 	bhSelect(t, &m, "b")
 	m.keyNormal(bhRune('h'))
-	if !m.collapsed["sess:b"] || m.collapsed["ctx:c1"] {
+	if !m.view.Collapsed["sess:b"] || m.view.Collapsed["ctx:c1"] {
 		t.Fatal("h on a session with subs folds the session first")
 	}
 }
@@ -314,15 +315,15 @@ func TestBehaviorCollapseExpand(t *testing.T) {
 // cursor to it.
 func TestBehaviorCollapseSubInLastContext(t *testing.T) {
 	m := bhModel(t, store.Session{SessionID: "b", Context: "c", Subs: []store.Sub{{ID: "s1"}}})
-	m.cursor = 2
-	if m.cur().kind != "sub" {
+	m.view.Cursor = 2
+	if m.cur().Kind != core.RowSub {
 		t.Fatalf("rows %v", bhKinds(&m))
 	}
 	m.keyNormal(bhRune('h'))
-	if !m.collapsed["sess:b"] {
+	if !m.view.Collapsed["sess:b"] {
 		t.Fatal("h on a subagent folds its session")
 	}
-	if r := m.cur(); r == nil || r.kind != "sess" || r.sess.SessionID != "b" {
+	if r := m.cur(); r == nil || r.Kind != core.RowSess || r.Sess.SessionID != "b" {
 		t.Fatalf("cursor should go to the parent: %v", bhKinds(&m))
 	}
 }
@@ -330,16 +331,16 @@ func TestBehaviorCollapseSubInLastContext(t *testing.T) {
 // BUG: collapse keeps r := m.cur() (a pointer into m.rows) across
 // m.rebuild(), which rewrites m.rows in place. Folding a subagent whose row
 // is followed by another context leaves r pointing at that context row
-// (sess == nil) and r.sess.SessionID panics.
+// (sess == nil) and r.Sess.SessionID panics.
 func TestBehaviorCollapseSubFollowedByContext(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
 	for i, r := range m.rows {
-		if r.kind == "sub" {
-			m.cursor = i
+		if r.Kind == core.RowSub {
+			m.view.Cursor = i
 		}
 	}
 	m.keyNormal(bhRune('h'))
-	if r := m.cur(); r == nil || r.kind != "sess" || r.sess.SessionID != "b" {
+	if r := m.cur(); r == nil || r.Kind != core.RowSess || r.Sess.SessionID != "b" {
 		t.Fatalf("cursor should go to the parent: %v", bhKinds(&m))
 	}
 }
@@ -349,14 +350,14 @@ func TestBehaviorCollapseIgnoredOutsideTree(t *testing.T) {
 	m.tab = tabInbox
 	m.collapse()
 	m.expand()
-	if len(m.collapsed) != 0 {
+	if len(m.view.Collapsed) != 0 {
 		t.Fatal("folding only works in the tree tabs")
 	}
 	empty := bhModel(t)
 	empty.collapse()
 	empty.expand()
 	empty.toggle()
-	if len(empty.collapsed) != 0 {
+	if len(empty.view.Collapsed) != 0 {
 		t.Fatal("nothing to fold without rows")
 	}
 }
@@ -365,11 +366,11 @@ func TestBehaviorToggleSessionRow(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
 	bhSelect(t, &m, "b")
 	m.toggle()
-	if !m.collapsed["sess:b"] {
+	if !m.view.Collapsed["sess:b"] {
 		t.Fatal("toggle on a session flips its fold")
 	}
 	m.toggle()
-	if m.collapsed["sess:b"] {
+	if m.view.Collapsed["sess:b"] {
 		t.Fatal("toggle again unfolds")
 	}
 }
@@ -380,7 +381,7 @@ func TestBehaviorVisibleSubs(t *testing.T) {
 	if n := m.visibleSubs(s); n != 1 {
 		t.Fatalf("only running subs: %d", n)
 	}
-	m.showAll = true
+	m.view.ShowAll = true
 	if n := m.visibleSubs(s); n != 3 {
 		t.Fatalf("H shows all subs: %d", n)
 	}
@@ -388,21 +389,21 @@ func TestBehaviorVisibleSubs(t *testing.T) {
 
 func TestBehaviorJumpAttention(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.cursor = 0
+	m.view.Cursor = 0
 	m.keyNormal(bhRune('a'))
-	if r := m.cur(); r.sess == nil || r.sess.SessionID != "a" {
-		t.Fatalf("a jumps to the first waiting session: %v", rowKey(*r))
+	if r := m.cur(); r.Sess == nil || r.Sess.SessionID != "a" {
+		t.Fatalf("a jumps to the first waiting session: %v", core.RowKey(*r))
 	}
 	m.keyNormal(bhRune('a'))
-	if r := m.cur(); r.sess == nil || r.sess.SessionID != "c" {
-		t.Fatalf("a again goes to the next: %v", rowKey(*r))
+	if r := m.cur(); r.Sess == nil || r.Sess.SessionID != "c" {
+		t.Fatalf("a again goes to the next: %v", core.RowKey(*r))
 	}
 	m.keyNormal(bhRune('a'))
-	if r := m.cur(); r.sess.SessionID != "a" {
+	if r := m.cur(); r.Sess.SessionID != "a" {
 		t.Fatal("a wraps around")
 	}
 	m.keyNormal(bhRune('A'))
-	if r := m.cur(); r.sess.SessionID != "c" {
+	if r := m.cur(); r.Sess.SessionID != "c" {
 		t.Fatal("A goes backwards (wrapping)")
 	}
 	// from another tab, a goes back to the tree
@@ -413,16 +414,16 @@ func TestBehaviorJumpAttention(t *testing.T) {
 	}
 	// in the inbox it just moves
 	m.tab = tabInbox
-	m.inboxCur = 0
+	m.view.InboxCursor = 0
 	m.keyNormal(bhRune('a'))
-	if m.inboxCur != 1 {
-		t.Fatalf("a in the inbox moves down: %d", m.inboxCur)
+	if m.view.InboxCursor != 1 {
+		t.Fatalf("a in the inbox moves down: %d", m.view.InboxCursor)
 	}
 	// nothing waiting: the cursor stays
 	q := bhModel(t, store.Session{SessionID: "q", Context: "x"})
-	q.cursor = 1
+	q.view.Cursor = 1
 	q.jumpAttention(1)
-	if q.cursor != 1 {
+	if q.view.Cursor != 1 {
 		t.Fatal("no attention: cursor unchanged")
 	}
 }
@@ -435,26 +436,26 @@ func TestBehaviorFilterInput(t *testing.T) {
 		t.Fatal("/ opens the filter in the sessions tab")
 	}
 	bhType(&m, "charl")
-	if m.filter != "charl" {
-		t.Fatalf("typing filters live: %q", m.filter)
+	if m.view.Filter != "charl" {
+		t.Fatalf("typing filters live: %q", m.view.Filter)
 	}
 	if got := sessOrder(&m); !reflect.DeepEqual(got, []string{"c"}) {
 		t.Fatalf("live filter rows: %v", got)
 	}
 	bhEnter(&m)
-	if m.mode != modeNormal || m.filter != "charl" {
+	if m.mode != modeNormal || m.view.Filter != "charl" {
 		t.Fatal("enter keeps the filter")
 	}
 	// esc in NORMAL clears the filter
 	m.keyNormal(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.filter != "" || len(sessOrder(&m)) != 3 {
-		t.Fatalf("esc clears the filter: %q %v", m.filter, sessOrder(&m))
+	if m.view.Filter != "" || len(sessOrder(&m)) != 3 {
+		t.Fatalf("esc clears the filter: %q %v", m.view.Filter, sessOrder(&m))
 	}
 	// esc inside the filter input drops it too
 	m.keyNormal(bhRune('/'))
 	bhType(&m, "alp")
 	m.key(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.mode != modeNormal || m.filter != "" {
+	if m.mode != modeNormal || m.view.Filter != "" {
 		t.Fatal("esc in the filter line clears it")
 	}
 }
@@ -545,10 +546,10 @@ func TestBehaviorPickOutsideTree(t *testing.T) {
 	}
 	m.tab = tabInbox
 	m.togglePick()
-	if !m.picked["a"] || m.inboxCur != 1 {
+	if !m.picked["a"] || m.view.InboxCursor != 1 {
 		t.Fatal("space in the inbox picks and moves down")
 	}
-	m.inboxCur = 0
+	m.view.InboxCursor = 0
 	m.togglePick()
 	if m.picked["a"] {
 		t.Fatal("space again unpicks")
@@ -567,7 +568,7 @@ func TestBehaviorSelectedByTab(t *testing.T) {
 	if s := m.selected(); s == nil || s.SessionID != "a" {
 		t.Fatal("inbox selects from the inbox")
 	}
-	m.inboxCur = 9
+	m.view.InboxCursor = 9
 	if m.selected() != nil {
 		t.Fatal("out of range: nothing")
 	}
@@ -576,11 +577,11 @@ func TestBehaviorSelectedByTab(t *testing.T) {
 		t.Fatal("todos select no session")
 	}
 	m.tab = tabSessions
-	m.cursor = 0
+	m.view.Cursor = 0
 	if m.selected() != nil {
 		t.Fatal("a context row is no session")
 	}
-	m.cursor = -1
+	m.view.Cursor = -1
 	if m.cur() != nil {
 		t.Fatal("negative cursor: no row")
 	}
@@ -588,9 +589,9 @@ func TestBehaviorSelectedByTab(t *testing.T) {
 
 func TestBehaviorRefreshKeyResetsOrder(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.order["sess:zzz"] = 99
+	m.view.Order["sess:zzz"] = 99
 	m.keyNormal(bhRune('R'))
-	if _, ok := m.order["sess:zzz"]; ok {
+	if _, ok := m.view.Order["sess:zzz"]; ok {
 		t.Fatal("R rebuilds the frozen order from scratch")
 	}
 }

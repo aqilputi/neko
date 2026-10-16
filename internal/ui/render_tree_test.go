@@ -67,7 +67,7 @@ func TestRhTreeCursorBar(t *testing.T) {
 
 func TestRhTreeCollapsedContext(t *testing.T) {
 	m := rhFilled(t)
-	m.collapsed["ctx:alpha"] = true
+	m.view.Collapsed["ctx:alpha"] = true
 	m.rebuild()
 	out := m.treeView(m.t(), 60, 30)
 	rhHas(t, out, "▸ alpha", "▾ beta")
@@ -76,7 +76,7 @@ func TestRhTreeCollapsedContext(t *testing.T) {
 
 func TestRhTreeShowAllRevealsStaleAndDoneSubs(t *testing.T) {
 	m := rhFilled(t)
-	m.showAll = true
+	m.view.ShowAll = true
 	m.rebuild()
 	out := m.treeView(m.t(), 70, 30)
 	rhHas(t, out, "esquecida", "revisar")
@@ -184,7 +184,7 @@ func TestRhTreeNarrowTruncates(t *testing.T) {
 func TestRhStyledLabels(t *testing.T) {
 	// history, stale and attention labels all still render their names
 	m := rhFilled(t)
-	m.showAll = true
+	m.view.ShowAll = true
 	m.snap.Sessions[0].Attention = store.AttnReturned
 	m.snap.Sessions[0].State = "done"
 	m.rebuild()

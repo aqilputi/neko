@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/term"
 )
@@ -28,8 +29,8 @@ func TestRightSideFollowsSelection(t *testing.T) {
 
 	sel := func(sid string) {
 		for i, r := range m.rows {
-			if r.kind == "sess" && r.sess.SessionID == sid {
-				m.cursor = i
+			if r.Kind == core.RowSess && r.Sess.SessionID == sid {
+				m.view.Cursor = i
 			}
 		}
 		m.syncActive()

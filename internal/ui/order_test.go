@@ -5,14 +5,15 @@ import (
 	"time"
 
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
 )
 
 func sessOrder(m *Model) []string {
 	var out []string
 	for _, r := range m.rows {
-		if r.kind == "sess" {
-			out = append(out, r.sess.SessionID)
+		if r.Kind == core.RowSess {
+			out = append(out, r.Sess.SessionID)
 		}
 	}
 	return out
@@ -41,9 +42,9 @@ func TestOrderIsFrozen(t *testing.T) {
 	// finished subagent hidden, running one shown
 	subs := 0
 	for _, r := range m.rows {
-		if r.kind == "sub" {
+		if r.Kind == core.RowSub {
 			subs++
-			if r.sub.Done {
+			if r.Sub.Done {
 				t.Fatal("finished subagent shown")
 			}
 		}

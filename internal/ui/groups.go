@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"hash/fnv"
 	"image/color"
 	"strings"
 	"time"
@@ -10,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/events"
 	"github.com/aqilputi/nekuroddo/internal/groups"
 	"github.com/aqilputi/nekuroddo/internal/store"
@@ -43,9 +43,7 @@ type peerMsg struct {
 // groupColor is a stable color per tag, from the theme's context palette
 // (offset so it rarely matches the section color next to it).
 func groupColor(t theme.Theme, tag string) color.Color {
-	h := fnv.New32a()
-	h.Write([]byte(tag))
-	return t.ContextColor(int(h.Sum32()%97) + 3)
+	return t.ContextColor(core.GroupColorIndex(tag))
 }
 
 // togglePick is space: picks or unpicks the session under the cursor and
@@ -54,7 +52,7 @@ func (m *Model) togglePick() {
 	if m.tab == tabTodos {
 		return
 	}
-	if r := m.cur(); m.tab != tabInbox && r != nil && r.kind == "ctx" {
+	if r := m.cur(); m.tab != tabInbox && r != nil && r.Kind == core.RowCtx {
 		m.toggle()
 		return
 	}
@@ -201,7 +199,7 @@ func (m *Model) notifyGroup(tag, text string) tea.Cmd {
 			idle++
 		}
 	}
-	m.cat.Meow(truncate("✉ você → #"+tag, 50))
+	m.cat.Meow(core.Truncate("✉ você → #"+tag, 50))
 	msg := fmt.Sprintf("✉ #%s: aviso na fila de %d sessões", tag, len(ms))
 	if idle > 0 {
 		msg += fmt.Sprintf(" (%d paradas recebem quando voltarem a rodar)", idle)
@@ -261,7 +259,7 @@ func (m *Model) onPeer(e events.Event) {
 	if s := m.session(e.SessionID); s != nil {
 		toLabel = s.Label()
 	}
-	m.cat.Meow(truncate("✉ "+truncate(fromLabel, 16)+" → "+truncate(toLabel, 16), 50))
+	m.cat.Meow(core.Truncate("✉ "+core.Truncate(fromLabel, 16)+" → "+core.Truncate(toLabel, 16), 50))
 }
 
 func (m *Model) addMsg(p peerMsg) {
@@ -361,7 +359,7 @@ func (m *Model) groupsDetail(t theme.Theme, s *store.Session, w int) []string {
 			}
 		}
 		lines = append(lines, b.Foreground(gc).Bold(true).Render("▍#"+tag)+
-			b.Foreground(t.Subtle).Render(truncate(" com "+strings.Join(peers, " · "), max(w-len(tag)-3, 4))))
+			b.Foreground(t.Subtle).Render(core.Truncate(" com "+strings.Join(peers, " · "), max(w-len(tag)-3, 4))))
 	}
 	var mine []peerMsg
 	for _, p := range m.msgs {
@@ -380,8 +378,8 @@ func (m *Model) groupsDetail(t theme.Theme, s *store.Session, w int) []string {
 				dir = "→ " + orDash(m.labelOf(p.to))
 			}
 			lines = append(lines, b.Foreground(t.Muted).Render(p.at.Format("15:04")+" ")+
-				b.Foreground(t.Accent2).Render(truncate(dir, 22)+" ")+
-				b.Foreground(t.Text).Render(truncate(p.text, max(w-30, 8))))
+				b.Foreground(t.Accent2).Render(core.Truncate(dir, 22)+" ")+
+				b.Foreground(t.Text).Render(core.Truncate(p.text, max(w-30, 8))))
 		}
 	}
 	return lines

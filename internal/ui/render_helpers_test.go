@@ -11,6 +11,7 @@ import (
 
 	"github.com/aqilputi/nekuroddo/internal/claude"
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/groups"
 	"github.com/aqilputi/nekuroddo/internal/store"
 )
@@ -91,8 +92,8 @@ func rhFilled(t *testing.T) Model {
 
 func rhCursor(m *Model, id string) {
 	for i, r := range m.rows {
-		if r.kind == "sess" && r.sess.SessionID == id {
-			m.cursor = i
+		if r.Kind == core.RowSess && r.Sess.SessionID == id {
+			m.view.Cursor = i
 			return
 		}
 	}
@@ -100,8 +101,8 @@ func rhCursor(m *Model, id string) {
 
 func rhCursorCtx(m *Model, ctx string) {
 	for i, r := range m.rows {
-		if r.kind == "ctx" && r.ctx == ctx {
-			m.cursor = i
+		if r.Kind == core.RowCtx && r.Ctx == ctx {
+			m.view.Cursor = i
 			return
 		}
 	}

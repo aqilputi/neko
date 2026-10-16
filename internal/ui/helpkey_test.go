@@ -43,7 +43,7 @@ func TestCtrlSlashHelp(t *testing.T) {
 func TestTabsOneLine(t *testing.T) {
 	m := New(config.Default())
 	m.w, m.h = 90, 30
-	m.hidden, m.archivedN, m.filter = 123, 45, "um filtro bem comprido para forçar"
+	m.view.Hidden, m.view.ArchivedN, m.view.Filter = 123, 45, "um filtro bem comprido para forçar"
 	if h := strings.Count(m.tabs(m.t()), "\n"); h != 0 {
 		t.Fatalf("tab bar wrapped into %d lines", h+1)
 	}

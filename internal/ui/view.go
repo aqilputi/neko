@@ -12,6 +12,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/theme"
@@ -157,7 +158,7 @@ func (m Model) header(t theme.Theme) string {
 	}
 	right := base.Foreground(t.Muted).Render(" " + t.Name + " ")
 	if m.snap.Err != nil {
-		right = base.Foreground(t.Error).Render(" ⚠ " + truncate(m.snap.Err.Error(), 40) + " ")
+		right = base.Foreground(t.Error).Render(" ⚠ " + core.Truncate(m.snap.Err.Error(), 40) + " ")
 	}
 	left := logo + base.Render(" ") + stats + cost
 	gap := m.w - lipgloss.Width(left) - lipgloss.Width(right)
@@ -171,31 +172,31 @@ func (m Model) tabs(t theme.Theme) string {
 	base := lipgloss.NewStyle().Background(t.Bg)
 	names := []string{
 		"1 Sessões",
-		fmt.Sprintf("2 Inbox (%d)", len(m.inbox)),
+		fmt.Sprintf("2 Inbox (%d)", len(m.view.Inbox)),
 		fmt.Sprintf("3 Todos (%d)", len(m.todos)),
-		fmt.Sprintf("4 Arquivo (%d)", m.archivedN),
+		fmt.Sprintf("4 Arquivo (%d)", m.view.ArchivedN),
 	}
 	var out []string
 	for i, n := range names {
 		st := base.Foreground(t.Muted).Padding(0, 1)
 		if tab(i) == m.tab {
 			st = lipgloss.NewStyle().Background(t.Accent).Foreground(t.Bg).Bold(true).Padding(0, 1)
-		} else if i == 1 && len(m.inbox) > 0 {
+		} else if i == 1 && len(m.view.Inbox) > 0 {
 			st = base.Foreground(t.Blocked).Bold(true).Padding(0, 1)
 		}
 		out = append(out, st.Render(n))
 	}
 	s := strings.Join(out, base.Render(" "))
 	view := fmt.Sprintf("   ativas ≤%.0fd", m.cfg.StaleDays)
-	if m.showAll {
+	if m.view.ShowAll {
 		view = "   tudo"
 	}
-	s += base.Foreground(t.Muted).Render(view + " · ordem: " + sortModes[m.sortMode])
-	if m.hidden > 0 {
-		s += base.Foreground(t.Muted).Render(fmt.Sprintf(" · %d ocultas (H)", m.hidden))
+	s += base.Foreground(t.Muted).Render(view + " · ordem: " + core.SortModes[m.view.SortMode])
+	if m.view.Hidden > 0 {
+		s += base.Foreground(t.Muted).Render(fmt.Sprintf(" · %d ocultas (H)", m.view.Hidden))
 	}
-	if m.filter != "" {
-		s += base.Foreground(t.Accent2).Render("   filtro: /" + m.filter)
+	if m.view.Filter != "" {
+		s += base.Foreground(t.Accent2).Render("   filtro: /" + m.view.Filter)
 	}
 	// one line, always: cut instead of wrapping (wrapping pushed the UI down)
 	return base.Width(m.w).MaxWidth(m.w).MaxHeight(1).Render(lipgloss.NewStyle().MaxWidth(m.w).Render(s))
@@ -401,38 +402,38 @@ func (m *Model) treeView(t theme.Theme, w, h int) string {
 	}
 	frame := m.catFrame()
 	peers := m.peersOfCursor()
-	start, end := scroll(m.cursor, len(m.rows), h)
+	start, end := scroll(m.view.Cursor, len(m.rows), h)
 	var lines []string
 	barW := 4 // 8 levels per cell: 1–2% still shows
 	for i := start; i < end; i++ {
 		r := m.rows[i]
-		sel := i == m.cursor
+		sel := i == m.view.Cursor
 		bgc := t.Bg
 		if sel {
 			bgc = t.Overlay
 		}
 		base := lipgloss.NewStyle().Background(bgc)
 		var left, right string
-		switch r.kind {
-		case "ctx":
-			cc := t.ContextColor(m.ctxColor[r.ctx])
+		switch r.Kind {
+		case core.RowCtx:
+			cc := t.ContextColor(m.view.CtxColor[r.Ctx])
 			arrow := "▾"
-			if m.collapsed["ctx:"+r.ctx] {
+			if m.view.Collapsed["ctx:"+r.Ctx] {
 				arrow = "▸"
 			}
-			left = base.Foreground(cc).Bold(true).Render(fmt.Sprintf(" %s %s", arrow, r.ctx)) +
-				base.Foreground(t.Muted).Render(fmt.Sprintf(" (%d)", r.ctxN))
+			left = base.Foreground(cc).Bold(true).Render(fmt.Sprintf(" %s %s", arrow, r.Ctx)) +
+				base.Foreground(t.Muted).Render(fmt.Sprintf(" (%d)", r.CtxN))
 			var ctxPct float64
 			for i := range m.snap.Sessions {
-				if ss := &m.snap.Sessions[i]; ss.Context == r.ctx {
+				if ss := &m.snap.Sessions[i]; ss.Context == r.Ctx {
 					ctxPct += m.windowPct(ss)
 				}
 			}
-			right = base.Foreground(cc).Render(pctText(ctxPct) + " ")
-		case "sess":
-			s := r.sess
+			right = base.Foreground(cc).Render(core.PctText(ctxPct) + " ")
+		case core.RowSess:
+			s := r.Sess
 			icon, ic := stateIcon(t, s, frame)
-			cc := t.ContextColor(m.ctxColor[r.ctx])
+			cc := t.ContextColor(m.view.CtxColor[r.Ctx])
 			// the cell before the guide is the group bar: ▍ in the group's
 			// color, ┃ when it shares a group with the session under the cursor
 			tags := m.grp.Of(s.SessionID)
@@ -470,7 +471,7 @@ func (m *Model) treeView(t theme.Theme, w, h int) string {
 					sub += base.Foreground(t.Muted).Render(fmt.Sprintf(" +%d", len(tags)-1))
 					break
 				}
-				sub += base.Foreground(groupColor(t, tag)).Render(" #" + truncate(tag, 14))
+				sub += base.Foreground(groupColor(t, tag)).Render(" #" + core.Truncate(tag, 14))
 			}
 			running, done := 0, 0
 			for _, sa := range s.Subs {
@@ -492,13 +493,13 @@ func (m *Model) treeView(t theme.Theme, w, h int) string {
 			if pct > 0 {
 				bar = pctBar(t, pct, barW, base)
 			}
-			right = bar + base.Foreground(t.Subtle).Render(fmt.Sprintf(" %4s %4s ", pctText(pct), ago(s.LastAt)))
+			right = bar + base.Foreground(t.Subtle).Render(fmt.Sprintf(" %4s %4s ", core.PctText(pct), ago(s.LastAt)))
 			avail := w - lipgloss.Width(right) - 7 - lipgloss.Width(sub)
 			left = guide + base.Foreground(ic).Bold(true).Render(icon) + base.Render(" ") +
-				labelStyle.Render(truncate(name, max(avail, 4))) + sub
-		case "sub":
-			sa := r.sub
-			cc := t.ContextColor(m.ctxColor[r.ctx])
+				labelStyle.Render(core.Truncate(name, max(avail, 4))) + sub
+		case core.RowSub:
+			sa := r.Sub
+			cc := t.ContextColor(m.view.CtxColor[r.Ctx])
 			icon, ic := "◌", t.Busy
 			if sa.Done {
 				icon, ic = "●", t.Muted
@@ -510,7 +511,7 @@ func (m *Model) treeView(t theme.Theme, w, h int) string {
 			right = base.Foreground(t.Muted).Render(shortModel(sa.Model) + " ")
 			avail := w - lipgloss.Width(right) - 11
 			left = base.Foreground(cc).Render("  │   └ ") + base.Foreground(ic).Render(icon) + base.Render(" ") +
-				base.Foreground(t.Subtle).Italic(true).Render(truncate(desc, max(avail, 4)))
+				base.Foreground(t.Subtle).Italic(true).Render(core.Truncate(desc, max(avail, 4)))
 		}
 		gap := w - lipgloss.Width(left) - lipgloss.Width(right)
 		if gap < 1 {
@@ -545,31 +546,31 @@ func shortModel(m string) string {
 func (m *Model) catFrame() int { return m.frame }
 
 func (m *Model) inboxView(t theme.Theme, w, h int) string {
-	if len(m.inbox) == 0 {
+	if len(m.view.Inbox) == 0 {
 		return lipgloss.NewStyle().Foreground(t.Done).Background(t.Bg).Padding(1, 2).
 			Render("ninguém te esperando ✨\no gato aprova.")
 	}
 	frame := m.catFrame()
 	var lines []string
 	perItem := 4
-	start, end := scroll(m.inboxCur, len(m.inbox), max(h/perItem, 1))
+	start, end := scroll(m.view.InboxCursor, len(m.view.Inbox), max(h/perItem, 1))
 	for i := start; i < end; i++ {
-		s := m.inbox[i]
-		sel := i == m.inboxCur
+		s := m.view.Inbox[i]
+		sel := i == m.view.InboxCursor
 		bgc := t.Bg
 		if sel {
 			bgc = t.Overlay
 		}
 		base := lipgloss.NewStyle().Background(bgc).Width(w)
 		icon, ic := stateIcon(t, s, frame)
-		cc := t.ContextColor(m.ctxColor[s.Context])
+		cc := t.ContextColor(m.view.CtxColor[s.Context])
 		head := lipgloss.NewStyle().Background(bgc).Foreground(ic).Bold(true).Render(" "+icon+" "+stateLabel(s)) +
 			lipgloss.NewStyle().Background(bgc).Foreground(cc).Render("  "+s.Context) +
 			lipgloss.NewStyle().Background(bgc).Foreground(t.Muted).Render("  "+ago(s.LastAt))
 		if mark, mc := m.mailMark(t, s.SessionID); mark != "" {
 			head += lipgloss.NewStyle().Background(bgc).Foreground(mc).Bold(true).Render("  " + mark)
 		}
-		title := lipgloss.NewStyle().Background(bgc).Foreground(t.Text).Bold(true).Render("   " + truncate(s.Label(), w-4))
+		title := lipgloss.NewStyle().Background(bgc).Foreground(t.Text).Bold(true).Render("   " + core.Truncate(s.Label(), w-4))
 		what := s.LastText
 		switch {
 		case s.Needs != "":
@@ -579,7 +580,7 @@ func (m *Model) inboxView(t theme.Theme, w, h int) string {
 		case s.WaitingTool != "" && s.Attention == store.AttnBlocked:
 			what = "🔐 " + s.WaitingTool
 		}
-		body := lipgloss.NewStyle().Background(bgc).Foreground(t.Subtle).Italic(true).Render("   " + truncate(what, w-4))
+		body := lipgloss.NewStyle().Background(bgc).Foreground(t.Subtle).Italic(true).Render("   " + core.Truncate(what, w-4))
 		lines = append(lines, base.Render(head), base.Render(title), base.Render(body), lipgloss.NewStyle().Background(t.Bg).Width(w).Render(""))
 	}
 	return strings.Join(lines, "\n")
@@ -651,9 +652,9 @@ func (m *Model) todoView(t theme.Theme, w, h int) string {
 		if k := tk.JiraKey(); k != "" {
 			meta = " ⚑ " + k + meta
 		}
-		right := b.Foreground(t.Muted).Render(truncate(meta, w/2) + " ")
+		right := b.Foreground(t.Muted).Render(core.Truncate(meta, w/2) + " ")
 		left := b.Foreground(t.Muted).Render(fmt.Sprintf("   %3d ", tk.ID)) + b.Foreground(stc).Render(st+" ") + pri
-		title := b.Foreground(t.Text).Render(truncate(tk.Title, max(w-lipgloss.Width(left)-lipgloss.Width(right)-1, 4)))
+		title := b.Foreground(t.Text).Render(core.Truncate(tk.Title, max(w-lipgloss.Width(left)-lipgloss.Width(right)-1, 4)))
 		gap := max(w-lipgloss.Width(left)-lipgloss.Width(title)-lipgloss.Width(right), 1)
 		all = append(all, line{left + title + b.Render(strings.Repeat(" ", gap)) + right, i})
 	}
@@ -685,8 +686,8 @@ func (m *Model) issueLine(t theme.Theme, b lipgloss.Style, is *jira.Issue, w int
 		link = fmt.Sprintf(" ↔#%d", tk.ID)
 	}
 	left := b.Foreground(t.Accent2).Bold(true).Render(fmt.Sprintf("   %-11s", is.Key)) + b.Foreground(stc).Render(icon+" ")
-	right := b.Foreground(t.Muted).Render(truncate(is.Status+link+" "+ago(is.UpdatedAt()), w/3) + " ")
-	title := b.Foreground(t.Text).Render(truncate(is.Summary, max(w-lipgloss.Width(left)-lipgloss.Width(right)-1, 4)))
+	right := b.Foreground(t.Muted).Render(core.Truncate(is.Status+link+" "+ago(is.UpdatedAt()), w/3) + " ")
+	title := b.Foreground(t.Text).Render(core.Truncate(is.Summary, max(w-lipgloss.Width(left)-lipgloss.Width(right)-1, 4)))
 	gap := max(w-lipgloss.Width(left)-lipgloss.Width(title)-lipgloss.Width(right), 1)
 	return left + title + b.Render(strings.Repeat(" ", gap)) + right
 }
@@ -706,7 +707,7 @@ func (m *Model) right(t theme.Theme, w, h int) string {
 		if n := p.Scrolled(); n > 0 {
 			hint = fmt.Sprintf("  · ↑%d linhas (digite para voltar)", n)
 		}
-		title = truncate(title, max(w-lipgloss.Width(hint)-8, 10)) + hint
+		title = core.Truncate(title, max(w-lipgloss.Width(hint)-8, 10)) + hint
 		// the terminal's cells are drawn over this box in View
 		return panel(t, w, h, m.mode == modeInsert, title, "")
 	}
@@ -715,8 +716,8 @@ func (m *Model) right(t theme.Theme, w, h int) string {
 	}
 	s := m.selected()
 	if s == nil {
-		if r := m.cur(); r != nil && r.kind == "ctx" {
-			return panel(t, w, h, false, r.ctx, m.ctxDetail(t, r.ctx, w-4))
+		if r := m.cur(); r != nil && r.Kind == core.RowCtx {
+			return panel(t, w, h, false, r.Ctx, m.ctxDetail(t, r.Ctx, w-4))
 		}
 		return panel(t, w, h, false, "", "")
 	}
@@ -734,7 +735,7 @@ func wrap(t theme.Theme, s string, w int, c color.Color, italic bool) string {
 
 func (m *Model) sessDetail(t theme.Theme, s *store.Session, w int) string {
 	icon, ic := stateIcon(t, s, m.catFrame())
-	cc := t.ContextColor(m.ctxColor[s.Context])
+	cc := t.ContextColor(m.view.CtxColor[s.Context])
 	b := lipgloss.NewStyle().Background(t.Bg)
 	lines := []string{
 		b.Foreground(t.Text).Bold(true).Width(w).Render(s.Label()),
@@ -756,7 +757,7 @@ func (m *Model) sessDetail(t theme.Theme, s *store.Session, w int) string {
 		if e.Message != "" {
 			what += " · " + e.Message
 		}
-		lines = append(lines, kv(t, "hook", truncate(what, w-14)+"  "+ago(e.At), t.Accent2))
+		lines = append(lines, kv(t, "hook", core.Truncate(what, w-14)+"  "+ago(e.At), t.Accent2))
 	}
 	if g := m.groupsDetail(t, s, w); len(g) > 0 {
 		lines = append(lines, "")
@@ -794,7 +795,7 @@ func (m *Model) sessDetail(t theme.Theme, s *store.Session, w int) string {
 		if l.Kind == "pr" {
 			icon = "⇡ PR"
 		}
-		lines = append(lines, b.Foreground(t.Accent2).Render(truncate(icon+" "+l.Title+"  "+l.Href, w)))
+		lines = append(lines, b.Foreground(t.Accent2).Render(core.Truncate(icon+" "+l.Title+"  "+l.Href, w)))
 	}
 	if s.LastText != "" {
 		lines = append(lines, "", b.Foreground(t.Accent).Bold(true).Render("claude disse por último"), wrap(t, s.LastText, w, t.Text, true))
@@ -806,7 +807,7 @@ func (m *Model) sessDetail(t theme.Theme, s *store.Session, w int) string {
 			if sa.Done {
 				st = "●"
 			}
-			lines = append(lines, b.Foreground(t.Subtle).Render(truncate(fmt.Sprintf(" %s %s · %s", st, sa.Description, shortModel(sa.Model)), w)))
+			lines = append(lines, b.Foreground(t.Subtle).Render(core.Truncate(fmt.Sprintf(" %s %s · %s", st, sa.Description, shortModel(sa.Model)), w)))
 		}
 	}
 	hint := "enter abre aqui · O tela cheia · r responde"
@@ -834,7 +835,7 @@ func (m *Model) ctxDetail(t theme.Theme, ctx string, w int) string {
 	var top []*store.Session
 	for i := range m.snap.Sessions {
 		s := &m.snap.Sessions[i]
-		if s.Context != ctx || (s.Stale && !m.showAll) {
+		if s.Context != ctx || (s.Stale && !m.view.ShowAll) {
 			continue
 		}
 		n++
@@ -848,12 +849,12 @@ func (m *Model) ctxDetail(t theme.Theme, ctx string, w int) string {
 		top = append(top, s)
 	}
 	lines := []string{
-		b.Foreground(t.ContextColor(m.ctxColor[ctx])).Bold(true).Render(ctx),
+		b.Foreground(t.ContextColor(m.view.CtxColor[ctx])).Bold(true).Render(ctx),
 		"",
 		kv(t, "sessões", fmt.Sprint(n), t.Text),
 		kv(t, "rodando", fmt.Sprint(busy), t.Busy),
 		kv(t, "esperando", fmt.Sprint(wait), t.Blocked),
-		kv(t, "janela 5h", "≈"+orDash(pctText(total))+" (estimativa por sessão)", t.Text),
+		kv(t, "janela 5h", "≈"+orDash(core.PctText(total))+" (estimativa por sessão)", t.Text),
 		"",
 		b.Foreground(t.Accent).Bold(true).Render("uso da janela de 5h por sessão"),
 	}
@@ -862,7 +863,7 @@ func (m *Model) ctxDetail(t theme.Theme, ctx string, w int) string {
 		if p <= 0 {
 			continue
 		}
-		lines = append(lines, pctBar(t, p, 16, b)+b.Foreground(t.Subtle).Render(fmt.Sprintf(" %4s ", pctText(p))+truncate(s.Label(), w-24)))
+		lines = append(lines, pctBar(t, p, 16, b)+b.Foreground(t.Subtle).Render(fmt.Sprintf(" %4s ", core.PctText(p))+core.Truncate(s.Label(), w-24)))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -906,7 +907,7 @@ func (m *Model) todoDetail(t theme.Theme, w, h int) string {
 			kv(t, "link", is.URL, t.Accent),
 		}
 		if tk := m.todoForKey(is.Key); tk != nil {
-			lines = append(lines, kv(t, "todo", fmt.Sprintf("#%d %s", tk.ID, truncate(tk.Title, w-14)), t.Done))
+			lines = append(lines, kv(t, "todo", fmt.Sprintf("#%d %s", tk.ID, core.Truncate(tk.Title, w-14)), t.Done))
 		}
 		return withDesc(t, lines, is.Desc, "enter dispara agent · J vira todo · o abre no browser · F atualiza", w, h)
 	}
@@ -937,7 +938,7 @@ func (m *Model) todoDetail(t theme.Theme, w, h int) string {
 		issueDesc = is.Desc
 	}
 	for _, r := range tk.Refs {
-		lines = append(lines, kv(t, r.Kind, truncate(r.Value+"  "+r.URL, w-12), t.Accent))
+		lines = append(lines, kv(t, r.Kind, core.Truncate(r.Value+"  "+r.URL, w-12), t.Accent))
 	}
 	for _, l := range tk.Links {
 		lines = append(lines, kv(t, "link", l, t.Accent))
@@ -1038,5 +1039,5 @@ func (m *Model) windowLine(t theme.Theme, s *store.Session, b lipgloss.Style) st
 	if p <= 0 {
 		return kv(t, "janela 5h", fmt.Sprintf("sem uso nesta janela (total %d%%)", l.Pct), t.Muted)
 	}
-	return kv(t, "janela 5h", fmt.Sprintf("≈%s de %d%% usados", pctText(p), l.Pct), t.Text) + b.Render("  ") + pctBar(t, p, 20, b)
+	return kv(t, "janela 5h", fmt.Sprintf("≈%s de %d%% usados", core.PctText(p), l.Pct), t.Text) + b.Render("  ") + pctBar(t, p, 20, b)
 }

@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
 )
 
@@ -98,16 +99,16 @@ func TestRhTruncateOrDashPctText(t *testing.T) {
 	}{
 		{"abc", 3, "abc"}, {"abcd", 3, "ab…"}, {"ação!", 4, "açã…"}, {"abc", 1, "…"}, {"abc", 0, "…"},
 	} {
-		if got := truncate(c.in, c.n); got != c.want {
-			t.Errorf("truncate(%q,%d) = %q, want %q", c.in, c.n, got, c.want)
+		if got := core.Truncate(c.in, c.n); got != c.want {
+			t.Errorf("core.Truncate(%q,%d) = %q, want %q", c.in, c.n, got, c.want)
 		}
 	}
 	if orDash("") != "—" || orDash("x") != "x" {
 		t.Fatal("orDash")
 	}
 	for p, want := range map[float64]string{0: "", -1: "", 0.4: "<1%", 1: "1%", 12.6: "13%"} {
-		if got := pctText(p); got != want {
-			t.Errorf("pctText(%v) = %q, want %q", p, got, want)
+		if got := core.PctText(p); got != want {
+			t.Errorf("core.PctText(%v) = %q, want %q", p, got, want)
 		}
 	}
 }

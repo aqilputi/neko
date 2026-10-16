@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/term"
 )
@@ -133,8 +134,8 @@ func bhEnter(m *Model) tea.Cmd { return m.key(tea.KeyPressMsg{Code: tea.KeyEnter
 func bhSelect(t *testing.T, m *Model, id string) {
 	t.Helper()
 	for i, r := range m.rows {
-		if r.kind == "sess" && r.sess.SessionID == id {
-			m.cursor = i
+		if r.Kind == core.RowSess && r.Sess.SessionID == id {
+			m.view.Cursor = i
 			return
 		}
 	}
@@ -159,7 +160,7 @@ func bhPane(t *testing.T, m *Model, id, sid string) *term.Pane {
 func bhKinds(m *Model) []string {
 	var out []string
 	for _, r := range m.rows {
-		out = append(out, rowKey(r))
+		out = append(out, core.RowKey(r))
 	}
 	return out
 }

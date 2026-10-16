@@ -105,7 +105,7 @@ func TestRhCtxDetail(t *testing.T) {
 	if l := rhLineWith(out, "janela 5h"); !strings.Contains(l, "≈—") {
 		t.Fatalf("no use shows a dash: %q", l)
 	}
-	m.showAll = true
+	m.view.ShowAll = true
 	if l := rhLineWith(m.ctxDetail(m.t(), "beta", 60), "sessões"); !strings.HasSuffix(strings.TrimSpace(l), "3") {
 		t.Fatalf("H counts stale ones too: %q", l)
 	}
@@ -125,7 +125,7 @@ func TestRhRightPanelFollowsCursor(t *testing.T) {
 	rhHas(t, m.right(m.t(), 80, 30), " detalhes ", "deploy do rc")
 
 	m.rows = nil
-	m.cursor = 0
+	m.view.Cursor = 0
 	out = m.right(m.t(), 80, 30)
 	rhHasNot(t, out, "detalhes")
 	if n := len(rhLines(out)); n != 30 {

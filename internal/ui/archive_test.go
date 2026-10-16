@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
 )
 
@@ -21,12 +22,12 @@ func TestArchiveTabAndContextArchive(t *testing.T) {
 		{SessionID: "c", Context: "ctx2", Archived: true, Stale: true},
 	}}
 	m.rebuild()
-	if m.archivedN != 1 || len(sessOrder(&m)) != 2 {
+	if m.view.ArchivedN != 1 || len(sessOrder(&m)) != 2 {
 		t.Fatalf("sessions tab should hide the archived one: %v", sessOrder(&m))
 	}
 	// X on the ctx1 row asks, then archives both
-	m.cursor = 0
-	if m.rows[0].kind != "ctx" {
+	m.view.Cursor = 0
+	if m.rows[0].Kind != core.RowCtx {
 		t.Fatal("first row should be a context")
 	}
 	m.keyNormal(keyPress("X"))
@@ -45,8 +46,8 @@ func TestArchiveTabAndContextArchive(t *testing.T) {
 	}
 	// X on a session in the archive tab restores it
 	for i, r := range m.rows {
-		if r.kind == "sess" && r.sess.SessionID == "c" {
-			m.cursor = i
+		if r.Kind == core.RowSess && r.Sess.SessionID == "c" {
+			m.view.Cursor = i
 		}
 	}
 	m.keyNormal(keyPress("X"))

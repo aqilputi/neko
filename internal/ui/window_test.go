@@ -5,6 +5,7 @@ import (
 
 	"github.com/aqilputi/nekuroddo/internal/claude"
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/store"
 )
 
@@ -23,10 +24,10 @@ func TestWindowShare(t *testing.T) {
 	if p := m.windowPct(&m.snap.Sessions[1]); p != 3 {
 		t.Fatalf("b: %v want 3", p)
 	}
-	if p := m.windowPct(&m.snap.Sessions[2]); p != 0 || pctText(p) != "" {
+	if p := m.windowPct(&m.snap.Sessions[2]); p != 0 || core.PctText(p) != "" {
 		t.Fatalf("idle session should show nothing: %v", p)
 	}
-	if pctText(0.4) != "<1%" {
+	if core.PctText(0.4) != "<1%" {
 		t.Fatal("tiny shares show <1%")
 	}
 }

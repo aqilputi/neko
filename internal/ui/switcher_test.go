@@ -45,7 +45,7 @@ func TestSwitcherListsLiveChatsOnly(t *testing.T) {
 	if m.top() != nil {
 		t.Fatal("enter should close the switcher")
 	}
-	if r := m.cur(); r == nil || r.sess == nil || r.sess.SessionID != "busy" {
+	if r := m.cur(); r == nil || r.Sess == nil || r.Sess.SessionID != "busy" {
 		t.Fatal("enter should select the chosen chat")
 	}
 }
@@ -58,8 +58,8 @@ func TestEndedHidden(t *testing.T) {
 		{SessionID: "live", Context: "c", State: "busy"},
 	}}
 	m.rebuild()
-	if got := sessOrder(&m); len(got) != 1 || got[0] != "live" || len(m.inbox) != 0 {
-		t.Fatalf("rows %v inbox %d", got, len(m.inbox))
+	if got := sessOrder(&m); len(got) != 1 || got[0] != "live" || len(m.view.Inbox) != 0 {
+		t.Fatalf("rows %v inbox %d", got, len(m.view.Inbox))
 	}
 	m.keyNormal(keyPress("H"))
 	if got := sessOrder(&m); len(got) != 2 {

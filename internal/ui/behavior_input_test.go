@@ -11,6 +11,7 @@ import (
 
 	"github.com/aqilputi/nekuroddo/internal/claude"
 	"github.com/aqilputi/nekuroddo/internal/config"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/jira"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/todo"
@@ -25,10 +26,10 @@ func bhQuestions() []claude.Question {
 
 func TestBehaviorOptionCountAndResolve(t *testing.T) {
 	s := &store.Session{Questions: bhQuestions()}
-	if n := optionCount(s); n != 3 {
+	if n := core.OptionCount(s.Questions); n != 3 {
 		t.Fatalf("options across questions: %d", n)
 	}
-	if n := optionCount(&store.Session{}); n != 0 {
+	if n := core.OptionCount(store.Session{}.Questions); n != 0 {
 		t.Fatalf("no questions: %d", n)
 	}
 	for _, c := range []struct{ in, want string }{
@@ -41,7 +42,7 @@ func TestBehaviorOptionCountAndResolve(t *testing.T) {
 		{"2 por favor", "2 por favor"},
 		{"ok", "ok"},
 	} {
-		if got := resolveOption(s, c.in); got != c.want {
+		if got := core.ResolveOption(s.Questions, c.in); got != c.want {
 			t.Errorf("resolveOption(%q)=%q want %q", c.in, got, c.want)
 		}
 	}
@@ -56,8 +57,8 @@ func TestBehaviorTruncate(t *testing.T) {
 		{"abc", 5, "abc"}, {"abc", 3, "abc"}, {"abcdef", 4, "abc…"}, {"abcdef", 1, "…"},
 		{"abcdef", 0, "…"}, {"ãõéçü", 3, "ãõ…"},
 	} {
-		if got := truncate(c.s, c.n); got != c.want {
-			t.Errorf("truncate(%q,%d)=%q want %q", c.s, c.n, got, c.want)
+		if got := core.Truncate(c.s, c.n); got != c.want {
+			t.Errorf("core.Truncate(%q,%d)=%q want %q", c.s, c.n, got, c.want)
 		}
 	}
 }
@@ -215,7 +216,7 @@ func TestBehaviorOpenKeys(t *testing.T) {
 		t.Fatal("i without a pane behaves like enter")
 	}
 	// enter on a context row does nothing
-	m.cursor = 0
+	m.view.Cursor = 0
 	if _, cmd := m.keyNormal(keyPress("enter")); cmd != nil {
 		t.Fatal("enter on a context row does nothing")
 	}
@@ -245,7 +246,7 @@ func TestBehaviorFullscreen(t *testing.T) {
 
 func TestBehaviorNewSessionFlow(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.cursor = 0
+	m.view.Cursor = 0
 	m.keyNormal(bhRune('c'))
 	if m.purpose != inNewDir || m.input.Value() != "~" {
 		t.Fatalf("c without a session starts at ~: %q", m.input.Value())
@@ -328,7 +329,7 @@ func TestBehaviorPasteIntoInput(t *testing.T) {
 
 func TestBehaviorRenameContextSubmit(t *testing.T) {
 	m := bhModel(t, bhSessions()...)
-	m.cursor = 0 // ctx:c1
+	m.view.Cursor = 0 // ctx:c1
 	m.keyNormal(bhRune('n'))
 	if m.purpose != inRenameCtx || m.input.Value() != "c1" || m.draftDir != "c1" {
 		t.Fatal("n on a context renames the section")
@@ -336,21 +337,21 @@ func TestBehaviorRenameContextSubmit(t *testing.T) {
 	if cmd := bhEnter(&m); cmd != nil {
 		t.Fatal("unchanged name: nothing to do")
 	}
-	color := m.ctxColor["c1"]
+	color := m.view.CtxColor["c1"]
 	m.keyNormal(bhRune('n'))
 	m.input.SetValue("novo")
 	cmd := bhEnter(&m)
 	if _, ok := bhHasToast(cmd, "seção renomeada"); !ok {
 		t.Fatal("rename announces itself")
 	}
-	if m.ctxColor["novo"] != color {
+	if m.view.CtxColor["novo"] != color {
 		t.Fatal("the renamed section keeps its color")
 	}
 	// in the inbox n renames the session, not a section
 	m.tab = tabInbox
-	m.inboxCur = 0
+	m.view.InboxCursor = 0
 	m.keyNormal(bhRune('n'))
-	if m.purpose != inRename || m.draftDir != m.inbox[0].SessionID {
+	if m.purpose != inRename || m.draftDir != m.view.Inbox[0].SessionID {
 		t.Fatal("n in the inbox renames the session")
 	}
 }
@@ -407,7 +408,7 @@ func TestBehaviorRebuildTodos(t *testing.T) {
 	if len(m.todos) != 4 {
 		t.Fatalf("2 tasks + 2 recent issues: %d", len(m.todos))
 	}
-	m.showAll = true
+	m.view.ShowAll = true
 	m.rebuildTodos()
 	if len(m.todos) != 5 {
 		t.Fatalf("H also shows old issues: %d", len(m.todos))

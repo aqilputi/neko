@@ -109,27 +109,27 @@ func (m *Model) clickList(y int) tea.Cmd {
 	var idx int
 	switch m.tab {
 	case tabSessions, tabArchive:
-		start, _ := scroll(m.cursor, len(m.rows), h)
+		start, _ := scroll(m.view.Cursor, len(m.rows), h)
 		idx = start + y
 		if idx >= len(m.rows) {
 			return nil
 		}
-		if idx == m.cursor {
+		if idx == m.view.Cursor {
 			_, cmd := m.keyNormal(keyPress("enter"))
 			return cmd
 		}
-		m.cursor = idx
+		m.view.Cursor = idx
 	case tabInbox:
-		start, _ := scroll(m.inboxCur, len(m.inbox), max(h/4, 1))
+		start, _ := scroll(m.view.InboxCursor, len(m.view.Inbox), max(h/4, 1))
 		idx = start + y/4
-		if idx >= len(m.inbox) {
+		if idx >= len(m.view.Inbox) {
 			return nil
 		}
-		if idx == m.inboxCur {
+		if idx == m.view.InboxCursor {
 			_, cmd := m.keyNormal(keyPress("enter"))
 			return cmd
 		}
-		m.inboxCur = idx
+		m.view.InboxCursor = idx
 	case tabTodos:
 		lines := m.todoLineIdx()
 		cur := 0
