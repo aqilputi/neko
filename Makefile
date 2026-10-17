@@ -1,4 +1,4 @@
-GO            ?= go
+GO            ?= $(shell command -v go 2>/dev/null || ls $(HOME)/.local/sdk/go/bin/go /usr/local/go/bin/go 2>/dev/null | head -1)
 GOLANGCI_LINT ?= golangci-lint
 BIN           := nekuroddo
 PREFIX        ?= $(HOME)/.local

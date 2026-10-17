@@ -15,5 +15,22 @@ export default defineConfig({
     outDir: 'dist',
     target: 'es2023',
     reportCompressedSize: true,
+    // the three chunk is WebGLRenderer itself (~550 kB minified, ~136 kB
+    // gzip — within plan §4.7's ~150 kB for three.js); tree-shaking can't
+    // shrink it, so warn only above that
+    chunkSizeWarningLimit: 600,
+    // vendors in their own chunks: three.js alone is ~500 kB minified, and
+    // separate chunks cache across releases of our own code
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: 'three', test: /node_modules[\\/]three[\\/]/ },
+            { name: 'xterm', test: /node_modules[\\/]@xterm[\\/]/ },
+            { name: 'preact', test: /node_modules[\\/](preact|@preact)[\\/]/ },
+          ],
+        },
+      },
+    },
   },
 });
