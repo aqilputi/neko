@@ -8,7 +8,7 @@ GUI_WEB       := gui/web
 NPM           ?= npm
 
 .PHONY: all build install test cover cover-check cover-html lint fmt vet ci clean
-.PHONY: gui-install gui-test gui-e2e gui-build build-gui run-gui-browser
+.PHONY: gui-install gui-test gui-e2e gui-build build-gui run-gui-browser install-gui
 
 all: build
 
@@ -84,3 +84,18 @@ build-gui:
 run-gui-browser:
 	cd $(GUI_WEB) && npx vite build
 	$(GO) run ./cmd/nekuroddo-gui --browser --demo --dev
+
+# nkg as a desktop app without WebKitGTK: the frontend embedded in the binary
+# (no wails tag), opened in its own Chrome/Chromium --app window; plus the
+# launcher entry and icon. With webkitgtk-6.0 installed, build-gui gives the
+# native window instead.
+install-gui:
+	cd $(GUI_WEB) && npx vite build
+	find $(NKG_DIST) -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
+	cp -r $(GUI_WEB)/dist/. $(NKG_DIST)/
+	$(GO) build -o bin/nkg ./cmd/nekuroddo-gui
+	install -d $(PREFIX)/bin $(PREFIX)/share/applications $(PREFIX)/share/icons/hicolor/256x256/apps
+	install -m 0755 bin/nkg $(PREFIX)/bin/nkg
+	install -m 0644 assets/logo-256.png $(PREFIX)/share/icons/hicolor/256x256/apps/nekuroddo.png
+	sed 's#^Exec=nkg#Exec=$(PREFIX)/bin/nkg#' packaging/nekuroddo.desktop > $(PREFIX)/share/applications/nekuroddo.desktop
+	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null

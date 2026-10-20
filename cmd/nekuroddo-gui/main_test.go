@@ -23,9 +23,11 @@ import (
 func isolate(t *testing.T) {
 	t.Helper()
 	d := t.TempDir()
-	for _, k := range []string{"HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR"} {
+	for _, k := range []string{"HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME"} {
 		t.Setenv(k, filepath.Join(d, strings.ToLower(k)))
 	}
+	// never the user's real browser: app-mode tests set their own fake
+	t.Setenv("NKG_BROWSER", filepath.Join(d, "no-browser"))
 }
 
 func distDir(t *testing.T) string {
@@ -221,13 +223,14 @@ func TestRunErrors(t *testing.T) {
 		code int
 		want string
 	}{
-		{"no window", []string{"--assets", dist}, 2, "sem a janela"},
+		{"app and browser", []string{"--app", "--browser"}, 2, "exclusivos"},
+		{"no app browser", []string{"--app", "--demo", "--assets", dist}, 1, "abrir a janela"},
 		{"help", []string{"-h"}, 2, "-connect"},
 		{"bad flag", []string{"--nope"}, 2, "nope"},
 		{"extra arg", []string{"--browser", "x"}, 2, "inesperado"},
 		{"connect+demo", []string{"--browser", "--connect", "unix:///x", "--demo"}, 2, "não combina"},
 		{"no-open alone", []string{"--no-open"}, 2, "--browser"},
-		{"no assets", []string{"--browser", "--assets", missing}, 1, "frontend não encontrado"},
+		{"no assets", []string{"--browser", "--dev", "--assets", missing}, 1, "frontend não encontrado"},
 		{"connect down", []string{"--browser", "--connect", "unix://" + missing, "--assets", dist}, 1, "não responde"},
 		{"connect tcp no token", []string{"--browser", "--connect", "tcp://127.0.0.1:1", "--token-file", missing, "--assets", dist}, 1, "token"},
 		{"connect bad scheme", []string{"--browser", "--connect", "ftp://x", "--assets", dist}, 1, "token"},

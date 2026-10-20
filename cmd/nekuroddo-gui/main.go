@@ -46,7 +46,7 @@ func main() {
 // flags of one nkg run.
 type flags struct {
 	connect, tokenFile, listen, addr, assets string
-	demo, dev, browser, noOpen, safeGfx      bool
+	demo, dev, browser, app, noOpen, safeGfx bool
 }
 
 func parseFlags(args []string, stderr io.Writer) (flags, error) {
@@ -60,6 +60,7 @@ func parseFlags(args []string, stderr io.Writer) (flags, error) {
 	fs.BoolVar(&f.demo, "demo", false, "mundo de demonstração roteirizado (sem claude de verdade)")
 	fs.BoolVar(&f.dev, "dev", false, "frontend do disco (--assets) em vez do embutido")
 	fs.BoolVar(&f.browser, "browser", false, "sem janela: abre o navegador padrão")
+	fs.BoolVar(&f.app, "app", false, "janela própria via Chrome/Chromium --app (sem abas nem barra), padrão sem a janela nativa")
 	fs.BoolVar(&f.noOpen, "no-open", false, "com --browser: só imprime o link de abertura")
 	fs.BoolVar(&f.safeGfx, "safe-gfx", false, "janela com WEBKIT_DISABLE_DMABUF_RENDERER=1 (NVIDIA/X11)")
 	if err := fs.Parse(args); err != nil {
@@ -72,6 +73,8 @@ func parseFlags(args []string, stderr io.Writer) (flags, error) {
 		return f, errors.New("--connect não combina com --demo nem --listen (o core é o do outro processo)")
 	case f.noOpen && !f.browser:
 		return f, errors.New("--no-open só vale com --browser")
+	case f.app && f.browser:
+		return f, errors.New("--app e --browser são exclusivos")
 	}
 	return f, nil
 }
@@ -86,8 +89,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if !f.browser && !hasWindow {
-		fmt.Fprint(stderr, noWindowHint)
-		return 2
+		f.app = true // no native window in this build: its own app window instead
 	}
 	assets, err := pickAssets(f.dev, f.assets, embeddedAssets())
 	if err != nil {
@@ -113,6 +115,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	if f.browser {
 		return browse(ctx, gh, f.noOpen, stdout, stderr)
+	}
+	if f.app {
+		return runApp(ctx, gh, stdout, stderr)
 	}
 	marker := filepath.Join(paths.StateDir(), "nkg-window.running")
 	safe := useSafeGfx(f.safeGfx, os.Getenv(dmabufEnv) != "", fileExists(marker))

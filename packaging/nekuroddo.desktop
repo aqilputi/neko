@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=nekuroddo
+GenericName=Agents do Claude Code
+Comment=Suas sessões do Claude Code como gatinhos
+Exec=nkg
+Icon=nekuroddo
+Terminal=false
+Categories=Development;Utility;
+Keywords=claude;agents;terminal;cat;
+StartupWMClass=nekuroddo
