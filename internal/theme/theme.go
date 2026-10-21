@@ -29,7 +29,7 @@ type Theme struct {
 	Idle    color.Color
 	Error   color.Color
 
-	// Context colors are assigned round-robin to contexts (visio, pessoal, …).
+	// Context colors are assigned round-robin to contexts (acme, pessoal, …).
 	Contexts []color.Color
 
 	// CostLow → CostHigh is the gradient of the cost bars.

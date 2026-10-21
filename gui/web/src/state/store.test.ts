@@ -22,12 +22,12 @@ describe('createStore', () => {
     const st = createStore();
     expect(st.cursorRow.value).toBeUndefined();
     st.update(applyTree, tree());
-    expect(st.cursorRow.value?.key).toBe('ctx:visio');
+    expect(st.cursorRow.value?.key).toBe('ctx:acme');
     st.update(patchViewState, { cursor_key: `sess:${GW}` });
     expect(st.cursorRow.value?.label).toBe('api-gateway');
     st.update(patchViewState, { cursor_key: 'gone', cursor: 2 });
     expect(st.cursorRow.value?.label).toBe('migração do banco');
     st.update(patchViewState, { cursor_key: '', cursor: undefined });
-    expect(st.cursorRow.value?.key).toBe('ctx:visio');
+    expect(st.cursorRow.value?.key).toBe('ctx:acme');
   });
 });

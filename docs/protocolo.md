@@ -333,8 +333,8 @@ congelada, paleta dos contextos, dobras, cursor). O primeiro pedido pode ir vazi
 $ curl -XPOST --unix-socket $SOCK http://nk/v1/view/tree -d '{"state":{"tab":"sessions"}}'
 {                                   (trecho, sobre o mundo de `nk serve --demo`)
   "rows": [
-    {"key":"ctx:visio","kind":"ctx","ctx":"visio","depth":0,"color":0,"ctx_cost":6.78,"ctx_n":3,"attention":0},
-    {"key":"sess:d3e0a001-…","kind":"sess","ctx":"visio","depth":1,"color":0,"session_id":"d3e0a001-…",
+    {"key":"ctx:acme","kind":"ctx","ctx":"acme","depth":0,"color":0,"ctx_cost":6.78,"ctx_n":3,"attention":0},
+    {"key":"sess:d3e0a001-…","kind":"sess","ctx":"acme","depth":1,"color":0,"session_id":"d3e0a001-…",
      "short_id":"dmgatewy","label":"api-gateway","session_kind":"background","state":"blocked","attention":1,
      "cost":2.13,"options":3,"groups":[{"tag":"deploy-rc","color":<core.GroupColorIndex("deploy-rc")>}],
      "mail":{"at":"2026-10-16T20:00:20Z","sent":true},"mail_state":"blink"},
@@ -342,8 +342,8 @@ $ curl -XPOST --unix-socket $SOCK http://nk/v1/view/tree -d '{"state":{"tab":"se
      "short_id":"dmindexr","label":"mapear os módulos","state":"busy","attention":0,"cost":0.2,
      "sub":{"id":"agent-idx-a","description":"mapear os módulos","type":"Explore","cost":0.2}}
   ],
-  "state": {"tab":"sessions","sort":"atividade","order":{"ctx:visio":0,"sess:d3e0a001-…":1},
-            "ctx_color":{"visio":0,"pessoal":1,"oss":2},"cursor":0,"cursor_key":"ctx:visio","inbox_cursor":0},
+  "state": {"tab":"sessions","sort":"atividade","order":{"ctx:acme":0,"sess:d3e0a001-…":1},
+            "ctx_color":{"acme":0,"pessoal":1,"oss":2},"cursor":0,"cursor_key":"ctx:acme","inbox_cursor":0},
   "inbox": ["d3e0a001-…","d3e0a002-…"],
   "hidden": 1,
   "archived": 0
@@ -440,9 +440,9 @@ comandos do core têm efeito visível.
 
 | sessão (`demo.ID…`) | contexto | o quê |
 |---|---|---|
-| `api-gateway` (`IDGateway`, `dmgatewy`) | visio | `busy` ⇄ `blocked` a cada 15 s; bloqueada, pergunta "Aplico a migração 0042 no staging?" com 3 opções e dispara uma notificação `permission_prompt` |
-| `migração do banco` (`IDMigration`) | visio | sempre `blocked`, pergunta com 3 opções |
-| `relatório Q3` (`IDReport`) | visio | `done`, devolvida (some da inbox ao ser vista) |
+| `api-gateway` (`IDGateway`, `dmgatewy`) | acme | `busy` ⇄ `blocked` a cada 15 s; bloqueada, pergunta "Aplico a migração 0042 no staging?" com 3 opções e dispara uma notificação `permission_prompt` |
+| `migração do banco` (`IDMigration`) | acme | sempre `blocked`, pergunta com 3 opções |
+| `relatório Q3` (`IDReport`) | acme | `done`, devolvida (some da inbox ao ser vista) |
 | `dotfiles` (`IDDotfiles`) | pessoal | interativa, `idle` no prompt |
 | `blog antigo` (`IDBlog`) | pessoal | histórico velho (`stale`, escondida sem `show_all`) |
 | `indexador` (`IDIndexer`) | oss | `busy` com 2 subagents rodando (e 1 terminado) |

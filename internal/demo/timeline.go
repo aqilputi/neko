@@ -15,7 +15,7 @@ const (
 
 // Contexts of the demo world.
 const (
-	CtxVisio   = "visio"
+	CtxAcme    = "acme"
 	CtxPessoal = "pessoal"
 	CtxOSS     = "oss"
 )
@@ -25,9 +25,9 @@ const GroupTag = "deploy-rc"
 
 // Session ids of the scripted sessions (stable, for tests and the GUI's).
 const (
-	IDGateway   = "d3e0a001-0000-4000-8000-000000000001" // visio: busy ⇄ blocked every 15 s
-	IDMigration = "d3e0a002-0000-4000-8000-000000000002" // visio: blocked on a question with options
-	IDReport    = "d3e0a003-0000-4000-8000-000000000003" // visio: done, returned to you
+	IDGateway   = "d3e0a001-0000-4000-8000-000000000001" // acme: busy ⇄ blocked every 15 s
+	IDMigration = "d3e0a002-0000-4000-8000-000000000002" // acme: blocked on a question with options
+	IDReport    = "d3e0a003-0000-4000-8000-000000000003" // acme: done, returned to you
 	IDDotfiles  = "d3e0a004-0000-4000-8000-000000000004" // pessoal: interactive, idle at the prompt
 	IDBlog      = "d3e0a005-0000-4000-8000-000000000005" // pessoal: stale history
 	IDIndexer   = "d3e0a006-0000-4000-8000-000000000006" // oss: busy with 2 subagents running
@@ -62,8 +62,8 @@ func Sessions(t0 time.Time, e time.Duration) []store.Session {
 	stepAt := t0.Add(time.Duration(k) * StateEvery)
 	grow := func(base float64, n int) float64 { return base + 0.03*float64(n) }
 
-	gw := store.Session{SessionID: IDGateway, ShortID: "dmgatewy", Name: "api-gateway", Cwd: "/demo/visio/gateway",
-		Context: CtxVisio, Kind: "background", Started: t0.Add(-2 * time.Hour), Model: "claude-sonnet-5",
+	gw := store.Session{SessionID: IDGateway, ShortID: "dmgatewy", Name: "api-gateway", Cwd: "/demo/acme/gateway",
+		Context: CtxAcme, Kind: "background", Started: t0.Add(-2 * time.Hour), Model: "claude-sonnet-5",
 		FirstUser: "implementa rate limit por tenant no gateway", Cost: grow(2.10, (k+1)/2), Tokens: 182_000,
 		LastUser: "roda a suíte de integração antes de subir", LastTool: "Bash"}
 	if gatewayBlocked(k) {
@@ -78,8 +78,8 @@ func Sessions(t0 time.Time, e time.Duration) []store.Session {
 		gw.Detail, gw.LastText = "rodando a suíte de integração (312 testes)", "Rodando go test ./... -tags integration"
 	}
 
-	mig := store.Session{SessionID: IDMigration, ShortID: "dmmigrat", Name: "migração do banco", Cwd: "/demo/visio/db",
-		Context: CtxVisio, Kind: "background", State: "blocked", Attention: store.AttnBlocked,
+	mig := store.Session{SessionID: IDMigration, ShortID: "dmmigrat", Name: "migração do banco", Cwd: "/demo/acme/db",
+		Context: CtxAcme, Kind: "background", State: "blocked", Attention: store.AttnBlocked,
 		Started: t0.Add(-3 * time.Hour), LastAt: t0.Add(-4 * time.Minute), Model: "claude-opus-5", Cost: 3.40,
 		FirstUser: "planeja a migração da tabela users", Needs: "decidir o destino da coluna legada",
 		WaitingTool: "AskUserQuestion", LastText: "Encontrei 3 serviços que ainda leem user_ref.",
@@ -88,8 +88,8 @@ func Sessions(t0 time.Time, e time.Duration) []store.Session {
 			{Label: "remover agora", Description: "3 serviços precisam de deploy junto"},
 			{Label: "copiar para user_id e remover depois", Description: "duas migrações"}}}}}
 
-	rep := store.Session{SessionID: IDReport, ShortID: "dmreport", Name: "relatório Q3", Cwd: "/demo/visio/relatorios",
-		Context: CtxVisio, Kind: "background", State: "done", Attention: store.AttnReturned,
+	rep := store.Session{SessionID: IDReport, ShortID: "dmreport", Name: "relatório Q3", Cwd: "/demo/acme/relatorios",
+		Context: CtxAcme, Kind: "background", State: "done", Attention: store.AttnReturned,
 		Started: t0.Add(-5 * time.Hour), LastAt: t0.Add(-12 * time.Minute), Model: "claude-sonnet-5", Cost: 1.25,
 		FirstUser: "gera o relatório de uso do Q3", Result: "Relatório gerado: 12 páginas, 4 gráficos, PR aberto.",
 		LastText: "Pronto: relatório em reports/q3.pdf e PR #418 aberto.",

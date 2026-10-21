@@ -19,8 +19,8 @@ export function snapshot(): Snapshot {
         session_id: GW,
         short_id: 'dmgatewy',
         label: 'api-gateway',
-        cwd: '/demo/visio/gateway',
-        context: 'visio',
+        cwd: '/demo/acme/gateway',
+        context: 'acme',
         kind: 'background',
         state: 'busy',
         attention: 0,
@@ -30,8 +30,8 @@ export function snapshot(): Snapshot {
         session_id: MIG,
         short_id: 'dmmigrat',
         label: 'migração do banco',
-        cwd: '/demo/visio/db',
-        context: 'visio',
+        cwd: '/demo/acme/db',
+        context: 'acme',
         kind: 'background',
         state: 'blocked',
         attention: 1,
@@ -54,11 +54,11 @@ export function snapshot(): Snapshot {
 export function tree(): Tree {
   return {
     rows: [
-      { key: 'ctx:visio', kind: 'ctx', ctx: 'visio', depth: 0, color: 0, ctx_cost: 5.5, ctx_n: 2, attention: 0 },
+      { key: 'ctx:acme', kind: 'ctx', ctx: 'acme', depth: 0, color: 0, ctx_cost: 5.5, ctx_n: 2, attention: 0 },
       {
         key: `sess:${GW}`,
         kind: 'sess',
-        ctx: 'visio',
+        ctx: 'acme',
         depth: 1,
         color: 0,
         session_id: GW,
@@ -73,7 +73,7 @@ export function tree(): Tree {
       {
         key: `sess:${MIG}`,
         kind: 'sess',
-        ctx: 'visio',
+        ctx: 'acme',
         depth: 1,
         color: 0,
         session_id: MIG,
@@ -95,7 +95,7 @@ export function tree(): Tree {
         sub: { id: 'agent-idx-a', description: 'mapear os módulos' },
       },
     ],
-    state: { tab: 'sessions', sort: 'atividade', cursor: 0, cursor_key: 'ctx:visio', inbox_cursor: 0 },
+    state: { tab: 'sessions', sort: 'atividade', cursor: 0, cursor_key: 'ctx:acme', inbox_cursor: 0 },
     inbox: [MIG],
     hidden: 1,
     archived: 0,

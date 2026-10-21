@@ -16,7 +16,7 @@ test('shows the demo sessions from nk serve --demo', async ({ page }) => {
   const tree = page.getByTestId('tree');
   await expect(tree).toContainText('api-gateway');
   await expect(tree).toContainText('migração do banco');
-  await expect(tree).toContainText('visio');
+  await expect(tree).toContainText('acme');
   // the event stream is live
   await expect(page.getByTestId('status')).toHaveText('conectado');
   // theme tokens became CSS variables

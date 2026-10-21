@@ -53,9 +53,9 @@ func TestRenameAndMove(t *testing.T) {
 	// m moves b to another context
 	pick("b")
 	m.keyNormal(keyPress("m"))
-	submitLine(&m, "visio")
+	submitLine(&m, "acme")
 	pick("b")
-	if got := m.selected().Context; got != "visio" {
+	if got := m.selected().Context; got != "acme" {
 		t.Fatalf("context after move: %q", got)
 	}
 
@@ -72,7 +72,7 @@ func TestRenameAndMove(t *testing.T) {
 		t.Fatalf("section rename: %q", got)
 	}
 	pick("b")
-	if got := m.selected().Context; got != "visio" {
+	if got := m.selected().Context; got != "acme" {
 		t.Fatalf("other section must not change: %q", got)
 	}
 }

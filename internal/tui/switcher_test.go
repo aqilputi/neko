@@ -16,9 +16,9 @@ func TestSwitcherListsLiveChatsOnly(t *testing.T) {
 	m := newTestModel(config.Default())
 	m.w, m.h = 120, 40
 	setSnap(&m, store.Snapshot{Sessions: []store.Session{
-		{SessionID: "busy", Name: "migração zone presence", Context: "visio", State: "busy", Kind: "interactive", LastAt: now},
-		{SessionID: "wait", Name: "docker cleanup", Context: "visio", State: "blocked", Attention: store.AttnBlocked, Kind: "interactive", LastAt: now.Add(-time.Hour)},
-		{SessionID: "ended", Name: "scope-guard hook testing", Context: "visio", State: "ended", Ended: true, Stale: true},
+		{SessionID: "busy", Name: "migração zone presence", Context: "acme", State: "busy", Kind: "interactive", LastAt: now},
+		{SessionID: "wait", Name: "docker cleanup", Context: "acme", State: "blocked", Attention: store.AttnBlocked, Kind: "interactive", LastAt: now.Add(-time.Hour)},
+		{SessionID: "ended", Name: "scope-guard hook testing", Context: "acme", State: "ended", Ended: true, Stale: true},
 		{SessionID: "old", Name: "kanban", Context: "home", State: "history", Kind: "history"},
 	}})
 	m.rebuild()

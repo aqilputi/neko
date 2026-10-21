@@ -111,9 +111,9 @@ describe('navigation', () => {
   it.each([
     [[k('j')], `sess:${GW}`],
     [[k('j'), k('j')], `sess:${MIG}`],
-    [[k('ArrowDown'), k('k')], 'ctx:visio'],
+    [[k('ArrowDown'), k('k')], 'ctx:acme'],
     [[k('G', { shiftKey: true })], 'sub:agent-idx-a'],
-    [[k('G', { shiftKey: true }), k('g'), k('g')], 'ctx:visio'],
+    [[k('G', { shiftKey: true }), k('g'), k('g')], 'ctx:acme'],
     [[k('d', { ctrlKey: true })], `sess:${MIG}`], // half of 4
     [[k('f', { ctrlKey: true })], 'sub:agent-idx-a'],
   ])('%j → %s', (keys, want) => {
@@ -143,7 +143,7 @@ describe('navigation', () => {
     r.kc.handleKey(k('S', { shiftKey: true }));
     for (let i = 0; i < 5; i++) await flush();
     expect(r.refreshes).toEqual([
-      { collapsed: { 'ctx:visio': true }, cursor_key: 'ctx:visio' },
+      { collapsed: { 'ctx:acme': true }, cursor_key: 'ctx:acme' },
       { tab: 'inbox' },
       { tab: 'todos' },
       { show_all: true },
@@ -176,7 +176,7 @@ describe('navigation', () => {
   });
 
   it('l unfolds', async () => {
-    r.store.update(patchViewState, { collapsed: { 'ctx:visio': true } });
+    r.store.update(patchViewState, { collapsed: { 'ctx:acme': true } });
     r.kc.handleKey(k('l'));
     await flush();
     await flush();
@@ -291,7 +291,7 @@ describe('windows', () => {
     r.kc.handleKey(k('Enter'));
     await flush();
     await flush();
-    expect(r.refreshes).toEqual([{ collapsed: { 'ctx:visio': true } }]);
+    expect(r.refreshes).toEqual([{ collapsed: { 'ctx:acme': true } }]);
     expect(r.win.calls).toEqual([]);
   });
 
@@ -350,7 +350,7 @@ describe('core commands and confirmations', () => {
       r.store.update((s) => ({ ...s, pending: [{ token, question: 'parar?', expires_at: '' }] }));
     pend('t1');
     expect(r.kc.handleKey(k('j'))).toBe(true); // swallowed
-    expect(cursorKey()).toBe('ctx:visio');
+    expect(cursorKey()).toBe('ctx:acme');
     r.kc.handleKey(k('n'));
     r.kc.handleKey(k('Escape'));
     r.kc.handleKey(k('y'));

@@ -215,9 +215,9 @@ pub struct Core {
 }
 
 const DEMO: &[(&str, &str, &str, &str, i64, usize)] = &[
-    ("s1", "api-gateway", "visio", "busy", 0, 0),
-    ("s2", "migração do banco", "visio", "blocked", 1, 0),
-    ("s3", "relatório Q3", "visio", "done", 2, 0),
+    ("s1", "api-gateway", "acme", "busy", 0, 0),
+    ("s2", "migração do banco", "acme", "blocked", 1, 0),
+    ("s3", "relatório Q3", "acme", "done", 2, 0),
     ("s4", "dotfiles", "pessoal", "idle", 3, 0),
     ("s5", "indexador", "oss", "busy", 0, 2),
     ("s6", "site de docs", "oss", "busy", 0, 0),

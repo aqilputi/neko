@@ -194,18 +194,16 @@ func TestContextForDefaultRules(t *testing.T) {
 	h := home(t)
 	c := Default() // rules without compiled regexps: ContextFor compiles them
 	cases := []struct{ cwd, want string }{
-		{h + "/visio/dev/worktrees/VIS-123/x", "visio · VIS-123"},
-		{h + "/visio/dev/visio-processing-context/a", "visio · processing-context"},
-		{h + "/visio/visio-research", "visio · research-context"},
-		{h + "/visio/dev/api", "visio · api"},
-		{h + "/visio/notes", "visio · outros"},
-		{h + "/dev/taiko-fu", "pessoal · taiko"},
-		{h + "/dev/neko/internal", "pessoal · neko"},
-		{h + "/bta-server", "pessoal · games"},
-		{h + "/Documents/x", "pessoal · Documents"},
-		{h + "/.config/x", "pessoal · home"},
-		{h, "pessoal · home"},
-		{"/tmp/elsewhere", "pessoal · home"},
+		{h + "/dev/worktrees/PROJ-123/x", "dev · PROJ-123"},
+		{h + "/dev/nekuroddo/internal", "dev · nekuroddo"},
+		{h + "/src/api", "src · api"},
+		{h + "/code/web/app", "code · web"},
+		{h + "/projects/site", "projects · site"},
+		{h + "/work/billing", "work · billing"},
+		{h + "/Documents/x", "Documents"},
+		{h + "/.config/x", "home"},
+		{h, "home"},
+		{"/tmp/elsewhere", "home"},
 	}
 	for _, tc := range cases {
 		if got := c.ContextFor(tc.cwd); got != tc.want {

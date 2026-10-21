@@ -587,7 +587,7 @@ func TestBehaviorDispatchTodo(t *testing.T) {
 	// an issue goes to the jira agent dir
 	m.todoCur = 3
 	m.keyNormal(keyPress("enter"))
-	if m.purpose != inJiraAgentDir || m.input.Value() != "~/visio/dev" || m.draftIssue.Key != "PROJ-8" {
+	if m.purpose != inJiraAgentDir || m.input.Value() != "~/dev" || m.draftIssue.Key != "PROJ-8" {
 		t.Fatalf("issue dispatch dir: %q", m.input.Value())
 	}
 	m.input.SetValue(t.TempDir())

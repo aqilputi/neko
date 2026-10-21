@@ -58,23 +58,23 @@ async function cursorTo(page: Page, label: string) {
 test('the tree shows the demo sessions; j/k move the cursor', async ({ page }) => {
   const errors = await open(page);
   const tree = page.getByTestId('tree');
-  for (const label of ['visio', 'api-gateway', 'migração do banco', 'indexador', 'dotfiles']) await expect(tree).toContainText(label);
+  for (const label of ['acme', 'api-gateway', 'migração do banco', 'indexador', 'dotfiles']) await expect(tree).toContainText(label);
   await expect(page.getByTestId('mode')).toHaveText('NORMAL');
   await expect(page.getByTestId('count-busy')).toContainText('rodando');
   await expect(page.getByTestId('usage-5h')).toContainText('%');
   // group chips
   await expect(tree.locator('.nk-chip').first()).toHaveText('#deploy-rc');
 
-  await expect(cursorRow(page)).toHaveAttribute('data-key', 'ctx:visio');
+  await expect(cursorRow(page)).toHaveAttribute('data-key', 'ctx:acme');
   await page.keyboard.press('j');
   await expect(cursorRow(page)).toHaveAttribute('data-key', /^sess:/);
   await page.keyboard.press('k');
-  await expect(cursorRow(page)).toHaveAttribute('data-key', 'ctx:visio');
+  await expect(cursorRow(page)).toHaveAttribute('data-key', 'ctx:acme');
   await page.keyboard.press('Shift+G');
-  await expect(cursorRow(page)).not.toHaveAttribute('data-key', 'ctx:visio');
+  await expect(cursorRow(page)).not.toHaveAttribute('data-key', 'ctx:acme');
   await page.keyboard.press('g');
   await page.keyboard.press('g');
-  await expect(cursorRow(page)).toHaveAttribute('data-key', 'ctx:visio');
+  await expect(cursorRow(page)).toHaveAttribute('data-key', 'ctx:acme');
   expect(errors).toEqual([]);
 });
 

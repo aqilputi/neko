@@ -72,7 +72,7 @@ test('one toon cat per demo session, poses from state, render on demand', async 
   // the ! bubble over the blocked cat, zZ over the sleeping one, ctx labels
   await expect(page.locator('.nk-ov-bubble', { hasText: '!' }).first()).toBeVisible();
   await expect(page.locator('.nk-ov-bubble', { hasText: 'zZ' }).first()).toBeVisible();
-  await expect(page.locator('.nk-ov-ctx')).toHaveText(['oss', 'pessoal', 'visio']);
+  await expect(page.locator('.nk-ov-ctx')).toHaveText(['oss', 'pessoal', 'acme']);
 
   // render on demand: some frames were drawn, then none for a full second
   const frames = await waitIdle(page);

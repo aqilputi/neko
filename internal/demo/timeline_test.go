@@ -90,7 +90,7 @@ func TestTimelineShape(t *testing.T) {
 			t.Errorf("label %q != name %q (the name must not look derived)", s.Label(), s.Name)
 		}
 	}
-	if len(ctxs) != 3 || ctxs[CtxVisio] != 3 || ctxs[CtxPessoal] != 2 || ctxs[CtxOSS] != 2 {
+	if len(ctxs) != 3 || ctxs[CtxAcme] != 3 || ctxs[CtxPessoal] != 2 || ctxs[CtxOSS] != 2 {
 		t.Errorf("contexts = %v", ctxs)
 	}
 	m := byID(ss)

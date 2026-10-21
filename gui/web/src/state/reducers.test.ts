@@ -76,7 +76,7 @@ describe('bootstrap reducers', () => {
     const s = applyTree(initialState(), { rows: null, state: null as never, inbox: null, hidden: undefined as never, archived: undefined as never });
     expect(s.tree).toEqual({ rows: [], state: {}, inbox: [], hidden: 0, archived: 0 });
     const t = applyTree(initialState(), tree());
-    expect(t.tree.state.cursor_key).toBe('ctx:visio');
+    expect(t.tree.state.cursor_key).toBe('ctx:acme');
     expect(t.tree.hidden).toBe(1);
   });
 
@@ -88,8 +88,8 @@ describe('bootstrap reducers', () => {
   });
 
   it('patchViewState merges into the tree state', () => {
-    const s = patchViewState(loaded(), { tab: 'inbox', collapsed: { 'ctx:visio': true } });
-    expect(s.tree.state).toMatchObject({ tab: 'inbox', sort: 'atividade', collapsed: { 'ctx:visio': true } });
+    const s = patchViewState(loaded(), { tab: 'inbox', collapsed: { 'ctx:acme': true } });
+    expect(s.tree.state).toMatchObject({ tab: 'inbox', sort: 'atividade', collapsed: { 'ctx:acme': true } });
   });
 
   it('status/error/resync return the same state when unchanged', () => {

@@ -188,7 +188,7 @@ func TestTodoDispatchDir(t *testing.T) {
 	if d := app.TodoDispatchDir(cfg, todo.Task{Contexts: []string{"@casa"}}); d != "~/casa" {
 		t.Fatalf("under home: tilde: %q", d)
 	}
-	if d := app.IssueDispatchDir(jira.Config{}); d != "~/visio/dev" {
+	if d := app.IssueDispatchDir(jira.Config{}); d != "~/dev" {
 		t.Fatalf("default agent dir: %q", d)
 	}
 	if d := app.IssueDispatchDir(jira.Config{AgentDir: "/srv"}); d != "/srv" {
@@ -211,7 +211,7 @@ func TestDispatchDirFromContext(t *testing.T) {
 	if _, _, err := a.FetchJira(true); err != nil {
 		t.Fatal(err)
 	}
-	if d, err := a.DispatchDir(app.Context{IssueKey: "PROJ-8"}); err != nil || d != "~/visio/dev" {
+	if d, err := a.DispatchDir(app.Context{IssueKey: "PROJ-8"}); err != nil || d != "~/dev" {
 		t.Fatalf("issue: %q %v", d, err)
 	}
 	if _, err := a.DispatchDir(app.Context{IssueKey: "X-1"}); err == nil {

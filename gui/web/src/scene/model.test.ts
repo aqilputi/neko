@@ -147,7 +147,7 @@ describe('buildScene', () => {
       }),
     );
     const m = buildScene(s, tree().rows ?? [], theme, NOW);
-    expect(m.stations.map((x) => x.ctx)).toEqual(['oss', 'visio']);
+    expect(m.stations.map((x) => x.ctx)).toEqual(['acme', 'oss']);
     expect(posesById(m)).toEqual({ [IDX]: 'typing', [GW]: 'typing', [MIG]: 'alert' });
     const idx = m.cats.find((c) => c.id === IDX)!;
     expect(idx.kittens.map((k) => k.label)).toEqual(['mapear', 'Explore']);
@@ -162,8 +162,8 @@ describe('buildScene', () => {
     const mig = m.cats.find((c) => c.id === MIG)!;
     expect(mig.bubble).toBe('!');
     expect(mig.collar).toBeNull();
-    // station colour: the tree's ctx colour (visio = 0)
-    expect(m.stations.find((x) => x.ctx === 'visio')!.color).toBe(contextColor(theme, 0));
+    // station colour: the tree's ctx colour (acme = 0)
+    expect(m.stations.find((x) => x.ctx === 'acme')!.color).toBe(contextColor(theme, 0));
     expect(m.colors.body).toBe(theme.tokens.cat_body);
     expect(m.colors.eyes).toBe(theme.tokens.cat_eyes);
     expect(m.nextChangeAt).toBeNull();

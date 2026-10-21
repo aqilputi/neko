@@ -39,7 +39,7 @@ describe('usage', () => {
 describe('rowView', () => {
   const rows = tree().rows!;
   it('context', () => {
-    expect(rowView(rows[0]!, new Set())).toEqual({ glyph: '▾', text: 'visio', token: 'accent2', cost: '$5.50', picked: false, badge: '2' });
+    expect(rowView(rows[0]!, new Set())).toEqual({ glyph: '▾', text: 'acme', token: 'accent2', cost: '$5.50', picked: false, badge: '2' });
     expect(rowView({ ...rows[0]!, collapsed: true, ctx_n: 0 }, new Set())).toMatchObject({ glyph: '▸', badge: '' });
   });
   it('sessions', () => {

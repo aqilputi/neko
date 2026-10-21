@@ -326,11 +326,11 @@ func TestRenameMoveRenameContext(t *testing.T) {
 	}
 
 	f.Sessions.Reset()
-	res, _ = a.Move("b", "visio")
-	if res.Toast != "movida para visio" {
+	res, _ = a.Move("b", "acme")
+	if res.Toast != "movida para acme" {
 		t.Fatalf("move: %q", res.Toast)
 	}
-	if c := f.Sessions.Calls(); c[0].Method != "SetContext" || c[0].Args[1] != "visio" || c[1].Method != "Reapply" {
+	if c := f.Sessions.Calls(); c[0].Method != "SetContext" || c[0].Args[1] != "acme" || c[1].Method != "Reapply" {
 		t.Fatalf("move calls: %+v", c)
 	}
 	res, _ = a.Move("b", "")

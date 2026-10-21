@@ -72,8 +72,10 @@ type Config struct {
 	Prices []Price `toml:"price"`
 }
 
-// Default rules reflect how ~/ is organized (mapped from real usage): Visio
-// work under ~/visio, personal projects grouped by theme, the rest by folder.
+// Default groups sessions by where they run: a project under one of the usual
+// code folders (~/dev, ~/src, ~/code, ~/projects, ~/work) is "<folder> · <project>"
+// (worktrees named after an issue key keep the key), any other folder under ~ is
+// its own context and the rest is "home". Your own [[context]] rules replace these.
 func Default() Config {
 	return Config{
 		Theme:           "", // follow the terminal: dark → catppuccin-mocha, light → rose-pine-dawn
@@ -84,21 +86,13 @@ func Default() Config {
 		ShowHistoryDays: 2,
 		StaleDays:       3,
 		Sort:            "atividade",
-		RepoRoots:       []string{"~/visio/dev", "~/dev", "~"},
+		RepoRoots:       []string{"~/dev", "~/src", "~/code", "~/projects", "~/work", "~"},
 		Lua:             defaultLua(),
 		Rules: []Rule{
-			{Match: `^~/visio/dev/worktrees/([A-Z]+-\d+)`, Name: "visio · $1"},
-			{Match: `^~/visio/dev/visio-processing-context`, Name: "visio · processing-context"},
-			{Match: `^~/visio/(dev/visio-research-context|visio-research)`, Name: "visio · research-context"},
-			{Match: `^~/visio/dev/([^/]+)`, Name: "visio · $1"},
-			{Match: `^~/visio`, Name: "visio · outros"},
-			{Match: `^~/(dev/taiko-fu|papparapa-anim|dev/tengoku)`, Name: "pessoal · taiko"},
-			{Match: `^~/(dev/apify|dev/petpromo|renda-extra-research)`, Name: "pessoal · renda-extra"},
-			{Match: `^~/(prettyface-hunt|otto-triin)`, Name: "pessoal · lost-media"},
-			{Match: `^~/(bta-server|minecraft-server|dev/osrs-farm-test|dev/rsps|dev/sombra)`, Name: "pessoal · games"},
-			{Match: `^~/dev/([^/]+)`, Name: "pessoal · $1"},
-			{Match: `^~/([^/.][^/]*)`, Name: "pessoal · $1"},
-			{Match: `.*`, Name: "pessoal · home"},
+			{Match: `^~/(dev|src|code|projects|work)/worktrees/([A-Z]+-\d+)`, Name: "$1 · $2"},
+			{Match: `^~/(dev|src|code|projects|work)/([^/]+)`, Name: "$1 · $2"},
+			{Match: `^~/([^/.][^/]*)`, Name: "$1"},
+			{Match: `.*`, Name: "home"},
 		},
 
 		// Anthropic first-party list prices (USD/MTok). Cache write = 5-minute TTL.

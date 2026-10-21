@@ -173,7 +173,7 @@ describe('switcher', () => {
   it('waiting first, then by activity; dead and archived left out', () => {
     const items = switcherItems([
       s('busy-old', { state: 'busy', last_at: '2026-10-16T10:00:00Z' }),
-      s('busy-new', { state: 'busy', last_at: '2026-10-16T12:00:00Z', context: 'visio' }),
+      s('busy-new', { state: 'busy', last_at: '2026-10-16T12:00:00Z', context: 'acme' }),
       s('waiting', { state: 'blocked', attention: 1 }),
       s('idle', {}),
       s('ended', { state: 'busy', ended: true }),
@@ -182,7 +182,7 @@ describe('switcher', () => {
     ]);
     expect(items.map((i) => i.id)).toEqual(['sw:waiting', 'sw:returned', 'sw:busy-new', 'sw:busy-old']);
     expect(items[0]).toMatchObject({ title: '◆ waiting', hint: 'te esperando', action: { kind: 'goto', sessionId: 'waiting', open: true } });
-    expect(items[2]!.hint).toBe('rodando · visio');
+    expect(items[2]!.hint).toBe('rodando · acme');
   });
   it.each([
     ['busy', 0, '●', 'rodando'],

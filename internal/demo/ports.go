@@ -178,12 +178,12 @@ func seedTodos() []todo.Group {
 	return []todo.Group{
 		{Group: "hoje", Tasks: []todo.Task{
 			{ID: 1, Title: "revisar o PR #418 do relatório", Status: "todo", Initiative: "relatórios",
-				Contexts: []string{"@visio"}, Priority: p(2),
+				Contexts: []string{"@acme"}, Priority: p(2),
 				Refs: []todo.Ref{{Kind: "jira", Value: "DEMO-104", URL: issueURL("DEMO-104")}}},
 			{ID: 2, Title: "aprovar a migração 0042", Status: "doing", Initiative: "gateway",
-				Contexts: []string{"@visio"}, Priority: p(1),
+				Contexts: []string{"@acme"}, Priority: p(1),
 				Refs: []todo.Ref{{Kind: "jira", Value: "DEMO-102", URL: issueURL("DEMO-102")}}},
-			{ID: 3, Title: "responder sobre o rc", Status: "waiting", WaitingOn: &who, Contexts: []string{"@visio"}},
+			{ID: 3, Title: "responder sobre o rc", Status: "waiting", WaitingOn: &who, Contexts: []string{"@acme"}},
 		}},
 		{Group: "amanhã", Tasks: []todo.Task{
 			{ID: 4, Title: "atualizar os dotfiles do notebook", Status: "todo", Contexts: []string{"@casa"}},

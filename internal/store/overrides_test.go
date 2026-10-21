@@ -23,12 +23,12 @@ func TestOverrides(t *testing.T) {
 	}
 
 	s.Rename("aaaa1111-x", "meu nome")
-	s.SetContext("bbbb2222-x", "visio")
+	s.SetContext("bbbb2222-x", "acme")
 	got := byID()
 	if got["aaaa1111-x"].Label() != "meu nome" || got["aaaa1111-x"].Context != rule {
 		t.Fatalf("rename: %+v", got["aaaa1111-x"])
 	}
-	if got["bbbb2222-x"].Context != "visio" || !got["bbbb2222-x"].ContextSet {
+	if got["bbbb2222-x"].Context != "acme" || !got["bbbb2222-x"].ContextSet {
 		t.Fatalf("move: %+v", got["bbbb2222-x"])
 	}
 
@@ -36,11 +36,11 @@ func TestOverrides(t *testing.T) {
 	s.RenameContext(rule, "temp")
 	s.RenameContext("temp", "temporário") // renaming the renamed one
 	s = New(cfg)
-	if got = byID(); got["aaaa1111-x"].Context != "temporário" || got["bbbb2222-x"].Context != "visio" {
+	if got = byID(); got["aaaa1111-x"].Context != "temporário" || got["bbbb2222-x"].Context != "acme" {
 		t.Fatalf("section rename: a=%q b=%q", got["aaaa1111-x"].Context, got["bbbb2222-x"].Context)
 	}
 	// sessions moved by hand into a section follow its rename
-	s.RenameContext("visio", "trabalho")
+	s.RenameContext("acme", "trabalho")
 	if got = byID(); got["bbbb2222-x"].Context != "trabalho" {
 		t.Fatalf("moved session should follow: %q", got["bbbb2222-x"].Context)
 	}

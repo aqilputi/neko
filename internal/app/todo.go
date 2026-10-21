@@ -163,7 +163,7 @@ func IssueDispatchDir(cfg jira.Config) string {
 	if cfg.AgentDir != "" {
 		return cfg.AgentDir
 	}
-	return "~/visio/dev"
+	return "~/dev"
 }
 
 // DispatchDir is the directory to suggest for an agent working on the

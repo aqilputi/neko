@@ -19,13 +19,13 @@ import {
 } from './nav.ts';
 
 function row(key: string, kind: TreeRow['kind'], depth: number, extra: Partial<TreeRow> = {}): TreeRow {
-  const ctx = extra.ctx ?? 'visio';
+  const ctx = extra.ctx ?? 'acme';
   return { key, kind, ctx, depth, color: 0, attention: 0, ...extra };
 }
 
-// visio: gw (2 subs) · mig (blocked) ; oss: idx ; pessoal: dot (idle)
+// acme: gw (2 subs) · mig (blocked) ; oss: idx ; pessoal: dot (idle)
 const ROWS: TreeRow[] = [
-  row('ctx:visio', 'ctx', 0),
+  row('ctx:acme', 'ctx', 0),
   row('sess:gw', 'sess', 1, { session_id: 'gw' }),
   row('sub:a', 'sub', 2, { session_id: 'gw' }),
   row('sub:b', 'sub', 2, { session_id: 'gw' }),
@@ -54,10 +54,10 @@ describe('cursorIndex', () => {
 describe('moveCursor', () => {
   it.each([
     [0, 1, 1, 'sess:gw'],
-    [1, -1, 0, 'ctx:visio'],
-    [0, -5, 0, 'ctx:visio'],
+    [1, -1, 0, 'ctx:acme'],
+    [0, -5, 0, 'ctx:acme'],
     [7, 1 << 30, 8, 'sess:dot'],
-    [8, -(1 << 30), 0, 'ctx:visio'],
+    [8, -(1 << 30), 0, 'ctx:acme'],
   ])('from %d by %d → %d', (from, d, want, key) => {
     expect(moveCursor(tree({ cursor: from }), d)).toEqual({ patch: { cursor: want, cursor_key: key }, rebuild: false });
   });
@@ -73,9 +73,9 @@ describe('cursorTo', () => {
 
 describe('collapse / expand', () => {
   it.each([
-    ['ctx row folds itself', 'ctx:visio', { 'ctx:visio': true }, 'ctx:visio'],
+    ['ctx row folds itself', 'ctx:acme', { 'ctx:acme': true }, 'ctx:acme'],
     ['session with subs folds them', 'sess:gw', { 'sess:gw': true }, 'sess:gw'],
-    ['session without subs folds its context', 'sess:mig', { 'ctx:visio': true }, 'ctx:visio'],
+    ['session without subs folds its context', 'sess:mig', { 'ctx:acme': true }, 'ctx:acme'],
     ['sub folds its session', 'sub:b', { 'sess:gw': true }, 'sess:gw'],
   ])('%s', (_n, key, folded, cursorKey) => {
     expect(collapse(tree({ cursor_key: key }))).toEqual({ patch: { collapsed: folded, cursor_key: cursorKey }, rebuild: true });
@@ -83,12 +83,12 @@ describe('collapse / expand', () => {
 
   it('a folded session folds its context instead', () => {
     const rows = ROWS.map((r) => (r.key === 'sess:gw' ? { ...r, collapsed: true } : r));
-    expect(collapse(tree({ cursor_key: 'sess:gw' }, rows)).patch.collapsed).toEqual({ 'ctx:visio': true });
+    expect(collapse(tree({ cursor_key: 'sess:gw' }, rows)).patch.collapsed).toEqual({ 'ctx:acme': true });
   });
 
   it('keeps earlier folds', () => {
-    const st = collapse(tree({ cursor_key: 'ctx:oss', collapsed: { 'ctx:visio': true } }));
-    expect(st.patch.collapsed).toEqual({ 'ctx:visio': true, 'ctx:oss': true });
+    const st = collapse(tree({ cursor_key: 'ctx:oss', collapsed: { 'ctx:acme': true } }));
+    expect(st.patch.collapsed).toEqual({ 'ctx:acme': true, 'ctx:oss': true });
   });
 
   it('does nothing on the inbox tab or an empty tree', () => {
@@ -97,7 +97,7 @@ describe('collapse / expand', () => {
   });
 
   it('expand drops the fold', () => {
-    const st = expand(tree({ cursor_key: 'ctx:visio', collapsed: { 'ctx:visio': true, 'ctx:oss': true } }));
+    const st = expand(tree({ cursor_key: 'ctx:acme', collapsed: { 'ctx:acme': true, 'ctx:oss': true } }));
     expect(st).toEqual({ patch: { collapsed: { 'ctx:oss': true } }, rebuild: true });
   });
 
@@ -163,9 +163,9 @@ describe('togglePick', () => {
     expect([...togglePick(tree({ cursor_key: 'sub:a' }), new Set())]).toEqual(['gw']);
   });
   it('a context picks all, then unpicks all', () => {
-    const a = togglePick(tree({ cursor_key: 'ctx:visio' }), new Set(['mig', 'dot']));
+    const a = togglePick(tree({ cursor_key: 'ctx:acme' }), new Set(['mig', 'dot']));
     expect([...a].sort()).toEqual(['dot', 'gw', 'mig']);
-    const b = togglePick(tree({ cursor_key: 'ctx:visio' }), a);
+    const b = togglePick(tree({ cursor_key: 'ctx:acme' }), a);
     expect([...b]).toEqual(['dot']);
   });
   it('empty tree', () => expect(togglePick(tree({}, []), new Set(['x'])).size).toBe(1));

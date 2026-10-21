@@ -220,7 +220,7 @@ func TestRefreshBackgroundJob(t *testing.T) {
 	if ss.LastAt.Sub(now.Add(-40*time.Minute)).Abs() > time.Millisecond {
 		t.Fatalf("LastAt %v", ss.LastAt)
 	}
-	if ss.Context != "pessoal · neko" {
+	if ss.Context != "dev · neko" {
 		t.Fatalf("context from the cwd rule: %q", ss.Context)
 	}
 }
@@ -501,7 +501,7 @@ func TestReapply(t *testing.T) {
 	s := New(testCfg())
 	sessions := []Session{
 		{SessionID: "a", Cwd: w.cwd, Context: "stale value", ContextSet: true},
-		{SessionID: "b", Cwd: filepath.Join(w.home, "visio", "dev", "api")},
+		{SessionID: "b", Cwd: filepath.Join(w.home, "work", "api")},
 	}
 	s.Rename("a", "  meu  ")
 	s.SetContext("b", "outro lugar")
@@ -509,25 +509,25 @@ func TestReapply(t *testing.T) {
 	if sessions[0].CustomName != "meu" || sessions[0].Label() != "meu" {
 		t.Fatalf("rename is trimmed and applied: %+v", sessions[0])
 	}
-	if sessions[0].Context != "pessoal · neko" || sessions[0].ContextSet {
+	if sessions[0].Context != "dev · neko" || sessions[0].ContextSet {
 		t.Fatalf("context goes back to the cwd rule: %+v", sessions[0])
 	}
 	if sessions[1].Context != "outro lugar" || !sessions[1].ContextSet {
 		t.Fatalf("moved by hand: %+v", sessions[1])
 	}
 	s.SetContext("b", "")
-	s.RenameContext("visio · api", "API")
+	s.RenameContext("work · api", "API")
 	s.Reapply(sessions)
 	if sessions[1].Context != "API" || sessions[1].ContextSet {
 		t.Fatalf("section rename: %+v", sessions[1])
 	}
 	// renaming back to the original name drops the override
-	s.RenameContext("API", "visio · api")
-	if _, ok := s.ov.ContextName["visio · api"]; ok {
+	s.RenameContext("API", "work · api")
+	if _, ok := s.ov.ContextName["work · api"]; ok {
 		t.Fatal("renaming to the original should delete the override")
 	}
 	s.Reapply(sessions)
-	if sessions[1].Context != "visio · api" {
+	if sessions[1].Context != "work · api" {
 		t.Fatalf("undo by original name: %q", sessions[1].Context)
 	}
 }
@@ -537,9 +537,9 @@ func TestOverridesFileSurvivesRestart(t *testing.T) {
 	s := New(testCfg())
 	s.Rename("a", "nome")
 	s.SetContext("a", "ctx")
-	s.RenameContext("pessoal · neko", "neko")
+	s.RenameContext("dev · neko", "neko")
 	s2 := New(testCfg())
-	if s2.ov.Names["a"] != "nome" || s2.ov.Contexts["a"] != "ctx" || s2.ov.ContextName["pessoal · neko"] != "neko" {
+	if s2.ov.Names["a"] != "nome" || s2.ov.Contexts["a"] != "ctx" || s2.ov.ContextName["dev · neko"] != "neko" {
 		t.Fatalf("reloaded overrides: %+v", s2.ov)
 	}
 }

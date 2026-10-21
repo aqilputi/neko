@@ -33,7 +33,7 @@ fn snapshot() {
     let gw = s.session(GATEWAY).expect("api-gateway");
     assert_eq!(gw.short_id, "dmgatewy");
     assert_eq!(gw.label, "api-gateway");
-    assert_eq!(gw.context, "visio");
+    assert_eq!(gw.context, "acme");
     assert_eq!(gw.kind, "background");
     assert!(gw.cost > 0.0);
     assert!(gw.tail_seq > 0);
@@ -70,7 +70,7 @@ fn tree() {
     let t: Tree = fixture("tree.json");
     assert!(!t.rows.is_empty());
     let ctx = &t.rows[0];
-    assert_eq!((ctx.kind.as_str(), ctx.depth, ctx.key.as_str()), ("ctx", 0, "ctx:visio"));
+    assert_eq!((ctx.kind.as_str(), ctx.depth, ctx.key.as_str()), ("ctx", 0, "ctx:acme"));
     assert!(ctx.ctx_n > 0 && ctx.ctx_cost > 0.0);
     let gw = t.rows.iter().find(|r| r.session_id == GATEWAY && r.kind == "sess").unwrap();
     assert_eq!(gw.depth, 1);
