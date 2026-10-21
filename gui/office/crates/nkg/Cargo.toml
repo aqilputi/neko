@@ -1,0 +1,52 @@
+[package]
+name = "nkg"
+version = "0.1.0"
+description = "nekuroddo's native GUI: an office of cats, one niri column per session (Bevy)"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "nkg"
+path = "src/main.rs"
+
+[features]
+# `client` uses the real nk-client crate; without it a tiny local stub
+# (src/stub.rs, fake demo data) stands in with the same API.
+default = ["client"]
+client = ["dep:nk-client"]
+
+[dependencies]
+nk-client = { path = "../nk-client", optional = true }
+anyhow = "1"
+crossbeam-channel = "0.5"
+serde_json = "1"
+fontdue = "0.9"
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+bevy = { version = "0.20", default-features = false, features = [
+    "std",
+    "async_executor",
+    "multi_threaded",
+    "bevy_asset",
+    "bevy_log",
+    "bevy_winit",
+    "x11",
+    "wayland",
+    "keyboard",
+    "mouse",
+    "bevy_window",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_light",
+    "bevy_mesh",
+    "bevy_camera",
+    "bevy_color",
+    "bevy_image",
+    "bevy_shader",
+    "bevy_material",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_ui_render",
+    "png",
+] }
