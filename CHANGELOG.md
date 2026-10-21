@@ -31,6 +31,10 @@ incompatíveis podem acontecer em versões menores e serão sempre descritas aqu
 
 ### Alterado
 
+- Regras de contexto padrão neutras: um projeto em `~/dev`, `~/src`, `~/code`, `~/projects` ou `~/work` vira
+  `<pasta> · <projeto>` (worktrees com chave de issue mantêm a chave), outra pasta em `~` é o próprio
+  contexto e o resto é `home`; `repo_roots` padrão segue as mesmas pastas. Quem dependia das regras antigas
+  deve copiá-las para `[[context]]` no `config.toml`. O mundo demo e os testes usam o contexto `acme`.
 - `internal/ui` passa a se chamar `internal/tui`, e `tui.New(app, cfg)` recebe o core já montado: quem monta
   (`wire.Default`, `RegisterBuiltins`, Lua) é o `cmd/nekuroddo`; a TUI não importa mais `internal/wire`.
   Os hooks (`nk hook`, `nk hook-context`) continuam sem montar o core.
