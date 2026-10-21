@@ -121,6 +121,7 @@ func (s *Server) routes() {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /v1/hello", s.hello)
 	m.HandleFunc("GET /v1/snapshot", s.snapshot)
+	m.HandleFunc("GET /v1/sessions/{id}/tail", s.sessionTail)
 	m.HandleFunc("GET /v1/events", s.serveEvents)
 	m.HandleFunc("GET /v1/commands", s.commands)
 	m.HandleFunc("POST /v1/commands/{name}", s.run)
@@ -257,6 +258,8 @@ func appErr(err error) (int, string) {
 		return http.StatusNotFound, proto.CodeUnknownToken
 	case errors.Is(err, app.ErrExpired):
 		return http.StatusGone, proto.CodeExpired
+	case errors.Is(err, app.ErrUnknownSession):
+		return http.StatusNotFound, proto.CodeNotFound
 	}
 	return http.StatusUnprocessableEntity, proto.CodeFailed
 }
@@ -317,6 +320,25 @@ func (s *Server) snapshot(w http.ResponseWriter, _ *http.Request) {
 		out.Err = snap.Err.Error()
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// sessionTail is GET /v1/sessions/{id}/tail?n=: the session's activity tail
+// (n defaults to proto.DefaultTail; app clamps it to 1..200).
+func (s *Server) sessionTail(w http.ResponseWriter, r *http.Request) {
+	n := proto.DefaultTail
+	if v := r.URL.Query().Get("n"); v != "" {
+		var err error
+		if n, err = strconv.Atoi(v); err != nil {
+			writeErr(w, http.StatusBadRequest, proto.CodeBadRequest, "n: "+err.Error())
+			return
+		}
+	}
+	lines, err := s.a.SessionTail(r.PathValue("id"), n)
+	if err != nil {
+		writeAppErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, proto.Tail{Lines: lines})
 }
 
 // ---- commands ----

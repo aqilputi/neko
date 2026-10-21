@@ -220,11 +220,39 @@ func (c *FakeClaude) FetchUsage() (claude.UsageReport, error) {
 
 // ---- Sessions ----
 
-// FakeSessions returns Snap from Refresh and records every mutation.
+// FakeSessions returns Snap from Refresh and records every mutation. Tail
+// serves the lines SetTail gave a session (TailErr, when set, fails it).
 type FakeSessions struct {
 	Recorder
-	mu   sync.Mutex
-	Snap store.Snapshot
+	mu      sync.Mutex
+	Snap    store.Snapshot
+	tails   map[string][]claude.TailLine
+	TailErr error
+}
+
+// SetTail sets a session's activity lines, oldest first.
+func (s *FakeSessions) SetTail(sessionID string, lines []claude.TailLine) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tails == nil {
+		s.tails = map[string][]claude.TailLine{}
+	}
+	s.tails[sessionID] = append([]claude.TailLine(nil), lines...)
+}
+
+// Tail returns the last n lines set for the session (all when n <= 0).
+func (s *FakeSessions) Tail(sessionID string, n int) ([]claude.TailLine, error) {
+	s.record("Tail", sessionID, n)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.TailErr != nil {
+		return nil, s.TailErr
+	}
+	ls := s.tails[sessionID]
+	if n > 0 && n < len(ls) {
+		ls = ls[len(ls)-n:]
+	}
+	return append([]claude.TailLine(nil), ls...), nil
 }
 
 // SetSnapshot changes what the next Refresh returns.

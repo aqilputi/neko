@@ -130,6 +130,7 @@ fica **opcional**: o `nk` continua um processo só, sem socket.
   | grupos | `groups.go` | `groups.go` | `group.add/remove/notify/dissolve` | `group.changed`, `peer.message`, `mail.cue` |
   | todos e Jira | `todo.go`, `jira.go` | `todo_jira.go` | `todo.start/done`, `jira.toggle/fetch/open_url` | `todos.changed`, `jira.changed` |
   | avisos | `watch.go` | `notify.go` | — | `session.state`, `session.notification`, `notice`, `usage.updated` |
+  | rabo de atividade | `tail.go` (`SessionTail`) | — | — | `session.tail` |
 
 - **`internal/wire`**: `wire.Default(cfg)` liga os adaptadores reais às portas; quem o usa é só
   `cmd/nekuroddo`, que monta o `App` (e chama `RegisterBuiltins`, carrega o Lua) e o entrega à TUI

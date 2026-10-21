@@ -14,17 +14,18 @@ import (
 func TestFromSession(t *testing.T) {
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	s := store.Session{SessionID: "sid", ShortID: "bg", Name: "nome", CustomName: "meu", Cwd: "/r", Kind: "background",
-		State: "blocked", Attention: store.AttnBlocked, Cost: 1.5, LastAt: at,
+		State: "blocked", Attention: store.AttnBlocked, Cost: 1.5, LastAt: at, TailSeq: 9,
 		Subs: []store.Sub{{ID: "a1", Description: "busca", Cost: 0.2, Done: true}}}
 	got := FromSession(s)
-	if got.SessionID != "sid" || got.Label != "meu" || got.Attention != 1 || got.Cost != 1.5 || !got.LastAt.Equal(at) {
+	if got.SessionID != "sid" || got.Label != "meu" || got.Attention != 1 || got.Cost != 1.5 || !got.LastAt.Equal(at) ||
+		got.TailSeq != 9 {
 		t.Fatalf("session = %+v", got)
 	}
 	if len(got.Subs) != 1 || got.Subs[0].ID != "a1" || !got.Subs[0].Done {
 		t.Fatalf("subs = %+v", got.Subs)
 	}
 	b, _ := json.Marshal(got)
-	for _, k := range []string{`"session_id":"sid"`, `"short_id":"bg"`, `"label":"meu"`, `"attention":1`} {
+	for _, k := range []string{`"session_id":"sid"`, `"short_id":"bg"`, `"label":"meu"`, `"attention":1`, `"tail_seq":9`} {
 		if !strings.Contains(string(b), k) {
 			t.Errorf("%s missing in %s", k, b)
 		}

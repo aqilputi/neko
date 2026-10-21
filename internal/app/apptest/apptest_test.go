@@ -143,6 +143,27 @@ func TestFakeSessions(t *testing.T) {
 	}
 }
 
+func TestFakeSessionsTail(t *testing.T) {
+	s := &FakeSessions{}
+	if ls, err := s.Tail("a", 5); err != nil || len(ls) != 0 {
+		t.Fatalf("no tail: %+v, %v", ls, err)
+	}
+	s.SetTail("a", []claude.TailLine{{Text: "1"}, {Text: "2"}, {Text: "3"}})
+	if ls, _ := s.Tail("a", 2); len(ls) != 2 || ls[0].Text != "2" {
+		t.Fatalf("Tail(2) = %+v", ls)
+	}
+	if ls, _ := s.Tail("a", 0); len(ls) != 3 {
+		t.Fatalf("Tail(0) = %+v", ls)
+	}
+	s.TailErr = errBoom
+	if _, err := s.Tail("a", 1); !errors.Is(err, errBoom) {
+		t.Fatal(err)
+	}
+	if s.Count("Tail") != 4 {
+		t.Fatalf("calls = %+v", s.Calls())
+	}
+}
+
 func TestFakeGroups(t *testing.T) {
 	g := NewFakeGroups()
 	f := g.Load()

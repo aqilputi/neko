@@ -96,7 +96,44 @@ Tudo que um cliente precisa para desenhar a tela, num só pedido:
 `core.Command`, mas em `proto.Session` quase todos têm — campos vazios somem do JSON; a lista completa está em
 `internal/rpc/proto/proto.go`). `inbox` é a mesma ordem de `core.SortInbox` usada pela TUI. `groups` nunca é
 `null` (um mapa vazio se não há grupos); o mesmo vale para `pending`. `err` (omitido aqui) carrega o erro do
-último refresh, se houve.
+último refresh, se houve. `tail_seq` (omitido quando 0) conta as linhas de atividade da sessão até agora — ver
+[`GET /v1/sessions/{id}/tail`](#get-v1sessionsidtail).
+
+## `GET /v1/sessions/{id}/tail`
+
+O **rabo de atividade** de uma sessão: as últimas linhas do que ela fez, já desenhadas como o Claude Code mostra
+no terminal. É o que o GUI rola no monitor de cada gato, sem precisar anexar um PTY por sessão só para mostrar
+que ela está trabalhando.
+
+```
+$ curl --unix-socket $SOCK "http://nk/v1/sessions/abcd1234-…/tail?n=4"
+{"lines":[
+  {"at":"2026-10-16T20:00:03Z","kind":"user","text":"> corrija o bug do login"},
+  {"at":"2026-10-16T20:00:04Z","kind":"text","text":"Vou olhar."},
+  {"at":"2026-10-16T20:00:04Z","kind":"tool","text":"● Bash(go test ./...)"},
+  {"at":"2026-10-16T20:00:06Z","kind":"result","text":"  ⎿ ok    pkg/a  0.1s … +1 line"}
+]}
+```
+
+`n` vai de 1 a 200 (`core.TailMax`; fora disso é limitado) e, sem `n`, é 80 (`proto.DefaultTail`); `n` não
+numérico → `400 bad_request`. As linhas vêm da mais velha para a mais nova (`proto.Tail{lines: []core.TailLine}`);
+uma sessão do snapshot sem nada ainda (sem transcript) tem `"lines":[]`, e uma que não está no snapshot →
+`404 not_found`. No Go: `app.SessionTail(id, n)` e `rpc.Client.SessionTail(ctx, id, n)`.
+
+| `kind` | `text` | de onde vem (no transcript) |
+|---|---|---|
+| `user` | `> pedido` (as linhas seguintes com `  ` na frente; até 4) | o que você digitou; texto do harness (`<…>`, preâmbulo de skill, `[Request interrupted…`) fica de fora |
+| `text` | uma linha por linha do texto (até 8; a última vira `… +N lines`) | texto do assistente: linhas em branco somem, tab vira 2 espaços, a indentação fica, quebra numa palavra perto de 100 colunas |
+| `tool` | `● Nome(argumento)` | uma chamada de ferramenta: `Bash(comando)`, `Read/Edit/Write(caminho relativo ao cwd)`, `Grep("padrão")`, `Glob(padrão)`, `WebSearch("busca")`, `WebFetch(url)`, `TodoWrite(N todos)`, `AskUserQuestion(pergunta)`; outras usam `command`/`file_path`/`pattern`/`url`/`query`/`description`/`prompt`, ou só `● Nome` |
+| `result` | `  ⎿ resumo` | o resultado: a primeira linha (`… +N lines` se há mais), `N lines` para Read/Grep/Glob, `(no output)`, ou `Error: primeira linha` |
+| `sub` | `◆ tipo: descrição` | um subagent começou (`Agent`/`Task`) |
+
+Nenhuma linha passa de 100 colunas (`claude.TailWidth`; o excesso vira `…`). O transcript guarda as últimas 200
+(`claude.TailKeep`), lidas incrementalmente junto com o resto do transcript (nada é relido do começo).
+
+**Quando refazer o pedido:** a cada refresh do core, cada sessão cujo rabo ganhou linhas publica
+`session.tail {id, n_new}` (ver [Eventos](#eventos--get-v1events-sse)); o cliente busca de novo só esse
+`id`, com `n` ≥ `n_new` se quiser só o que é novo.
 
 ## Comandos
 
@@ -212,6 +249,20 @@ recebeu — o anel de 1024 normalmente ainda cobre o intervalo.
 $ curl -N --unix-socket $SOCK -H 'Accept: text/event-stream' "http://nk/v1/events?since=0"
 ```
 
+**`session.tail`** (`app.EvSessionTail`, dado `app.TailChanged`):
+
+```
+event: session.tail
+data: {"seq":57,"at":"2026-10-16T20:00:05Z","name":"session.tail","data":{"id":"abcd1234-…","n_new":3}}
+```
+
+Sai depois de cada refresh (`app.RefreshNotices`, logo após `snapshot.changed` e os `session.state`), um por
+sessão cujo rabo de atividade ganhou linhas desde o refresh anterior; sessões sem novidade não geram nada.
+`n_new` é quantas linhas entraram, limitado a 200 (o máximo que [`GET /v1/sessions/{id}/tail`](#get-v1sessionsidtail)
+devolve). O primeiro refresh do core só registra (um cliente lê os rabos que mostra quando começa); uma sessão
+que aparece depois disso conta todas as suas linhas como novas, e um contador que volta (transcript reescrito)
+recomeça. A comparação usa `store.Session.TailSeq` (`tail_seq` no snapshot), que conta as linhas lidas até agora.
+
 ## Painéis — PTYs remotos
 
 O **core** decide *como* mostrar uma sessão (reusar painel aberto, anexar a uma rodando em background, ou
@@ -254,9 +305,9 @@ códigos diferentes podem compartilhar status, como `not_found` e `unknown_comma
 
 | status | `code` | quando |
 |---|---|---|
-| 400 | `bad_request` | JSON do corpo malformado; `?since=`/`Last-Event-ID` não numérico; `?todo_id=` não numérico; `session_id` faltando em `POST /v1/panes`; tamanho de painel inválido; `tab`/`sort` desconhecidos em `POST /v1/view/tree`; `code` vazio em `POST /v1/lua/eval` |
+| 400 | `bad_request` | JSON do corpo malformado; `?since=`/`Last-Event-ID` não numérico; `?todo_id=` ou `?n=` (tail) não numérico; `session_id` faltando em `POST /v1/panes`; tamanho de painel inválido; `tab`/`sort` desconhecidos em `POST /v1/view/tree`; `code` vazio em `POST /v1/lua/eval` |
 | 401 | `unauthorized` | TCP sem `Authorization: Bearer`/`?token=` válido |
-| 404 | `not_found` | sessão ou painel desconhecido (`POST /v1/panes`, `.../resize`, `.../ws`, `DELETE`); tema desconhecido em `GET /v1/theme?name=` |
+| 404 | `not_found` | sessão ou painel desconhecido (`POST /v1/panes`, `.../resize`, `.../ws`, `DELETE`, `GET /v1/sessions/{id}/tail`); tema desconhecido em `GET /v1/theme?name=` |
 | 404 | `unknown_command` | `POST /v1/commands/{name}` com nome não registrado |
 | 404 | `unknown_token` | `POST /v1/confirm/{token}` com token desconhecido ou já consumido |
 | 400 | `client_command` | o nome existe mas é `scope: client` (sem `Runner`; roda só no cliente) |
@@ -401,6 +452,15 @@ O grupo `#deploy-rc` tem `api-gateway`, `migração do banco`, `indexador` e `si
 (`peer`) passa de um para o próximo, em roda. O uso da janela de 5 h fica entre 58% e 62%; há 5 todos, 4
 issues `DEMO-…` (criar uma devolve `DEMO-201`, `202`…), e `session.new` cria uma sessão que fica `busy` por 30 s
 e depois volta `done`. Notificações e URLs abertas são só guardadas (`Scenario.Notes()`/`URLs()`).
+
+Cada sessão tem um rabo de atividade crível (`demo.Tail(t0, e, id, n)` / `demo.TailSeq`, também puros do
+relógio, em `internal/demo/tail.go`), servido por `GET /v1/sessions/{id}/tail` e anunciado por `session.tail`
+pelo mesmo caminho do real: enquanto `busy`, uma linha a cada 0,7–2,1 s (chamadas `● Bash(go test …)`,
+`● Edit(…)`, `● Read(…)`, resultados `  ⎿ …`, trechos de diff `  +  …`/`  -  …`, saída de testes, subagents
+`◆ …`); bloqueada, termina na pergunta e nas opções (`● AskUserQuestion(…)`, `  ❯ 1. …`) e não escreve mais
+nada até a resposta, que volta como `> sim, aplicar agora`; `done`, termina num resumo curto; `idle`, no prompt
+vazio (`>`). As estáticas (`migração do banco`, `relatório Q3`, `dotfiles`, `blog antigo`) nunca mudam; uma
+sessão de `session.new` mostra o pedido, 30 s de trabalho e o `(demo) pronto`.
 
 ## Quick-start
 

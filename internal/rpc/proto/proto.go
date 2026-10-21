@@ -167,6 +167,9 @@ type Session struct {
 	ArchivedAt     time.Time         `json:"archived_at,omitzero"`
 	Ended          bool              `json:"ended,omitempty"`
 	Finished       bool              `json:"finished,omitempty"`
+	// TailSeq counts the session's activity lines so far: it grows with
+	// every session.tail (GET /v1/sessions/{id}/tail has the lines).
+	TailSeq int `json:"tail_seq,omitempty"`
 }
 
 // FromSession converts a store session.
@@ -180,13 +183,22 @@ func FromSession(s store.Session) Session {
 		LastText: s.LastText, LastTool: s.LastTool, WaitingTool: s.WaitingTool, WaitingFor: s.WaitingFor,
 		Detail: s.Detail, Needs: s.Needs, SuggestedReply: s.SuggestedReply, Questions: s.Questions,
 		Links: s.Links, Result: s.Result, Stale: s.Stale, Archived: s.Archived, ArchivedAt: s.ArchivedAt,
-		Ended: s.Ended, Finished: s.Finished,
+		Ended: s.Ended, Finished: s.Finished, TailSeq: s.TailSeq,
 	}
 	for _, b := range s.Subs {
 		out.Subs = append(out.Subs, Sub{ID: b.ID, Description: b.Description, Type: b.Type, Model: b.Model,
 			LastText: b.LastText, Cost: b.Cost, LastAt: b.LastAt, Done: b.Done})
 	}
 	return out
+}
+
+// DefaultTail is how many lines GET /v1/sessions/{id}/tail returns with no n.
+const DefaultTail = 80
+
+// Tail is GET /v1/sessions/{id}/tail?n=: the last n (1..200) lines of the
+// session's activity, oldest first.
+type Tail struct {
+	Lines []core.TailLine `json:"lines"`
 }
 
 // MailCue is the ✉ next to a session.

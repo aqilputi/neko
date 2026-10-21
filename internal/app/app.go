@@ -62,6 +62,7 @@ type App struct {
 	watching watchState    // watch.go
 	panes    *PaneManager  // panes.go
 	todoJira todoJiraState // todo.go, jira.go
+	tails    tailState     // tail.go
 }
 
 // New builds the core over p. A nil Clock means wall time; the other ports
@@ -132,8 +133,8 @@ func (a *App) Refresh() store.Snapshot {
 // RefreshNotices is the one refresh every client goes through: it re-reads
 // the sessions, makes them the core's snapshot and publishes
 // snapshot.changed; then it watches the state transitions (ObserveSessions:
-// session.state, and a notice for the sessions that came back to the user)
-// and keeps the group members' names in step (SyncGroupNames). The notices
+// session.state, and a notice for the sessions that came back to the user),
+// publishes session.tail for the tails that grew (observeTails) and keeps the group members' names in step (SyncGroupNames). The notices
 // go back to the caller, which draws them. The caller gets its own copy of
 // the snapshot (see Snapshot); after a session command (archive, rename…) it
 // reads Snapshot again to show the change. Safe to call off the client's UI
@@ -149,6 +150,7 @@ func (a *App) RefreshNotices() (store.Snapshot, []Notice) {
 	}
 	a.Publish(EvSnapshotChanged, d)
 	notices := a.ObserveSessions(snap.Sessions)
+	a.observeTails(snap.Sessions)
 	if a.ports.Groups != nil {
 		_, _ = a.SyncGroupNames(snap.Sessions) // best effort: a failed save is retried next refresh
 	}

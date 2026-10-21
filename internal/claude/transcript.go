@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -74,6 +75,13 @@ type Transcript struct {
 	pending map[string]string
 	subs    map[string]*Subagent
 	subRead map[string]*subState // read position per subagent file
+
+	// activity tail (activity.go): a bounded ring, guarded by actMu because
+	// clients read it off the refresh goroutine.
+	actMu     sync.Mutex
+	act       []TailLine
+	actSeq    int
+	toolNames map[string]string // tool_use id → tool name, until its result
 }
 
 // Subagent is one Agent-tool child of a session.
@@ -115,6 +123,8 @@ type block struct {
 	ID        string          `json:"id"`
 	ToolUseID string          `json:"tool_use_id"`
 	Input     json.RawMessage `json:"input"`
+	IsError   bool            `json:"is_error"`
+	Content   json.RawMessage `json:"content"`
 }
 
 func NewTranscript(path string) *Transcript {
@@ -270,6 +280,7 @@ func (t *Transcript) apply(r record, m *message, price Pricer) {
 			t.Model = m.Model
 		}
 		bs, _ := blocks(m.Content)
+		t.activityAssistant(t.lineTime(ts), bs)
 		for _, b := range bs {
 			switch b.Type {
 			case "text":
@@ -291,6 +302,7 @@ func (t *Transcript) apply(r record, m *message, price Pricer) {
 			return
 		}
 		bs, s := blocks(m.Content)
+		t.activityUser(t.lineTime(ts), bs, s)
 		if s != "" && !strings.HasPrefix(s, "<") {
 			t.LastUser = oneLine(s, 200)
 			t.WaitingTool = ""
@@ -311,6 +323,14 @@ func (t *Transcript) apply(r record, m *message, price Pricer) {
 			}
 		}
 	}
+}
+
+// lineTime: a record with no usable timestamp shows the last one seen.
+func (t *Transcript) lineTime(ts time.Time) time.Time {
+	if ts.IsZero() {
+		return t.LastAt
+	}
+	return ts
 }
 
 // noteFirst keeps the first user text that is a request, not a skill's

@@ -134,6 +134,18 @@ func (c *Client) Hello(ctx context.Context) (proto.Hello, error) {
 	return h, c.do(ctx, http.MethodGet, "/v1/hello", nil, &h)
 }
 
+// SessionTail is GET /v1/sessions/{id}/tail: the last n lines of the
+// session's activity (n <= 0: the server's default, proto.DefaultTail).
+func (c *Client) SessionTail(ctx context.Context, sessionID string, n int) ([]core.TailLine, error) {
+	path := "/v1/sessions/" + url.PathEscape(sessionID) + "/tail"
+	if n > 0 {
+		path += "?n=" + strconv.Itoa(n)
+	}
+	var t proto.Tail
+	err := c.do(ctx, http.MethodGet, path, nil, &t)
+	return t.Lines, err
+}
+
 // Snapshot is GET /v1/snapshot.
 func (c *Client) Snapshot(ctx context.Context) (proto.Snapshot, error) {
 	var s proto.Snapshot

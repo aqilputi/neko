@@ -59,6 +59,9 @@ type Session struct {
 	LastTool    string
 	WaitingTool string
 	Subs        []Sub
+	// TailSeq counts the activity lines parsed so far (Store.Tail serves the
+	// last ones): it grows when the session's tail has something new.
+	TailSeq int
 
 	// From Claude Code's own state files.
 	WaitingFor     string // interactive: "permission prompt", "input needed", …
@@ -130,6 +133,9 @@ type Store struct {
 	trans map[string]*claude.Transcript
 
 	refreshMu sync.Mutex // serializes Refresh: transcripts are not safe for concurrent use
+
+	tailMu    sync.Mutex                    // guards bySession: Tail is called off the refresh goroutine
+	bySession map[string]*claude.Transcript // sessionId → its transcript, as of the last Refresh
 
 	windowStart time.Time // start of the current 5-hour window (from /usage)
 
@@ -249,6 +255,7 @@ func (s *Store) Refresh() Snapshot {
 	snap.Err = err
 
 	bySID := map[string]bool{}
+	tails := map[string]*claude.Transcript{}
 	for _, a := range agents {
 		bySID[a.SessionID] = true
 		sess := Session{
@@ -275,7 +282,9 @@ func (s *Store) Refresh() Snapshot {
 			}
 		}
 		if p := claude.TranscriptPath(a.Cwd, a.SessionID); p != "" {
-			fill(&sess, s.transcript(p), win)
+			t := s.transcript(p)
+			fill(&sess, t, win)
+			tails[a.SessionID] = t
 		}
 		snap.Sessions = append(snap.Sessions, sess)
 	}
@@ -292,9 +301,14 @@ func (s *Store) Refresh() Snapshot {
 			}
 			sess := Session{SessionID: sid, Cwd: t.Cwd, Kind: "history", State: "history", Started: t.Started}
 			fill(&sess, t, win)
+			tails[sid] = t
 			snap.Sessions = append(snap.Sessions, sess)
 		}
 	}
+
+	s.tailMu.Lock()
+	s.bySession = tails
+	s.tailMu.Unlock()
 
 	for i := range snap.Sessions {
 		ss := &snap.Sessions[i]
@@ -327,6 +341,19 @@ func (s *Store) Refresh() Snapshot {
 		snap.TodayCost += ss.CostToday
 	}
 	return snap
+}
+
+// Tail is the last n activity lines of a session (n <= 0: all kept), oldest
+// first. A session with no transcript (yet), or one the last Refresh did not
+// list, has none. Safe to call while Refresh runs.
+func (s *Store) Tail(sessionID string, n int) ([]claude.TailLine, error) {
+	s.tailMu.Lock()
+	t := s.bySession[sessionID]
+	s.tailMu.Unlock()
+	if t == nil {
+		return nil, nil
+	}
+	return t.Activity(n), nil
 }
 
 func normState(s string) string {
@@ -363,6 +390,7 @@ func fill(sess *Session, t *claude.Transcript, window time.Time) {
 	sess.CostToday = t.CostByDay[time.Now().Format("2006-01-02")]
 	sess.LastUser, sess.LastText, sess.LastTool, sess.WaitingTool = t.LastUser, t.LastText, t.LastTool, t.WaitingTool
 	sess.FirstUser = t.FirstUser
+	sess.TailSeq = t.ActivitySeq()
 	sess.LastAt = t.LastAt
 	if sess.LastAt.IsZero() {
 		sess.LastAt = sess.Started

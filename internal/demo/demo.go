@@ -162,6 +162,9 @@ func (s *Scenario) sessionsLocked() []store.Session {
 	}
 	for i := range out {
 		s.applyLocked(&out[i], now)
+		if sc := s.scriptLocked(out[i].SessionID); sc != nil {
+			out[i].TailSeq = sc.seq(now)
+		}
 	}
 	return out
 }

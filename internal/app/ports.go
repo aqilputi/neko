@@ -39,6 +39,9 @@ type SessionRepository interface {
 	RenameContext(shown, name string)
 	MarkSeen(sessionID string, at time.Time)
 	SetWindowStart(t time.Time)
+	// Tail is the last n lines of a session's activity (none for a session
+	// with no transcript yet). Called off the refresh goroutine.
+	Tail(sessionID string, n int) ([]claude.TailLine, error)
 }
 
 // GroupStore persists groups and queues notes for sessions (package groups).
