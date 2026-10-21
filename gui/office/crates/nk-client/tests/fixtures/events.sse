@@ -1,0 +1,143 @@
+retry: 1000
+: ok
+
+id: 1
+event: usage.updated
+data: {"seq":1,"at":"2026-10-21T11:11:36.907271696-03:00","name":"usage.updated","data":{"at":"2026-10-21T11:11:36.907266026-03:00"}}
+
+id: 2
+event: snapshot.changed
+data: {"seq":2,"at":"2026-10-21T11:11:36.907320402-03:00","name":"snapshot.changed","data":{"at":"2026-10-21T11:11:36.907319048-03:00","sessions":7}}
+
+id: 3
+event: snapshot.changed
+data: {"seq":3,"at":"2026-10-21T11:11:38.908655172-03:00","name":"snapshot.changed","data":{"at":"2026-10-21T11:11:38.908651368-03:00","sessions":7}}
+
+id: 4
+event: session.tail
+data: {"seq":4,"at":"2026-10-21T11:11:38.908670206-03:00","name":"session.tail","data":{"id":"d3e0a001-0000-4000-8000-000000000001","n_new":1}}
+
+id: 5
+event: session.tail
+data: {"seq":5,"at":"2026-10-21T11:11:38.908671348-03:00","name":"session.tail","data":{"id":"d3e0a006-0000-4000-8000-000000000006","n_new":1}}
+
+id: 6
+event: session.tail
+data: {"seq":6,"at":"2026-10-21T11:11:38.908671895-03:00","name":"session.tail","data":{"id":"d3e0a007-0000-4000-8000-000000000007","n_new":1}}
+
+id: 7
+event: snapshot.changed
+data: {"seq":7,"at":"2026-10-21T11:11:40.910515457-03:00","name":"snapshot.changed","data":{"at":"2026-10-21T11:11:40.91051206-03:00","sessions":7}}
+
+id: 8
+event: session.tail
+data: {"seq":8,"at":"2026-10-21T11:11:40.910527708-03:00","name":"session.tail","data":{"id":"d3e0a001-0000-4000-8000-000000000001","n_new":2}}
+
+id: 9
+event: session.tail
+data: {"seq":9,"at":"2026-10-21T11:11:40.910528736-03:00","name":"session.tail","data":{"id":"d3e0a006-0000-4000-8000-000000000006","n_new":2}}
+
+id: 10
+event: session.tail
+data: {"seq":10,"at":"2026-10-21T11:11:40.910529257-03:00","name":"session.tail","data":{"id":"d3e0a007-0000-4000-8000-000000000007","n_new":2}}
+
+id: 11
+event: snapshot.changed
+data: {"seq":11,"at":"2026-10-21T11:11:42.912604979-03:00","name":"snapshot.changed","data":{"at":"2026-10-21T11:11:42.912601397-03:00","sessions":7}}
+
+id: 12
+event: session.tail
+data: {"seq":12,"at":"2026-10-21T11:11:42.912622618-03:00","name":"session.tail","data":{"id":"d3e0a001-0000-4000-8000-000000000001","n_new":1}}
+
+id: 13
+event: session.tail
+data: {"seq":13,"at":"2026-10-21T11:11:42.912623976-03:00","name":"session.tail","data":{"id":"d3e0a006-0000-4000-8000-000000000006","n_new":1}}
+
+id: 14
+event: session.tail
+data: {"seq":14,"at":"2026-10-21T11:11:42.912624811-03:00","name":"session.tail","data":{"id":"d3e0a007-0000-4000-8000-000000000007","n_new":1}}
+
+id: 15
+event: snapshot.changed
+data: {"seq":15,"at":"2026-10-21T11:11:44.914197984-03:00","name":"snapshot.changed","data":{"at":"2026-10-21T11:11:44.914191268-03:00","sessions":7}}
+
+id: 16
+event: session.tail
+data: {"seq":16,"at":"2026-10-21T11:11:44.914216134-03:00","name":"session.tail","data":{"id":"d3e0a001-0000-4000-8000-000000000001","n_new":2}}
+
+id: 17
+event: session.tail
+data: {"seq":17,"at":"2026-10-21T11:11:44.914217037-03:00","name":"session.tail","data":{"id":"d3e0a006-0000-4000-8000-000000000006","n_new":2}}
+
+id: 18
+event: session.tail
+data: {"seq":18,"at":"2026-10-21T11:11:44.914217655-03:00","name":"session.tail","data":{"id":"d3e0a007-0000-4000-8000-000000000007","n_new":2}}
+
+id: 19
+event: snapshot.changed
+data: {"seq":19,"at":"2026-10-21T11:11:46.914583568-03:00","name":"snapshot.changed","data":{"at":"2026-10-21T11:11:46.914580539-03:00","sessions":7}}
+
+id: 20
+event: session.tail
+data: {"seq":20,"at":"2026-10-21T11:11:46.914593428-03:00","name":"session.tail","data":{"id":"d3e0a001-0000-4000-8000-000000000001","n_new":1}}
+
+id: 21
+event: session.tail
+data: {"seq":21,"at":"2026-10-21T11:11:46.914594352-03:00","name":"session.tail","data":{"id":"d3e0a006-0000-4000-8000-000000000006","n_new":1}}
+
+id: 22
+event: session.tail
+data: {"seq":22,"at":"2026-10-21T11:11:46.914594845-03:00","name":"session.tail","data":{"id":"d3e0a007-0000-4000-8000-000000000007","n_new":1}}
+
+id: 23
+event: snapshot.changed
+data: {"seq":23,"at":"2026-10-21T11:11:47.971377855-03:00","name":"snapshot.changed","data":{"at":"2026-10-21T11:11:47.971376243-03:00","sessions":7}}
+
+id: 24
+event: session.tail
+data: {"seq":24,"at":"2026-10-21T11:11:47.971382272-03:00","name":"session.tail","data":{"id":"d3e0a001-0000-4000-8000-000000000001","n_new":1}}
+
+id: 25
+event: session.tail
+data: {"seq":25,"at":"2026-10-21T11:11:47.971382618-03:00","name":"session.tail","data":{"id":"d3e0a006-0000-4000-8000-000000000006","n_new":1}}
+
+id: 26
+event: session.tail
+data: {"seq":26,"at":"2026-10-21T11:11:47.971382806-03:00","name":"session.tail","data":{"id":"d3e0a007-0000-4000-8000-000000000007","n_new":1}}
+
+id: 27
+event: command.ran
+data: {"seq":27,"at":"2026-10-21T11:11:47.971396636-03:00","name":"command.ran","data":{"name":"sessions.refresh"}}
+
+id: 28
+event: snapshot.changed
+data: {"seq":28,"at":"2026-10-21T11:11:48.915494144-03:00","name":"snapshot.changed","data":{"at":"2026-10-21T11:11:48.91549152-03:00","sessions":7}}
+
+id: 29
+event: session.tail
+data: {"seq":29,"at":"2026-10-21T11:11:48.915501585-03:00","name":"session.tail","data":{"id":"d3e0a001-0000-4000-8000-000000000001","n_new":1}}
+
+id: 30
+event: session.tail
+data: {"seq":30,"at":"2026-10-21T11:11:48.915502009-03:00","name":"session.tail","data":{"id":"d3e0a006-0000-4000-8000-000000000006","n_new":1}}
+
+id: 31
+event: session.tail
+data: {"seq":31,"at":"2026-10-21T11:11:48.915502243-03:00","name":"session.tail","data":{"id":"d3e0a007-0000-4000-8000-000000000007","n_new":1}}
+
+id: 32
+event: snapshot.changed
+data: {"seq":32,"at":"2026-10-21T11:11:50.91659191-03:00","name":"snapshot.changed","data":{"at":"2026-10-21T11:11:50.916589028-03:00","sessions":7}}
+
+id: 33
+event: session.tail
+data: {"seq":33,"at":"2026-10-21T11:11:50.916598307-03:00","name":"session.tail","data":{"id":"d3e0a001-0000-4000-8000-000000000001","n_new":1}}
+
+id: 34
+event: session.tail
+data: {"seq":34,"at":"2026-10-21T11:11:50.916598712-03:00","name":"session.tail","data":{"id":"d3e0a006-0000-4000-8000-000000000006","n_new":1}}
+
+id: 35
+event: session.tail
+data: {"seq":35,"at":"2026-10-21T11:11:50.916598949-03:00","name":"session.tail","data":{"id":"d3e0a007-0000-4000-8000-000000000007","n_new":1}}
+

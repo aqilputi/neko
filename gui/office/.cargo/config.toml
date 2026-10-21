@@ -1,0 +1,5 @@
+# Link with lld through clang: much faster links than the default ld.bfd
+# (Bevy binaries are big).
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
