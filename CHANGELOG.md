@@ -10,6 +10,14 @@ incompatíveis podem acontecer em versões menores e serão sempre descritas aqu
 
 ### Adicionado
 
+- **`nkg`, o GUI nativo (Rust + Bevy, `gui/office`)**: um escritório low-poly com uma coluna por sessão
+  (faixa estilo niri, `h`/`l`), gatos trabalhando de costas para você e o tail da sessão rodando no monitor;
+  `enter` aproxima e abre o terminal real (INSERT com `i`, `ctrl+]` volta); a inbox são gatos 3D andando pelo
+  corredor (`shift+space` ou clique leva à sessão). Cliente do protocolo v1 pelo novo crate `nk-client`;
+  sobe o próprio `nk serve`. Reativo (só desenha quando algo muda), `--reduced-motion`, `--shot` para
+  verificação. `make install-gui` agora instala esta versão; o GUI em navegador vira `make install-gui-web`
+  (`nkg-web`, legado).
+- `GET /v1/sessions/{id}/tail` e o evento `session.tail`: as últimas linhas de atividade de uma sessão.
 - `nk serve [--listen unix://…|tcp://127.0.0.1:0]`: o core sem TUI, servido por RPC (padrão: o socket
   `$XDG_RUNTIME_DIR/nekuroddo-<uid>.sock`, 0600; em TCP grava um token 0600 ao lado). Atualiza as sessões
   a cada `refresh` e lê os eventos dos hooks a cada 400 ms; sai limpo com SIGINT/SIGTERM.

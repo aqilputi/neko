@@ -88,36 +88,24 @@ O projeto se chamava `neko` até a v0.1.0. Para atualizar:
 
 ## GUI (`nkg`)
 
-O GUI gráfico (Fase 3 do [plano](plano-arquitetura.md); guia de uso completo em [gui.md](gui.md)) funciona de
-ponta a ponta. O jeito do dia a dia não precisa de nada além do Go e do Node para o build do frontend:
+O GUI é um app nativo em Rust + Bevy (guia completo em [gui.md](gui.md)): um escritório onde cada sessão é
+um gatinho de costas para você, com o código rodando no monitor. Precisa do Rust
+([rustup](https://rustup.rs)) e das bibliotecas de sistema do Bevy:
 
-```sh
-make run-gui-browser
-```
-
-Isso builda o frontend (`gui/web`) e abre `nkg --browser --demo` no navegador padrão do sistema — sem
-WebKitGTK, sem janela nativa. Sem `--demo`, `nkg` mostra suas sessões reais (o mesmo core de `nk`); `nkg
---connect unix://…`/`tcp://…` conecta num `nk serve`/`nk --listen` já rodando. Veja [gui.md](gui.md) para
-todas as flags.
-
-Só o modo de **janela nativa** (`nkg` sozinho, via Wails v3) pede GTK4 + WebKitGTK 6.0:
-
-| distro | pacote |
+| distro | pacotes |
 |---|---|
-| Arch / CachyOS | `sudo pacman -S webkitgtk-6.0` |
-| Debian / Ubuntu | `sudo apt install libwebkitgtk-6.0-dev libgtk-4-dev` |
-| Fedora | `sudo dnf install webkitgtk6.0-devel gtk4-devel` |
+| Arch / CachyOS | `sudo pacman -S alsa-lib systemd-libs vulkan-icd-loader wayland libxkbcommon clang lld` (+ o driver Vulkan da sua GPU) |
+| Debian / Ubuntu | `sudo apt install libasound2-dev libudev-dev libvulkan-dev libwayland-dev libxkbcommon-dev clang lld` |
+| Fedora | `sudo dnf install alsa-lib-devel systemd-devel vulkan-loader-devel wayland-devel libxkbcommon-devel clang lld` |
 
 ```sh
-make build-gui && bin/nkg
+make install       # o core (nk), que o nkg sobe sozinho
+make install-gui   # ~/.local/bin/nkg + atalho "nekuroddo" no lançador
+nkg --demo         # o mundo de demonstração; sem --demo, suas sessões reais
 ```
 
-Essa janela nativa está implementada em código, mas **ainda não foi verificada em hardware** — nenhuma
-máquina usada até agora teve o WebKitGTK 6.0 instalado. O caminho `--browser` acima é o que de fato foi
-testado.
-
-Veja [gui.md](gui.md) para a cena, o gato da inbox, janelas, chrome, teclado, Lua, acessibilidade e solução de
-problemas de WebGL.
+O GUI anterior, em navegador, continua disponível como legado: `make install-gui-web` (instala `nkg-web`;
+veja [gui-web.md](gui-web.md)).
 
 ## Ferramenta de diagnóstico
 

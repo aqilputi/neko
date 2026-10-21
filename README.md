@@ -266,10 +266,11 @@ Arquitetura e fluxo de dados em [docs/arquitetura.md](docs/arquitetura.md).
 
 O core headless (`internal/core` + `internal/app`, servido opcionalmente por `internal/rpc` via `nk serve`/
 `nk --listen`/`nk run`) e o runtime Lua (`internal/lua`, API `nk.*`, docs em [docs/lua.md](docs/lua.md)) das
-fases 1 e 2 do plano já estão em código. **Em construção agora (fase 3):** um GUI (`nkg`) com gatinhos 3D
-low-poly que embute os terminais reais do Claude Code, fala o mesmo protocolo e o mesmo Lua da TUI — guia de
-uso, do que já roda e do que ainda é só o esqueleto, em [docs/gui.md](docs/gui.md). A TUI atual e todos os
-atalhos continuam funcionando do mesmo jeito enquanto o GUI avança. Plano completo em
+fases 1 e 2 do plano já estão em código. **Fase 3:** o GUI `nkg`, um app nativo em Rust + Bevy — um
+escritório low-poly onde cada sessão é um gatinho trabalhando de costas para você, com o código rodando no
+monitor, zoom num terminal de verdade e gatos da inbox andando pelo corredor; fala o mesmo protocolo e o
+mesmo Lua da TUI. Guia em [docs/gui.md](docs/gui.md). A TUI e todos os atalhos continuam funcionando do mesmo
+jeito. Plano completo em
 [docs/plano-arquitetura.md](docs/plano-arquitetura.md).
 
 ## Contribuindo

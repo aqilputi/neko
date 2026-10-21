@@ -6,9 +6,12 @@ COVERPROFILE  ?= coverage.out
 COVER_MIN     ?= 80
 GUI_WEB       := gui/web
 NPM           ?= npm
+CARGO         ?= $(shell command -v cargo 2>/dev/null || ls $(HOME)/.cargo/bin/cargo 2>/dev/null | head -1)
+OFFICE        := gui/office
 
 .PHONY: all build install test cover cover-check cover-html lint fmt vet ci clean
-.PHONY: gui-install gui-test gui-e2e gui-build build-gui run-gui-browser install-gui
+.PHONY: gui-install gui-test gui-e2e gui-build build-gui run-gui-browser install-gui-web
+.PHONY: office-build office-test office-lint run-office install-gui
 
 all: build
 
@@ -85,17 +88,37 @@ run-gui-browser:
 	cd $(GUI_WEB) && npx vite build
 	$(GO) run ./cmd/nekuroddo-gui --browser --demo --dev
 
-# nkg as a desktop app without WebKitGTK: the frontend embedded in the binary
-# (no wails tag), opened in its own Chrome/Chromium --app window; plus the
-# launcher entry and icon. With webkitgtk-6.0 installed, build-gui gives the
-# native window instead.
-install-gui:
+# the legacy web nkg (Chrome/Chromium --app window), installed as nkg-web
+install-gui-web:
 	cd $(GUI_WEB) && npx vite build
 	find $(NKG_DIST) -mindepth 1 ! -name .gitkeep -exec rm -rf {} +
 	cp -r $(GUI_WEB)/dist/. $(NKG_DIST)/
-	$(GO) build -o bin/nkg ./cmd/nekuroddo-gui
+	$(GO) build -o bin/nkg-web ./cmd/nekuroddo-gui
+	install -d $(PREFIX)/bin
+	install -m 0755 bin/nkg-web $(PREFIX)/bin/nkg-web
+
+# ---- nkg, the native GUI (gui/office: Rust + Bevy) ----
+# Needs a Rust toolchain plus the Bevy system libs (alsa, udev, vulkan,
+# wayland/x11, xkbcommon); clang + lld link it (gui/office/.cargo/config.toml).
+# It spawns `nk serve` by itself, so nk must be installed (make install).
+
+office-build:
+	cd $(OFFICE) && $(CARGO) build --release -p nkg
+
+office-test:
+	cd $(OFFICE) && $(CARGO) test --workspace
+
+office-lint:
+	cd $(OFFICE) && $(CARGO) fmt --all --check && $(CARGO) clippy --workspace --all-targets -- -D warnings
+
+# the demo world in the native window
+run-office:
+	cd $(OFFICE) && $(CARGO) run --release -p nkg -- --demo
+
+# nkg + the launcher entry and icon
+install-gui: office-build
 	install -d $(PREFIX)/bin $(PREFIX)/share/applications $(PREFIX)/share/icons/hicolor/256x256/apps
-	install -m 0755 bin/nkg $(PREFIX)/bin/nkg
+	install -m 0755 $(OFFICE)/target/release/nkg $(PREFIX)/bin/nkg
 	install -m 0644 assets/logo-256.png $(PREFIX)/share/icons/hicolor/256x256/apps/nekuroddo.png
 	sed 's#^Exec=nkg#Exec=$(PREFIX)/bin/nkg#' packaging/nekuroddo.desktop > $(PREFIX)/share/applications/nekuroddo.desktop
 	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null

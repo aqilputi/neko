@@ -12,6 +12,7 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::DebandDither;
@@ -212,11 +213,16 @@ struct St {
     walker_ents: HashMap<String, Entity>,
     shot_frame: u32,
     shot_t0: Option<f64>,
+    /// the earliest a monitor or pane wants the next frame (ms)
+    wake_ms: Option<i64>,
     shot_stage: u8,
     chrome_key: String,
 }
 
-fn now_s(t: &Time) -> f64 {
+/// Seconds of wall time since the first frame. Not Bevy's virtual clock:
+/// that one caps each frame at 250 ms, so after the app sleeps (reactive mode)
+/// animations would lag the wall-clock deadlines they are compared with.
+fn now_s(t: &Time<Real>) -> f64 {
     t.elapsed_secs_f64()
 }
 
@@ -268,6 +274,16 @@ fn setup(
             ..default()
         },
         Transform::from_xyz(-3.0, 9.0, 7.0).looking_at(Vec3::new(1.0, 0.0, -1.0), Vec3::Y),
+        // the office is a few metres deep: one cascade is plenty (the default
+        // four, out to 1000 units, cost most of each frame)
+        CascadeShadowConfigBuilder {
+            num_cascades: 1,
+            minimum_distance: 0.5,
+            maximum_distance: 22.0,
+            first_cascade_far_bound: 22.0,
+            overlap_proportion: 0.0,
+        }
+        .build(),
     ));
     let font = fonts.add(Font::from_bytes(raster::FONT_BYTES.to_vec()));
     let fd = Face::load_font();
@@ -315,6 +331,7 @@ fn setup(
         walker_ents: HashMap::new(),
         shot_frame: 0,
         shot_t0: None,
+        wake_ms: None,
         shot_stage: 0,
         chrome_key: String::new(),
     });
@@ -386,6 +403,7 @@ fn setup_ui(mut c: Commands, st: Res<St>) {
             height: px(10),
             ..default()
         },
+        BackgroundColor(rgb(p.bg)),
         Visibility::Hidden,
         GlobalZIndex(5),
         TermOverlay,
@@ -441,7 +459,7 @@ fn setup_ui(mut c: Commands, st: Res<St>) {
 fn pump_io(
     io: Res<IoRes>,
     mut st: ResMut<St>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     mut mats_res: ResMut<Mats>,
     mut clear: ResMut<ClearColor>,
@@ -796,7 +814,7 @@ fn keyboard(
     held: Res<ButtonInput<KeyCode>>,
     mut st: ResMut<St>,
     io: Res<IoRes>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
 ) {
     let t = now_s(&time);
     let ctrl = held.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
@@ -962,7 +980,7 @@ fn mouse(
     window: Single<&Window, With<PrimaryWindow>>,
     cam: Single<(&Camera, &GlobalTransform), With<CamMarker>>,
     mut st: ResMut<St>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     walkers: Query<(&WalkerRig, &GlobalTransform)>,
     mut ms: Local<MouseState>,
 ) {
@@ -1130,7 +1148,7 @@ fn sync_columns(
     labels: Query<Entity, With<CtxLabel>>,
     layer: Single<Entity, With<LabelLayer>>,
     mut tfs: Query<&mut Transform>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
 ) {
     let key = layout_key(&st);
     if key == st.layout_key {
@@ -1289,7 +1307,7 @@ fn layout_key(st: &St) -> String {
 
 fn camera(
     mut st: ResMut<St>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut cam: Single<&mut Transform, With<CamMarker>>,
     mut resized: MessageReader<WindowResized>,
@@ -1322,7 +1340,7 @@ fn camera(
 #[allow(clippy::too_many_arguments)]
 fn animate_cats(
     st: Res<St>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     m: Res<Mats>,
     mut cats: Query<(&mut CatAnim, &Rig)>,
     parts: Query<&ColumnParts>,
@@ -1521,17 +1539,11 @@ fn state_word(s: &Sess) -> &'static str {
     }
 }
 
-fn monitors(
-    mut st: ResMut<St>,
-    mut faces: ResMut<Faces>,
-    mut images: ResMut<Assets<Image>>,
-    time: Res<Time>,
-) {
+fn monitors(mut st: ResMut<St>, mut faces: ResMut<Faces>, mut images: ResMut<Assets<Image>>) {
     let now = now_ms();
-    let t = now_s(&time);
+    let mut st_wake: Option<i64> = None;
     let p = st.palette.clone();
     let cols = st.office.columns.clone();
-    let mut pending = false;
     for col in &cols {
         let has_pane = st.panes.contains_key(&col.sess.id);
         let Some(m) = st.monitors.get_mut(&col.sess.id) else {
@@ -1540,7 +1552,9 @@ fn monitors(
         if m.feed.tick(now) {
             m.dirty = true;
         }
-        pending |= m.feed.pending();
+        if let Some(at) = m.feed.next_reveal(now) {
+            st_wake = Some(st_wake.map_or(at, |w: i64| w.min(at)));
+        }
         if !m.dirty || has_pane {
             continue;
         }
@@ -1591,8 +1605,15 @@ fn monitors(
             img.data = Some(cv.px);
         }
     }
-    if pending {
-        st.animating_until = st.animating_until.max(t + 0.15);
+    st.wake_ms = min_wake(st.wake_ms, st_wake);
+}
+
+/// The earlier of two wake-up times (ms).
+fn min_wake(a: Option<i64>, b: Option<i64>) -> Option<i64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, None) => a,
+        (None, b) => b,
     }
 }
 
@@ -1610,7 +1631,7 @@ fn panes(
     mut st: ResMut<St>,
     mut faces: ResMut<Faces>,
     mut images: ResMut<Assets<Image>>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
 ) {
     let t = now_s(&time);
     let focus = focused_sid(&st);
@@ -1618,6 +1639,7 @@ fn panes(
     let mode = st.nav.mode;
     let accent = st.palette.accent;
     let mut busy = false;
+    let mut wake: Option<i64> = None;
     let sids: Vec<String> = st.panes.keys().cloned().collect();
     for sid in sids {
         let is_focus = focus.as_deref() == Some(sid.as_str());
@@ -1629,7 +1651,8 @@ fn panes(
         }
         let interval = if is_focus && zoomed { 1.0 / 60.0 } else { 0.1 };
         if t - p.last_draw < interval {
-            busy = true;
+            let due = now_ms() + ((p.last_draw + interval - t) * 1000.0).ceil() as i64;
+            wake = min_wake(wake, Some(due));
             continue;
         }
         p.dirty = false;
@@ -1673,6 +1696,7 @@ fn panes(
     if busy {
         st.animating_until = st.animating_until.max(t + 0.12);
     }
+    st.wake_ms = min_wake(st.wake_ms, wake);
 }
 
 // ---------------------------------------------------------------- inbox cats
@@ -1683,7 +1707,7 @@ fn walkers(
     mut st: ResMut<St>,
     kit: Res<Kit>,
     m: Res<Mats>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     rigs: Query<(Entity, &WalkerRig)>,
     mut tfs: Query<&mut Transform>,
     mut badge: Single<(&mut Visibility, &Children), With<OverflowBadge>>,
@@ -1833,10 +1857,14 @@ fn walkers(
             tx.0 = s;
         }
     }
+    // walking cats: WALK_FPS is smooth enough for low-poly legs, and half the
+    // cost of redrawing every vsync
     if inbox::moving(&st.queue, now) {
-        st.animating_until = st.animating_until.max(t + 0.05);
+        st.wake_ms = min_wake(st.wake_ms, Some(now + 1000 / WALK_FPS));
     }
 }
+
+const WALK_FPS: i64 = 30;
 
 /// The yaw the walker root has (so its icon can face the camera).
 fn tf_parent_yaw(w: &inbox::Walker, now: i64) -> f32 {
@@ -1989,11 +2017,14 @@ fn chrome(
 fn overlay(
     mut st: ResMut<St>,
     mut faces: ResMut<Faces>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     window: Single<&Window, With<PrimaryWindow>>,
     cam: Single<(&Camera, &GlobalTransform), With<CamMarker>>,
     mut labels: Query<(&CtxLabel, &mut Node, &mut Visibility), Without<TermOverlay>>,
-    term: Single<(&mut ImageNode, &mut Node, &mut Visibility), With<TermOverlay>>,
+    term: Single<
+        (&mut ImageNode, &mut Node, &mut BackgroundColor, &mut Visibility),
+        With<TermOverlay>,
+    >,
 ) {
     let t = now_s(&time);
     let (camera, ctf) = *cam;
@@ -2022,7 +2053,7 @@ fn overlay(
         }
     }
     // the crisp terminal, once the camera has arrived
-    let (mut img, mut node, mut v) = term.into_inner();
+    let (mut img, mut node, mut bg, mut v) = term.into_inner();
     let sid = focused_sid(&st);
     let pane = sid.as_ref().and_then(|s| st.panes.get(s));
     let arrived = st.tween.done(t) && zoomed;
@@ -2054,12 +2085,20 @@ fn overlay(
         p.conn.lock().unwrap().resize(cols, rows);
         p.dirty = true;
     }
+    // the node covers the whole screen face (so the 3D monitor, which shows
+    // the same grid stretched, never peeks out at the edges); the whole-cell
+    // grid sits centred in it, the margin painted the terminal's background
     let size = Vec2::new(cols as f32 * cell.x, rows as f32 * cell.y) / sf;
-    let center = (lo + hi) / 2.0;
-    node.left = px((center.x - size.x / 2.0).round());
-    node.top = px((center.y - size.y / 2.0).round());
-    node.width = px(size.x);
-    node.height = px(size.y);
+    let pad = ((rect - size) / 2.0).max(Vec2::ZERO).floor();
+    node.left = px(lo.x.floor());
+    node.top = px(lo.y.floor());
+    node.width = px(size.x + 2.0 * pad.x);
+    node.height = px(size.y + 2.0 * pad.y);
+    node.padding = UiRect::axes(px(pad.x), px(pad.y));
+    let want = rgb(st.palette.bg);
+    if bg.0 != want {
+        bg.0 = want;
+    }
     if img.image != image {
         img.image = image;
     }
@@ -2070,7 +2109,7 @@ fn overlay(
 
 fn power(
     mut st: ResMut<St>,
-    time: Res<Time>,
+    time: Res<Time<Real>>,
     mut settings: ResMut<WinitSettings>,
     mut redraw: MessageWriter<RequestRedraw>,
     cli: Res<CliRes>,
@@ -2117,6 +2156,9 @@ fn power(
             wait = Duration::from_secs_f32(next_bout.max(0.05));
         }
     }
+    if let Some(w) = st.wake_ms.take() {
+        wait = wait.min(Duration::from_millis((w - now_ms()).max(10) as u64));
+    }
     if let Some(w) = inbox::next_wake(&st.queue, now_ms()) {
         wait = wait.min(Duration::from_millis((w - now_ms()).max(10) as u64));
     }
@@ -2134,7 +2176,7 @@ fn power(
 /// How long the inbox cats walk before an inbox shot.
 const INBOX_SHOT_S: f64 = 1.8;
 
-fn shot(mut c: Commands, mut st: ResMut<St>, cli: Res<CliRes>, time: Res<Time>) {
+fn shot(mut c: Commands, mut st: ResMut<St>, cli: Res<CliRes>, time: Res<Time<Real>>) {
     let Some(path) = cli.0.shot.clone() else {
         return;
     };

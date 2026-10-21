@@ -124,6 +124,13 @@ impl Feed {
         true
     }
 
+    /// When (ms) the next queued line is due, for sleeping until then
+    /// instead of redrawing every frame; None with nothing queued.
+    pub fn next_reveal(&self, now: i64) -> Option<i64> {
+        self.pending()
+            .then(|| now.max(self.last_reveal + REVEAL_MS))
+    }
+
     pub fn pending(&self) -> bool {
         self.shown < self.lines.len()
     }
@@ -215,10 +222,13 @@ mod tests {
         f.update((2..12).map(l).collect(), true);
         assert_eq!(f.lines.len(), 12);
         assert_eq!(f.shown, 10);
+        assert_eq!(f.next_reveal(900), Some(900), "first one: now");
         assert!(f.tick(1000));
+        assert_eq!(f.next_reveal(1050), Some(1000 + REVEAL_MS));
         assert!(!f.tick(1050), "too soon");
         assert!(f.tick(1000 + REVEAL_MS));
         assert!(!f.tick(5000), "nothing left");
+        assert_eq!(f.next_reveal(5000), None);
         assert_eq!(
             f.visible(3)
                 .iter()
