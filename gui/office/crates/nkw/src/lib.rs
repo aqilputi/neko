@@ -1,24 +1,33 @@
 //! nkw: the world compositor (Smithay + glow). See docs/plano-mundo.md.
 //!
 //! The pure parts ([`world`], [`render`], [`scene`], [`script`], [`cli`],
-//! [`keys`], [`stats`], [`hud`], [`shot`]) are unit tested; the Smithay
+//! [`keys`], [`stats`], [`shot`], [`router`]) are unit tested; the Smithay
 //! side ([`state`], [`handlers`], [`input`], [`frame`], [`app`]) is tested
 //! end to end in `tests/` with the headless backend.
+//!
+//! The plugin seam ([`ext`], contract S7): the hub calls the plugins
+//! [`wm`], [`objects`], [`cats`] and [`overlay`] at fixed points, and the
+//! [`router`] for every key.
 
 pub mod app;
+pub mod cats;
 pub mod cli;
 pub mod demo;
+pub mod ext;
 pub mod frame;
 pub mod handlers;
-pub mod hud;
 pub mod input;
 pub mod keys;
+pub mod objects;
+pub mod overlay;
 pub mod render;
+pub mod router;
 pub mod scene;
 pub mod script;
 pub mod shot;
 pub mod state;
 pub mod stats;
+pub mod wm;
 pub mod world;
 
 /// Entry point of the binary; returns the process exit code.

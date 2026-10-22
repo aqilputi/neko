@@ -1,0 +1,14 @@
+# NAV composition (P1, wave 2a), between windows: three testclient windows in the demo's acme
+# room; the station is the middle one, with a window on the desk at each side.
+key J
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait
+spawn ${TESTCLIENT} --app-id bravo --checker --no-frame-wait
+spawn ${TESTCLIENT} --app-id demo --color cc6633 --no-frame-wait
+wait 800
+key h
+wait 600
+expect mode NAV
+expect json /station/desk/desk 2
+shot ${OUT}/shot-infra-nav-wide.png
+dump ${OUT}/dump-infra-nav-wide.json
+quit

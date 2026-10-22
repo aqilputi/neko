@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::ids::{BookId, CatId, RoomId, ScreenId};
+use crate::ids::{BookId, CatId, ObjectId, RoomId, ScreenId};
 use crate::pose::Pose;
 use crate::strip::Station;
 
@@ -39,13 +39,38 @@ pub enum Target {
     CatTerm(CatId),
 }
 
+/// What a CONVERSA is for: a cat's session, or the vault's unlock dialogue
+/// (addendum §5). The `nkw` side routes the dialogue's effects by it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TalkPurpose {
+    Session,
+    VaultUnlock,
+}
+
+/// What is done to an object of the world (addendum §2.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectAction {
+    /// `enter`/`space` in ANDAR, a SALTO label in ANDAR
+    Interact,
+    /// `k`/`j` in ANDAR: one step up (+) or down (−)
+    Adjust(i8),
+    /// `h` in ANDAR
+    Prev,
+    /// `l` in ANDAR
+    Next,
+}
+
 /// The overlays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// FOCO: the window in 1:1, raw keys go to it
     Focus(Target),
     /// CONVERSA with a cat; `line`: typing a reply
-    Talk { cat: CatId, line: bool },
+    Talk {
+        cat: CatId,
+        line: bool,
+        purpose: TalkPurpose,
+    },
     /// SALTO; `focus`: `F`, a screen label goes straight to FOCO
     Hint { focus: bool },
     /// COMANDOS
@@ -80,6 +105,11 @@ pub enum Pick {
     Cat(CatId),
     Door(RoomId),
     Book(BookId),
+    /// an object; `stand`: where NAV goes to look at it
+    Object {
+        id: ObjectId,
+        stand: Pose,
+    },
 }
 
 /// What the user (or the world) asked for; the keymap turns keys into these.
@@ -89,12 +119,17 @@ pub enum Action {
     Focus(Target),
     /// `w` / `world+w`
     Walk,
-    /// `t`, `interact` on a cat
-    Talk(CatId),
+    /// `t`, `interact` on a cat (`Session`); the vault's unlock (`VaultUnlock`)
+    Talk {
+        cat: CatId,
+        purpose: TalkPurpose,
+    },
     /// `shift+space` / `world+space`: the most urgent cat
     Summon(CatId),
     /// `f` / `F`
-    Hint { focus: bool },
+    Hint {
+        focus: bool,
+    },
     /// `:` / `ctrl+p` / `world+p`
     Palette,
     /// `esc`, `q` in CONVERSA, `ctrl+]` in FOCO: go back
@@ -110,7 +145,9 @@ pub enum Action {
     /// `space`/`enter` in CONVERSA
     TalkNext,
     /// `f` in CONVERSA: FOCO on the cat's terminal; back lands on its desk
-    Sit { desk: Pose },
+    Sit {
+        desk: Pose,
+    },
     /// a SALTO label was typed
     Pick(Pick),
     /// the palette ran a command (the caller then applies any mode change
@@ -120,6 +157,13 @@ pub enum Action {
     Notice,
     /// xdg-activation with a valid token for this screen
     Activation(ScreenId),
+    /// `enter`/`space` on the object in sight (NAV/ANDAR)
+    Interact(ObjectId),
+    /// `k`/`j` on the object in sight
+    Adjust(ObjectId, i8),
+    /// `h`/`l` on the object in sight
+    Prev(ObjectId),
+    Next(ObjectId),
 }
 
 /// What the `nkw` side must do.
@@ -178,6 +222,10 @@ pub enum Effect {
     Select(ScreenId),
     /// a badge on the HUD; nothing steals the focus
     Badge,
+    /// do this to the object (the `nkw` side's objects)
+    Object(ObjectId, ObjectAction),
+    /// NAV: glide to an object's stand (the station becomes `Free`)
+    GoToStand(Pose),
 }
 
 impl Mode {
@@ -242,7 +290,15 @@ impl Mode {
 
     fn talk(&self) -> Option<(CatId, bool)> {
         match self.kind() {
-            Some(Kind::Talk { cat, line }) => Some((cat, line)),
+            Some(Kind::Talk { cat, line, .. }) => Some((cat, line)),
+            _ => None,
+        }
+    }
+
+    /// The purpose of the CONVERSA, if in one.
+    pub fn purpose(&self) -> Option<TalkPurpose> {
+        match self.kind() {
+            Some(Kind::Talk { purpose, .. }) => Some(purpose),
             _ => None,
         }
     }
@@ -317,6 +373,29 @@ fn enter(old: &Mode, new: &Mode, fx: &mut Vec<Effect>) {
     {
         fx.push(Effect::KeyboardEnter(t));
     }
+}
+
+/// A fresh CONVERSA (no reply line yet).
+fn talk(cat: CatId, purpose: TalkPurpose) -> Kind {
+    Kind::Talk {
+        cat,
+        line: false,
+        purpose,
+    }
+}
+
+/// The same CONVERSA with the reply line open or closed.
+fn with_line(k: Kind, line: bool) -> Kind {
+    match k {
+        Kind::Talk { cat, purpose, .. } => Kind::Talk { cat, line, purpose },
+        other => other,
+    }
+}
+
+/// An action on an object: no mode change, one effect.
+fn object(fx: &mut Vec<Effect>, id: ObjectId, a: ObjectAction) -> Option<Mode> {
+    fx.push(Effect::Object(id, a));
+    None
 }
 
 /// FOCO on `t` over `back`, opened from `pose`.
@@ -408,13 +487,17 @@ impl Machine {
                 fx.push(Effect::WalkExit);
                 Mode::base(Base::Nav)
             }
-            (None, A::Talk(cat)) => {
+            (None, A::Talk { cat, purpose }) => {
                 fx.push(Effect::FrameFace(cat));
-                Mode::over(Kind::Talk { cat, line: false }, m, cam)
+                Mode::over(talk(cat, purpose), m, cam)
             }
             (None | Some(Kind::Focus(_)), A::Summon(cat)) => {
-                Mode::over(Kind::Talk { cat, line: false }, m, cam)
+                Mode::over(talk(cat, TalkPurpose::Session), m, cam)
             }
+            (None, A::Interact(id)) => return object(fx, id, ObjectAction::Interact),
+            (None, A::Adjust(id, step)) => return object(fx, id, ObjectAction::Adjust(step)),
+            (None, A::Prev(id)) => return object(fx, id, ObjectAction::Prev),
+            (None, A::Next(id)) => return object(fx, id, ObjectAction::Next),
             (None, A::Hint { focus }) => Mode::over(Kind::Hint { focus }, m, cam),
             (None | Some(Kind::Focus(_)), A::Palette) => Mode::over(Kind::Palette, m, cam),
 
@@ -434,23 +517,22 @@ impl Machine {
             }
 
             // CONVERSA
-            (Some(Kind::Talk { cat, line: true }), A::Back) => {
-                m.with_kind(Kind::Talk { cat, line: false })
-            }
-            (Some(Kind::Talk { cat, line: true }), A::Send) => {
+            (Some(k @ Kind::Talk { line: true, .. }), A::Back) => m.with_kind(with_line(k, false)),
+            (Some(k @ Kind::Talk { line: true, .. }), A::Send) => {
                 fx.push(Effect::SendLine);
-                m.with_kind(Kind::Talk { cat, line: false })
+                m.with_kind(with_line(k, false))
             }
-            (Some(Kind::Talk { cat, line: false }), A::Reply) => {
-                m.with_kind(Kind::Talk { cat, line: true })
-            }
+            (Some(k @ Kind::Talk { line: false, .. }), A::Reply) => m.with_kind(with_line(k, true)),
             (Some(Kind::Talk { line: false, .. }), A::TalkNext) => {
                 fx.push(Effect::TalkNext);
                 return None;
             }
-            (Some(Kind::Talk { cat, line: false }), A::Sit { desk }) => {
-                focus_on(Target::CatTerm(cat), &Mode::base(Base::Nav), desk, fx)
-            }
+            (
+                Some(Kind::Talk {
+                    cat, line: false, ..
+                }),
+                A::Sit { desk },
+            ) => focus_on(Target::CatTerm(cat), &Mode::base(Base::Nav), desk, fx),
             (Some(Kind::Talk { line: false, .. }), A::Back) => go_back(o?, fx),
 
             // SALTO
@@ -466,7 +548,16 @@ impl Machine {
                     }
                     Pick::Cat(cat) => {
                         fx.push(Effect::FrameFace(cat));
-                        Mode::over(Kind::Talk { cat, line: false }, &o.back, o.pose)
+                        Mode::over(talk(cat, TalkPurpose::Session), &o.back, o.pose)
+                    }
+                    Pick::Object { id, stand } => {
+                        if o.back.base == Base::Walk {
+                            fx.push(Effect::Object(id, ObjectAction::Interact));
+                            (*o.back).clone()
+                        } else {
+                            fx.push(Effect::GoToStand(stand));
+                            Mode::base(Base::Nav)
+                        }
                     }
                     Pick::Door(room) => {
                         fx.push(Effect::GoToRoom(room));
@@ -514,6 +605,15 @@ mod tests {
     const S2: Target = Target::Screen(ScreenId(2));
     const CAT: CatId = CatId(7);
     const URGENT: CatId = CatId(8);
+    const OBJ: ObjectId = ObjectId(4);
+    const TALK: Action = Action::Talk {
+        cat: CAT,
+        purpose: TalkPurpose::Session,
+    };
+    const VAULT: Action = Action::Talk {
+        cat: CAT,
+        purpose: TalkPurpose::VaultUnlock,
+    };
 
     fn p(x: f32) -> Pose {
         Pose::new(Vec3::new(x, 1.5, 2.4), 0.0, 0.0)
@@ -535,7 +635,9 @@ mod tests {
 
     const IN_FOCUS: &[Action] = &[A::Focus(S1)];
     const IN_WALK: &[Action] = &[A::Walk];
-    const IN_TALK: &[Action] = &[A::Talk(CAT)];
+    const IN_TALK: &[Action] = &[TALK];
+    const IN_HINT: &[Action] = &[A::Hint { focus: false }];
+    const IN_PALETTE: &[Action] = &[A::Palette];
 
     /// (name, setup, action, HUD label after, base after, effects it must
     /// include)
@@ -552,6 +654,7 @@ mod tests {
     fn every_transition_of_the_table() {
         let desk = p(9.0);
         let station = Station::Air(ScreenId(5));
+        let stand = p(7.0);
         #[rustfmt::skip]
         let rows: Vec<Row> = vec![
             ("nav enter screen", &[], A::Focus(S1), "FOCO", Base::Nav,
@@ -559,7 +662,7 @@ mod tests {
             ("nav enter cat desk", &[], A::Focus(Target::CatTerm(CAT)), "FOCO", Base::Nav,
                 vec![E::OpenPane(CAT), E::GlideOneToOne(Target::CatTerm(CAT))]),
             ("nav w", &[], A::Walk, "ANDAR", Base::Walk, vec![E::WalkStart]),
-            ("nav t", &[], A::Talk(CAT), "CONVERSA", Base::Nav,
+            ("nav t", &[], TALK, "CONVERSA", Base::Nav,
                 vec![E::FrameFace(CAT), E::CatTurns(CAT)]),
             ("nav summon", &[], A::Summon(URGENT), "CONVERSA", Base::Nav, vec![E::CatTurns(URGENT)]),
             ("walk summon", IN_WALK, A::Summon(URGENT), "CONVERSA", Base::Walk,
@@ -576,7 +679,7 @@ mod tests {
             ("walk world+w", IN_WALK, A::Walk, "NAVEGAR", Base::Nav, vec![E::WalkStop, E::WalkExit]),
             ("walk enter screen", IN_WALK, A::Focus(S1), "FOCO", Base::Walk,
                 vec![E::WalkStop, E::GlideOneToOne(S1), E::KeyboardEnter(S1)]),
-            ("walk talk", IN_WALK, A::Talk(CAT), "CONVERSA", Base::Walk,
+            ("walk talk", IN_WALK, TALK, "CONVERSA", Base::Walk,
                 vec![E::WalkStop, E::FrameFace(CAT), E::CatTurns(CAT)]),
             ("focus ctrl+]", IN_FOCUS, A::Back, "NAVEGAR", Base::Nav,
                 vec![E::KeyboardLeave, E::PopupsDone, E::Unfreeze, E::GlideTo(p(0.0))]),
@@ -618,6 +721,27 @@ mod tests {
                 vec![E::Select(ScreenId(3))]),
             ("activation in focus", IN_FOCUS, A::Activation(ScreenId(3)), "FOCO", Base::Nav,
                 vec![E::Badge]),
+            ("nav pick object", IN_HINT, A::Pick(Pick::Object { id: OBJ, stand }), "NAVEGAR",
+                Base::Nav, vec![E::HideHints, E::GoToStand(stand)]),
+            ("nav F pick object", &[A::Hint { focus: true }], A::Pick(Pick::Object { id: OBJ, stand }),
+                "NAVEGAR", Base::Nav, vec![E::HideHints, E::GoToStand(stand)]),
+            ("walk pick object", &[A::Walk, A::Hint { focus: false }],
+                A::Pick(Pick::Object { id: OBJ, stand }), "ANDAR", Base::Walk,
+                vec![E::HideHints, E::Object(OBJ, ObjectAction::Interact), E::WalkStart]),
+            ("nav interact", &[], A::Interact(OBJ), "NAVEGAR", Base::Nav,
+                vec![E::Object(OBJ, ObjectAction::Interact)]),
+            ("walk interact", IN_WALK, A::Interact(OBJ), "ANDAR", Base::Walk,
+                vec![E::Object(OBJ, ObjectAction::Interact)]),
+            ("nav adjust", &[], A::Adjust(OBJ, -1), "NAVEGAR", Base::Nav,
+                vec![E::Object(OBJ, ObjectAction::Adjust(-1))]),
+            ("walk adjust", IN_WALK, A::Adjust(OBJ, 1), "ANDAR", Base::Walk,
+                vec![E::Object(OBJ, ObjectAction::Adjust(1))]),
+            ("walk prev", IN_WALK, A::Prev(OBJ), "ANDAR", Base::Walk,
+                vec![E::Object(OBJ, ObjectAction::Prev)]),
+            ("nav next", &[], A::Next(OBJ), "NAVEGAR", Base::Nav,
+                vec![E::Object(OBJ, ObjectAction::Next)]),
+            ("nav vault", &[], VAULT, "CONVERSA", Base::Nav,
+                vec![E::FrameFace(CAT), E::CatTurns(CAT)]),
         ];
         for (name, setup, act, label, base, want) in rows {
             let (m, fx) = run(setup, act);
@@ -656,13 +780,20 @@ mod tests {
             (&[], A::Pick(Pick::Cat(CAT))),
             (IN_WALK, A::Neighbour(S2)),
             (IN_FOCUS, A::Hint { focus: false }),
-            (IN_FOCUS, A::Talk(CAT)),
+            (IN_FOCUS, TALK),
             (IN_FOCUS, A::Focus(S2)),
             (IN_TALK, A::Palette),
             (IN_TALK, A::Walk),
             (&[A::Hint { focus: false }], A::Walk),
             (&[A::Palette], A::Focus(S1)),
             (&[A::Palette], A::Pick(Pick::Cat(CAT))),
+            (
+                &[],
+                A::Pick(Pick::Object {
+                    id: OBJ,
+                    stand: p(2.0),
+                }),
+            ),
         ];
         for (setup, act) in rows {
             let mut before = Machine::new();
@@ -718,7 +849,7 @@ mod tests {
     fn sitting_down_lands_on_the_cats_desk_in_nav() {
         let mut m = Machine::new();
         m.apply(A::Walk, p(0.0));
-        m.apply(A::Talk(CAT), p(1.0));
+        m.apply(TALK, p(1.0));
         m.apply(A::Sit { desk: p(9.0) }, p(1.0));
         assert_eq!(m.mode().kind(), Some(Kind::Focus(Target::CatTerm(CAT))));
         let fx = m.apply(A::Back, p(2.0));
@@ -730,13 +861,14 @@ mod tests {
     #[test]
     fn the_reply_line_takes_esc_and_enter() {
         let mut m = Machine::new();
-        m.apply(A::Talk(CAT), p(0.0));
+        m.apply(TALK, p(0.0));
         m.apply(A::Reply, p(0.0));
         assert_eq!(
             m.mode().kind(),
             Some(Kind::Talk {
                 cat: CAT,
-                line: true
+                line: true,
+                purpose: TalkPurpose::Session,
             })
         );
         assert!(
@@ -781,6 +913,93 @@ mod tests {
         let (m, _) = run(&[A::Walk], A::Palette);
         assert!(!m.mode().walking(), "an overlay over ANDAR is not walking");
         assert_eq!(Machine::default().mode(), Machine::new().mode());
+    }
+
+    #[test]
+    fn object_actions_under_any_overlay_do_nothing() {
+        let actions = [
+            A::Interact(OBJ),
+            A::Adjust(OBJ, 1),
+            A::Prev(OBJ),
+            A::Next(OBJ),
+        ];
+        let setups: [&[Action]; 6] = [
+            IN_FOCUS,
+            IN_TALK,
+            IN_HINT,
+            IN_PALETTE,
+            &[A::Walk, A::Palette],
+            &[A::Walk, A::Hint { focus: false }],
+        ];
+        for setup in setups {
+            for act in actions {
+                let mut before = Machine::new();
+                for a in setup {
+                    before.apply(*a, p(0.0));
+                }
+                let (m, fx) = run(setup, act);
+                assert_eq!(m.mode(), before.mode(), "{setup:?} then {act:?}");
+                assert!(fx.is_empty(), "{setup:?} then {act:?}: {fx:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_purpose_survives_the_reply_line() {
+        let vault = |line| {
+            Some(Kind::Talk {
+                cat: CAT,
+                line,
+                purpose: TalkPurpose::VaultUnlock,
+            })
+        };
+        let mut m = Machine::new();
+        m.apply(VAULT, p(0.0));
+        assert_eq!(m.mode().kind(), vault(false));
+        assert_eq!(m.mode().purpose(), Some(TalkPurpose::VaultUnlock));
+        m.apply(A::Reply, p(0.0));
+        assert_eq!(m.mode().kind(), vault(true));
+        m.apply(A::Back, p(0.0));
+        assert_eq!(m.mode().kind(), vault(false), "esc closes the line only");
+        m.apply(A::Reply, p(0.0));
+        let fx = m.apply(A::Send, p(0.0));
+        assert_eq!(fx, [E::CloseLine, E::SendLine]);
+        assert_eq!(m.mode().kind(), vault(false));
+        m.apply(A::Back, p(0.0));
+        assert_eq!(m.mode().purpose(), None);
+    }
+
+    #[test]
+    fn summon_and_picked_cats_talk_about_the_session() {
+        let (m, _) = run(&[], A::Summon(URGENT));
+        assert_eq!(m.mode().purpose(), Some(TalkPurpose::Session));
+        let (m, _) = run(IN_FOCUS, A::Summon(URGENT));
+        assert_eq!(m.mode().purpose(), Some(TalkPurpose::Session));
+        let (m, _) = run(IN_HINT, A::Pick(Pick::Cat(CAT)));
+        assert_eq!(m.mode().purpose(), Some(TalkPurpose::Session));
+        let (m, _) = run(&[], TALK);
+        assert_eq!(m.mode().purpose(), Some(TalkPurpose::Session));
+    }
+
+    #[test]
+    fn picking_an_object_ends_salto_exactly() {
+        let stand = p(5.0);
+        let (m, fx) = run(IN_HINT, A::Pick(Pick::Object { id: OBJ, stand }));
+        assert_eq!(m.mode(), &Mode::base(Base::Nav));
+        assert_eq!(fx, [E::HideHints, E::GoToStand(stand)]);
+        let (m, fx) = run(
+            &[A::Walk, A::Hint { focus: false }],
+            A::Pick(Pick::Object { id: OBJ, stand }),
+        );
+        assert_eq!(m.mode(), &Mode::base(Base::Walk));
+        assert_eq!(
+            fx,
+            [
+                E::HideHints,
+                E::Object(OBJ, ObjectAction::Interact),
+                E::WalkStart
+            ]
+        );
     }
 
     #[test]

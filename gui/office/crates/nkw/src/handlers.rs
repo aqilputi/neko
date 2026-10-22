@@ -125,6 +125,14 @@ impl XdgShellHandler for Nkw {
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let now = self.now();
         let (id, size) = self.world.add_screen("", "", now);
+        let pid = surface
+            .wl_surface()
+            .client()
+            .and_then(|c| c.get_credentials(&self.dh).ok())
+            .and_then(|c| u32::try_from(c.pid).ok());
+        if let Some(pid) = pid {
+            self.pids.insert(id, pid);
+        }
         self.configure_new(&surface, size);
         self.windows.push((id, Window::new_wayland_window(surface)));
         self.wake();
@@ -138,6 +146,7 @@ impl XdgShellHandler for Nkw {
         let outs = self.world.remove_screen(id, now);
         self.apply(outs);
         self.windows.retain(|(i, _)| *i != id);
+        self.pids.remove(&id);
         self.wake();
     }
 

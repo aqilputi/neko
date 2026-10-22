@@ -1,28 +1,7 @@
-//! Typed ids for the objects of the world (same shape as `nkw_core::ids`;
-//! addendum §2.4 moves them there later).
+//! Typed ids for the objects of the world: they live in `nkw_core::ids`
+//! (addendum §2.4) and are re-exported here.
 
-use serde::{Deserialize, Serialize};
-
-macro_rules! id {
-    ($(#[$doc:meta])* $name:ident) => {
-        $(#[$doc])*
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        pub struct $name(pub u32);
-    };
-}
-
-id!(
-    /// A piece of furniture that carries a widget (turntable, clock…).
-    ObjectId
-);
-id!(
-    /// A door between two rooms.
-    DoorId
-);
-id!(
-    /// A sound source: an app stream or one of our own sounds.
-    SourceId
-);
+pub use nkw_core::{DoorId, ObjectId, SourceId};
 
 #[cfg(test)]
 mod tests {

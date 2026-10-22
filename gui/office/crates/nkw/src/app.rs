@@ -38,9 +38,10 @@ use smithay::wayland::socket::ListeningSocketSource;
 use nkw_core::Time;
 
 use crate::cli::{Cli, exit};
+use crate::ext::Ext;
 use crate::frame::{Gfx, Host};
 use crate::keys::KeyTable;
-use crate::script::{Cmd, Line, mode_name};
+use crate::script::{Cmd, Line, json_check, mode_name};
 use crate::state::{Nkw, Sched, client_data};
 use crate::stats::Stats;
 use crate::world::{Opts, World};
@@ -55,6 +56,8 @@ pub struct Script {
     pub keys: Option<KeyTable>,
     /// waiting for: a frame (after `shot`), a new window (after `spawn`)
     pub wait: Wait,
+    /// `wait json`: (line, pointer, value, deadline)
+    pub json_wait: Option<(usize, String, serde_json::Value, Time)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -71,6 +74,8 @@ pub enum Wait {
         had: usize,
         until: Time,
     },
+    /// `wait json` (its data in `Script::json_wait`)
+    Json,
 }
 
 impl Nkw {
@@ -136,6 +141,40 @@ impl Nkw {
         if s.wait == Wait::Shot && self.shots.is_empty() {
             s.wait = Wait::None;
             self.script_step();
+        } else if s.wait == Wait::Json {
+            self.poll_json_wait(false);
+        }
+    }
+
+    /// Re-check a `wait json` (after each frame, and on its own 16 ms timer
+    /// when `rearm`: an idle world draws no frames).
+    pub fn poll_json_wait(&mut self, rearm: bool) {
+        let Some(s) = self.script.as_ref() else {
+            return;
+        };
+        let Some((no, pointer, value, until)) =
+            s.json_wait.clone().filter(|_| s.wait == Wait::Json)
+        else {
+            return;
+        };
+        match json_check(&self.dump(), &pointer, &value) {
+            Ok(()) => {
+                let s = self.script.as_mut().unwrap();
+                s.wait = Wait::None;
+                s.json_wait = None;
+                self.script_step();
+            }
+            Err(msg) if self.now() >= until => self.script_fail(no, &format!("wait json: {msg}")),
+            Err(_) if rearm => {
+                let _ = self.lh.insert_source(
+                    Timer::from_duration(Duration::from_millis(16)),
+                    |_, _, st: &mut Nkw| {
+                        st.poll_json_wait(true);
+                        TimeoutAction::Drop
+                    },
+                );
+            }
+            Err(_) => {}
         }
     }
 
@@ -240,8 +279,35 @@ impl Nkw {
                     self.shot_when_settled(p);
                     return;
                 }
+                Cmd::ExpectJson { pointer, value } => {
+                    if let Err(msg) = json_check(&self.dump(), &pointer, &value) {
+                        return self.script_fail(no, &msg);
+                    }
+                }
+                Cmd::WaitJson { pointer, value, ms } => {
+                    let until = self.now() + ms as f64 / 1000.0;
+                    let s = self.script.as_mut().unwrap();
+                    s.wait = Wait::Json;
+                    s.json_wait = Some((no, pointer, value, until));
+                    self.poll_json_wait(true);
+                    return;
+                }
+                Cmd::Inject { plugin, json } => {
+                    let now = self.now();
+                    let reqs = {
+                        let ctx = crate::hook_ctx!(self, now);
+                        crate::ext::inject(&mut self.ext.plugins(), &plugin, &json, &ctx)
+                    };
+                    match reqs {
+                        Ok(r) => {
+                            self.apply_reqs(r);
+                            self.wake();
+                        }
+                        Err(e) => return self.script_fail(no, &e),
+                    }
+                }
                 Cmd::Dump(p) => {
-                    let v = self.world.dump(&self.world.wishes());
+                    let v = self.dump();
                     let r = std::fs::write(&p, serde_json::to_vec_pretty(&v).unwrap());
                     if let Err(e) = r {
                         eprintln!("nkw: dump {}: {e}", p.display());
@@ -294,6 +360,7 @@ impl Nkw {
                 pc: 0,
                 keys: None,
                 wait: Wait::Settle,
+                json_wait: None,
             });
             self.shot_when_settled(p);
             return;
@@ -599,8 +666,21 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
         pointer: (0.0, 0.0).into(),
         script: None,
         last_sym: 0,
+        ext: Ext::new(&cli),
+        pids: Default::default(),
+        visible: Vec::new(),
         cli: cli.clone(),
     };
+    st.visible = st.world.visible_rooms(&[]);
+
+    // the plugins' wakeups: their threads ping the loop
+    let (ping, ping_source) =
+        calloop::ping::make_ping().map_err(|e| (exit::SOCKET, format!("ping: {e}")))?;
+    lh.insert_source(ping_source, |_, _, st: &mut Nkw| st.ext_wake())
+        .map_err(|e| (exit::SOCKET, format!("ping source: {e}")))?;
+    for p in st.ext.plugins() {
+        p.start(&cli, &lh, ping.clone());
+    }
 
     lh.insert_source(listening, |stream, _, st: &mut Nkw| {
         if let Err(e) = st.dh.insert_client(stream, client_data()) {
@@ -691,6 +771,7 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
             pc: 0,
             keys: KeyTable::from_string(&keymap),
             wait: Wait::None,
+            json_wait: None,
         });
     }
 
@@ -720,6 +801,13 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
         .map_err(|e| (exit::SOCKET, format!("event loop: {e}")))?;
 
     st.stats.print_summary();
+    for p in st.ext.plugins() {
+        let t = Instant::now();
+        p.shutdown();
+        if t.elapsed() > Duration::from_secs(1) {
+            eprintln!("nkw: {} took {:?} to shut down", p.name(), t.elapsed());
+        }
+    }
     for c in &mut st.children {
         let _ = c.kill();
         let _ = c.wait();

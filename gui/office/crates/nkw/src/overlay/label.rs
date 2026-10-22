@@ -1,6 +1,7 @@
-//! The HUD of phase 0: the mode label (§3.1), rasterised on the CPU into
-//! a `MemoryRenderBuffer` only when it changes. A 5×7 pixel font for the
-//! letters the labels use keeps the binary free of font files for now.
+//! The mode label of phase 0 (§3.1), rasterised on the CPU: a 5×7 pixel
+//! font for the letters the labels use (no font files). The overlay stub
+//! wraps it in a `MemoryRenderBuffer` only when the label changes; P3's
+//! overlay replaces it with nk-cats text.
 
 /// Rows of a 5×7 glyph, top first; bit 4 is the leftmost pixel.
 fn glyph(c: char) -> Option<[u8; 7]> {

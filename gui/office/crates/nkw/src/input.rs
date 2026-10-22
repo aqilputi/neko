@@ -1,5 +1,7 @@
 //! Input: host events and script keys take the same path into the seat's
-//! keyboard, whose filter hands the world its keys (§3.6).
+//! keyboard, whose filter asks the router what each key is (§3.6, S7).
+
+use std::collections::BTreeMap;
 
 use smithay::backend::input::InputTime;
 use smithay::backend::input::{
@@ -10,8 +12,19 @@ use smithay::input::keyboard::{FilterResult, Keycode};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 
+use nkw_core::{CatId, Target};
+
+use crate::router::{KeyEv, KeyMods, Route};
 use crate::state::Nkw;
-use crate::world::{Cmd, KeyMods, Verdict, filter};
+use crate::world::Cmd;
+
+/// What the keyboard filter took from the client.
+enum Taken {
+    Command(String, BTreeMap<String, String>),
+    Text(KeyEv),
+    /// FOCO on a cat's terminal: the key is the pane's
+    Pane(CatId, KeyEv),
+}
 
 impl Nkw {
     pub fn process_input<I: InputBackend>(&mut self, event: InputEvent<I>) {
@@ -97,41 +110,75 @@ impl Nkw {
     }
 
     /// A key, from the host or a script: through the seat's keyboard and the
-    /// world's filter; what is forwarded reaches the focused client in this
-    /// same loop iteration.
+    /// router; what is forwarded reaches the focused client in this same
+    /// loop iteration.
     pub fn key(&mut self, code: Keycode, state: KeyState, time: InputTime) {
         let kb = self.seat.get_keyboard().unwrap();
         let serial = SERIAL_COUNTER.next_serial();
         let pressed = state == KeyState::Pressed;
-        let cmd = kb.input(self, code, state, serial, time, |st, mods, h| {
-            st.last_sym = h.modified_sym().raw();
-            if !pressed {
-                // a release follows its press
-                return if st.intercepted.remove(&code) {
-                    FilterResult::Intercept(None)
-                } else {
-                    FilterResult::Forward
-                };
-            }
+        let taken = kb.input(self, code, state, serial, time, |st, mods, h| {
+            let sym = h.modified_sym().raw();
+            st.last_sym = sym;
             let m = KeyMods {
                 ctrl: mods.ctrl,
                 alt: mods.alt,
                 shift: mods.shift,
+                logo: mods.logo,
             };
-            match filter(st.world.mode(), m, h.modified_sym().raw()) {
-                Verdict::Forward => FilterResult::Forward,
-                Verdict::Intercept(c) => {
-                    st.intercepted.insert(code);
-                    FilterResult::Intercept(c)
-                }
+            let utf8 = char::from_u32(xkb_utf32(sym))
+                .filter(|c| !c.is_control())
+                .map(String::from);
+            let ev = KeyEv {
+                code: code.raw(),
+                sym,
+                name: crate::keys::key_name(sym, m),
+                utf8,
+                mods: m,
+                pressed,
+            };
+            let pane = match st.world.mode().focus() {
+                Some(Target::CatTerm(c)) => Some(c),
+                _ => None,
+            };
+            if !pressed {
+                // a release follows its press
+                return match (st.intercepted.remove(&code), pane) {
+                    (true, Some(c)) => FilterResult::Intercept(Some(Taken::Pane(c, ev))),
+                    (true, None) => FilterResult::Intercept(None),
+                    (false, _) => FilterResult::Forward,
+                };
             }
+            let sub = st.ext.overlay.submode();
+            let taken = match st.ext.router.route(st.world.mode(), sub, &ev) {
+                Route::Forward => match pane {
+                    Some(c) => Some(Taken::Pane(c, ev)),
+                    None => return FilterResult::Forward,
+                },
+                Route::Swallow | Route::Pending => None,
+                Route::Command { name, args } => Some(Taken::Command(name, args)),
+                Route::Text(ev) => Some(Taken::Text(ev)),
+            };
+            st.intercepted.insert(code);
+            FilterResult::Intercept(taken)
         });
         // keys held across a mode change count only once released (§3.2)
         let counts = self.world.machine.key(code.raw(), pressed);
-        if let Some(Some(c)) = cmd
+        if let Some(Some(t)) = taken
             && counts
         {
-            self.run_cmd(c);
+            match t {
+                Taken::Command(name, args) => self.dispatch(&name, &args),
+                Taken::Text(ev) => {
+                    let now = self.now();
+                    let reqs = {
+                        let ctx = crate::hook_ctx!(self, now);
+                        self.ext.overlay.key(&ev, &ctx)
+                    };
+                    self.apply_reqs(reqs);
+                    self.wake();
+                }
+                Taken::Pane(c, ev) => self.ext.cats.key_to_pane(c, &ev),
+            }
         } else if counts
             && self.world.mode().walking()
             && self.world.walk_key(self.last_sym, pressed)
@@ -147,4 +194,9 @@ impl Nkw {
         self.apply(outs);
         self.wake();
     }
+}
+
+fn xkb_utf32(sym: u32) -> u32 {
+    use smithay::input::keyboard::xkb;
+    xkb::keysym_to_utf32(xkb::Keysym::new(sym))
 }

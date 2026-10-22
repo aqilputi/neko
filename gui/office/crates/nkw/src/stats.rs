@@ -48,6 +48,10 @@ pub struct Summary {
     pub dropped: u64,
     pub first_frame_ms: Option<f64>,
     pub rss_kb: u64,
+    /// the cost of all plugin `tick`s per frame, p95
+    pub ext_tick_us_p95: u64,
+    /// the most simultaneous `Want::Rate` wishes in a frame (objects: ≤ 4)
+    pub rate_wishes_max: u64,
 }
 
 /// The nearest-rank percentile of `v` (sorted in place); 0 when empty.
@@ -82,6 +86,8 @@ pub struct Stats {
     pub dropped: u64,
     pub first_frame_ms: Option<f64>,
     last_animated: Option<f64>,
+    ext_tick_us: Vec<u64>,
+    pub rate_wishes_max: u64,
 }
 
 impl Stats {
@@ -119,6 +125,13 @@ impl Stats {
         }
     }
 
+    /// The plugins' ticks of one frame took `us`; `rate_wishes`: how many
+    /// `Want::Rate` wishes the frame had.
+    pub fn ext(&mut self, us: u64, rate_wishes: usize) {
+        self.ext_tick_us.push(us);
+        self.rate_wishes_max = self.rate_wishes_max.max(rate_wishes as u64);
+    }
+
     pub fn inject(&self, key: &str) {
         if self.enabled {
             let v = serde_json::json!({"inject": {"key": key, "t_us": mono_us()}});
@@ -137,6 +150,8 @@ impl Stats {
             dropped: self.dropped,
             first_frame_ms: self.first_frame_ms,
             rss_kb: rss_kb().unwrap_or(0),
+            ext_tick_us_p95: percentile(&mut self.ext_tick_us.clone(), 95.0),
+            rate_wishes_max: self.rate_wishes_max,
         }
     }
 
@@ -238,7 +253,11 @@ mod tests {
             };
             s.frame(&f, i as f64 * p * 2.0, true, p);
         }
+        for (us, rates) in [(5, 0), (9, 3), (7, 1)] {
+            s.ext(us, rates);
+        }
         let sum = s.summary();
+        assert_eq!((sum.ext_tick_us_p95, sum.rate_wishes_max), (9, 3));
         assert_eq!((sum.frames, sum.world_passes, sum.dropped), (3, 2, 2));
         assert_eq!((sum.p50_us, sum.p95_us), (200, 300));
         assert!(sum.summary);
@@ -253,6 +272,8 @@ mod tests {
             "dropped",
             "first_frame_ms",
             "rss_kb",
+            "ext_tick_us_p95",
+            "rate_wishes_max",
         ] {
             assert!(v.get(k).is_some(), "{k}");
         }

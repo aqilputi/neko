@@ -7,7 +7,55 @@ use std::collections::HashMap;
 
 use smithay::input::keyboard::xkb;
 
+use crate::router::KeyMods;
 use crate::script::{Chord, Mods};
+
+/// The core's name of a key (`"ctrl+]"`, `"shift+space"`, `"enter"`,
+/// `"J"`, `"f5"`, `"XF86AudioPlay"`): modifiers `ctrl+ alt+ super+ shift+`
+/// in that order, `shift+` only on keys that are not characters (a shifted
+/// letter is its own character). `sym`: the modified keysym.
+pub fn key_name(sym: u32, m: KeyMods) -> String {
+    let named = match sym {
+        0xff0d | 0xff8d => Some("enter"),
+        0xff1b => Some("esc"),
+        0xff09 | 0xfe20 => Some("tab"),
+        0x20 => Some("space"),
+        0xff08 => Some("backspace"),
+        0xffff => Some("delete"),
+        0xff63 => Some("insert"),
+        0xff52 => Some("up"),
+        0xff54 => Some("down"),
+        0xff51 => Some("left"),
+        0xff53 => Some("right"),
+        0xff50 => Some("home"),
+        0xff57 => Some("end"),
+        0xff55 => Some("pgup"),
+        0xff56 => Some("pgdown"),
+        _ => None,
+    };
+    let ch = match named {
+        None => {
+            char::from_u32(xkb::keysym_to_utf32(xkb::Keysym::new(sym))).filter(|c| !c.is_control())
+        }
+        Some(_) => None,
+    };
+    let base = match (named, ch) {
+        (Some(n), _) => n.to_string(),
+        (None, Some(c)) => c.to_string(),
+        (None, None) if (0xffbe..=0xffd5).contains(&sym) => format!("f{}", sym - 0xffbe + 1),
+        (None, None) => xkb::keysym_get_name(xkb::Keysym::new(sym)),
+    };
+    let mut s = String::new();
+    for (on, p) in [(m.ctrl, "ctrl+"), (m.alt, "alt+"), (m.logo, "super+")] {
+        if on {
+            s.push_str(p);
+        }
+    }
+    if m.shift && ch.is_none() {
+        s.push_str("shift+");
+    }
+    s + &base
+}
 
 /// One key event: an XKB keycode (evdev + 8) and whether it goes down.
 pub type Ev = (u32, bool);
@@ -315,6 +363,38 @@ mod tests {
         // plain us has no way to type é
         assert!(table("us", "").text("é").is_err());
         assert_eq!(table("us", "").text("a\n").unwrap().len(), 4);
+    }
+
+    #[test]
+    fn key_names_follow_the_core() {
+        let none = KeyMods::default();
+        let ctrl = KeyMods { ctrl: true, ..none };
+        let shift = KeyMods {
+            shift: true,
+            ..none
+        };
+        let world = KeyMods {
+            ctrl: true,
+            alt: true,
+            ..none
+        };
+        let cases = [
+            (0x5d, ctrl, "ctrl+]"),
+            (0x20, shift, "shift+space"),
+            (0xff0d, none, "enter"),
+            (0xff1b, none, "esc"),
+            (0x4a, shift, "J"),
+            (0x68, world, "ctrl+alt+h"),
+            (0x3a, shift, ":"),
+            (0xffc2, none, "f5"),
+            (0xff52, shift, "shift+up"),
+            (0x1008ff14, none, "XF86AudioPlay"),
+            (0x77, KeyMods { logo: true, ..none }, "super+w"),
+            (0xe7, none, "ç"),
+        ];
+        for (sym, m, want) in cases {
+            assert_eq!(key_name(sym, m), want, "{sym:#x} {m:?}");
+        }
     }
 
     #[test]

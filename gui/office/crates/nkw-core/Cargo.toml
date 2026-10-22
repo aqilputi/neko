@@ -7,10 +7,10 @@ license.workspace = true
 publish.workspace = true
 
 # Dependency rule (docs/plano-mundo.md §2.11), checked by tests/deps.rs:
-# only nk-cats, glam, serde, serde_json, toml, nucleo-matcher.
+# only glam, serde, serde_json, toml, nucleo-matcher.
 [dependencies]
-glam = "0.33"
+glam = { version = "0.33", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
-
-[dev-dependencies]
 serde_json = "1"
+toml = "1"
+nucleo-matcher = "0.3"

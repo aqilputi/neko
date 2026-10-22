@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use glam::Vec4;
-use nkw_core::ScreenId;
+use nkw_core::{CatId, ScreenId, Target};
 
 use crate::world::{FOV_Y, World};
 
@@ -91,31 +91,31 @@ pub fn lod(w: &World, id: ScreenId) -> Lod {
 /// A layer of the composed frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layer {
-    /// the mode label
+    /// the overlay's elements (`Overlay::elements`: the mode label …)
     Hud,
     /// the sky-coloured fade of a cut
     Fade,
     /// the FOCO window and its popups, 1:1
     Focus(ScreenId),
+    /// FOCO on a cat's terminal: `Cats::focus_buffer`, 1:1
+    FocusCat(CatId),
     /// the frozen world around FOCO, darkened (§3.6)
     Dim,
     /// the world texture
     World,
 }
 
-/// The layers, topmost first (the order `render_output` wants).
+/// The layers, topmost first (the order `render_output` wants). The
+/// overlay is always asked; it hides the mode label in FOCO itself.
 pub fn layers(w: &World, fading: bool) -> Vec<Layer> {
-    let mut l = Vec::new();
-    let focus = w.focus_2d().map(|(id, _)| id);
-    if focus.is_none() {
-        l.push(Layer::Hud);
-    }
+    let mut l = vec![Layer::Hud];
     if fading {
         l.push(Layer::Fade);
     }
-    if let Some(id) = focus {
-        l.push(Layer::Focus(id));
-        l.push(Layer::Dim);
+    match w.focus_2d_target().map(|(t, _)| t) {
+        Some(Target::Screen(id)) => l.extend([Layer::Focus(id), Layer::Dim]),
+        Some(Target::CatTerm(c)) => l.extend([Layer::FocusCat(c), Layer::Dim]),
+        None => {}
     }
     l.push(Layer::World);
     l
@@ -225,7 +225,29 @@ pub(crate) mod tests {
         w.tick(1e9);
         assert_eq!(
             layers(&w, false),
-            [Layer::Focus(ScreenId(1)), Layer::Dim, Layer::World]
+            [
+                Layer::Hud,
+                Layer::Focus(ScreenId(1)),
+                Layer::Dim,
+                Layer::World
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cats_terminal_is_a_focus_layer_too() {
+        let mut w = world(&[&[1]]);
+        w.rooms[0].desks[0].cat = Some(CatId(5));
+        w.action(nkw_core::Action::Focus(Target::CatTerm(CatId(5))), 0.0);
+        w.tick(1e9);
+        assert_eq!(
+            layers(&w, false),
+            [
+                Layer::Hud,
+                Layer::FocusCat(CatId(5)),
+                Layer::Dim,
+                Layer::World
+            ]
         );
     }
 }

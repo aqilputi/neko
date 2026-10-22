@@ -1,0 +1,14 @@
+# NAV composition (P1, wave 2a): the demo's acme room. The station is the cat's desk — the
+# placeholder cat on its chair, back to you, its monitor (off until P4) on the desk — and the
+# testclient window on the desk to its right.
+key J
+expect json /station/desk/room 1
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait
+wait 800
+key h
+wait 600
+expect mode NAV
+expect json /station/desk/desk 0
+shot ${OUT}/shot-infra-nav.png
+dump ${OUT}/dump-infra-nav.json
+quit

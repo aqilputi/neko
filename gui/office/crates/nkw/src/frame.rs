@@ -8,9 +8,7 @@ use std::time::Instant;
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::memory::{
-    MemoryRenderBuffer, MemoryRenderBufferRenderElement,
-};
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::solid::{SolidColorBuffer, SolidColorRenderElement};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::texture::{TextureRenderBuffer, TextureRenderElement};
@@ -22,10 +20,11 @@ use smithay::backend::renderer::{Bind, ExportMem, Renderer, Texture, TextureMapp
 use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::utils::{Physical, Point, Rectangle, Scale, Size, Transform};
 
-use nkw_core::{ScreenId, Time, Want, schedule};
+use nkw_core::{Kind as ModeKind, ScreenId, Time, Want, schedule};
 use nkw_gl::draw::ClientTex;
 use nkw_gl::{RenderOpts, Target, WorldRenderer};
 
+use crate::ext::{self, HudInput, Plugin};
 use crate::render::{self, Layer};
 use crate::state::Nkw;
 use crate::stats;
@@ -56,7 +55,6 @@ pub struct Gfx {
     pub world: Option<WorldRenderer>,
     /// the world texture as Smithay sees it: (GL id, size, buffer)
     world_buf: Option<(u32, [u32; 2], TextureRenderBuffer<GlesTexture>)>,
-    hud: Option<(&'static str, MemoryRenderBuffer)>,
     fade: SolidColorBuffer,
     dim: SolidColorBuffer,
     dim_size: (i32, i32),
@@ -78,7 +76,6 @@ impl Gfx {
             damage,
             world: None,
             world_buf: None,
-            hud: None,
             fade: SolidColorBuffer::default(),
             dim: SolidColorBuffer::default(),
             dim_size: (0, 0),
@@ -171,8 +168,16 @@ impl Nkw {
         if self.sched.epoch.is_none() {
             self.sched.epoch = Some(now);
         }
+        let t_ext = Instant::now();
+        self.ext_step(now);
+        let ext_us = t_ext.elapsed().as_micros() as u64;
         self.world.tick(now);
-        let wishes = self.world.wishes();
+        let wishes = self.all_wishes();
+        let rates = wishes
+            .iter()
+            .filter(|w| matches!(w.want, Want::Rate(_)))
+            .count();
+        self.stats.ext(ext_us, rates);
         let grid = self.grid(now);
         let mut plan = schedule::plan(&grid, now, &wishes);
         if !was_requested || self.sched.full || !self.shots.is_empty() {
@@ -210,7 +215,7 @@ impl Nkw {
 
     /// Ask for a frame when the wishes want one, else arm the next wakeup.
     pub fn wake(&mut self) {
-        let w = self.world.wishes();
+        let w = self.all_wishes();
         if w.is_empty() && self.shots.is_empty() {
             return;
         }
@@ -227,7 +232,13 @@ impl Nkw {
         let mut cost = Cost::default();
         let out_px = [self.world.out.width_px, self.world.out.height_px];
         let scale = self.world.out.scale as f64;
-        let sky = nkw_gl::draw::sky_for_band(crate::scene::BAND);
+        let sky = nkw_gl::draw::sky_for_band(self.world.band);
+        // the culling set: the current room and what the plugins open
+        let opens = {
+            let ctx = crate::hook_ctx!(self, now);
+            ext::opens_rooms(&self.ext.plugins_ref(), self.world.current_room_id(), &ctx)
+        };
+        self.visible = self.world.visible_rooms(&opens);
         // the age of the window's back buffer, while its surface is still
         // current (the world pass makes the context current without it)
         let age = match &mut self.gfx.host {
@@ -253,6 +264,14 @@ impl Nkw {
         // the world pass, outside any Smithay frame
         if world_pass && self.gfx.world.is_some() {
             let t = Instant::now();
+            {
+                let ctx = crate::hook_ctx!(self, now);
+                let (objects, cats) = (&mut self.ext.objects, &mut self.ext.cats);
+                let _ = self.gfx.renderer().with_context(|gl| unsafe {
+                    objects.upload(gl, &ctx);
+                    cats.upload(gl, &ctx);
+                });
+            }
             let renderer = self.gfx.renderer();
             for (_, w) in &self.windows {
                 if let Some(tl) = w.toplevel() {
@@ -277,7 +296,14 @@ impl Nkw {
                     Some((*id, t))
                 })
                 .collect();
-            let list = crate::scene::draw_list(&self.world, &|id| texs.get(&id).copied());
+            let mut list =
+                crate::scene::draw_list(&self.world, &|id| texs.get(&id).copied(), &self.visible);
+            {
+                let ctx = crate::hook_ctx!(self, now);
+                self.ext.wm.draw(&ctx, &mut list);
+                self.ext.objects.draw(&ctx, &mut list);
+                self.ext.cats.draw(&ctx, &mut list);
+            }
             cost.cull_us = t.elapsed().as_micros() as u64;
             let t = Instant::now();
             let world = self.gfx.world.as_mut().unwrap();
@@ -310,24 +336,38 @@ impl Nkw {
         for layer in render::layers(&self.world, fading) {
             match layer {
                 Layer::Hud => {
-                    let label = self.world.mode().label();
-                    if self.gfx.hud.as_ref().map(|h| h.0) != Some(label) {
-                        let (w, h, px) = crate::hud::label(label, 2);
-                        let buf = MemoryRenderBuffer::from_slice(
-                            &px,
-                            Fourcc::Abgr8888,
-                            (w as i32, h as i32),
-                            1,
-                            Transform::Normal,
-                            None,
-                        );
-                        self.gfx.hud = Some((label, buf));
-                    }
-                    let buf = self.gfx.hud.as_ref().unwrap().1.clone();
+                    let hud = self.hud_input(now);
+                    let overlay = {
+                        let ctx = crate::hook_ctx!(self, now);
+                        self.ext.overlay.elements(&ctx, &hud)
+                    };
                     let r = self.gfx.renderer();
+                    for o in overlay {
+                        let at = (o.pos.0 as f64 * scale, o.pos.1 as f64 * scale);
+                        if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
+                            r,
+                            at,
+                            &o.buf,
+                            None,
+                            None,
+                            None,
+                            Kind::Unspecified,
+                        ) {
+                            elems.push(Elem::Hud(e));
+                        }
+                    }
+                }
+                Layer::FocusCat(cat) => {
+                    let got = {
+                        let ctx = crate::hook_ctx!(self, now);
+                        self.ext.cats.focus_buffer(cat, &ctx)
+                    };
+                    let Some((buf, pos)) = got else { continue };
+                    let r = self.gfx.renderer();
+                    let at = (pos.0 as f64 * scale, pos.1 as f64 * scale);
                     if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
                         r,
-                        (16.0 * scale, 16.0 * scale),
+                        at,
                         &buf,
                         None,
                         None,
@@ -477,6 +517,29 @@ impl Nkw {
             }
         }
         cost
+    }
+
+    /// What the overlay composes this frame, gathered from the plugins.
+    fn hud_input(&self, now: Time) -> HudInput {
+        let ctx = crate::hook_ctx!(self, now);
+        let ps = self.ext.plugins_ref();
+        let salto = matches!(self.world.mode().kind(), Some(ModeKind::Hint { .. }));
+        let s = self.world.out.scale;
+        HudInput {
+            mode_label: self.world.mode().label(),
+            badges: ps.iter().flat_map(|p| p.badges(&ctx)).collect(),
+            dialog: self.ext.cats.dialog().or(self.ext.objects.dialog()),
+            focus_rect: self.world.focus_2d_target().map(|(_, o)| {
+                let (p, z) = (o.origin / s, o.size / s);
+                [p.x as i32, p.y as i32, z.x as i32, z.y as i32]
+            }),
+            tags: ps.iter().flat_map(|p| p.tags(&ctx)).collect(),
+            pickables: if salto {
+                ps.iter().flat_map(|p| p.pickables(&ctx)).collect()
+            } else {
+                Vec::new()
+            },
+        }
     }
 
     /// Wrap the world renderer's texture for Smithay; on a new GL id (a

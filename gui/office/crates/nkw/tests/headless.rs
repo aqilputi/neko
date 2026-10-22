@@ -226,6 +226,8 @@ fn idle_demo_takes_no_world_passes() {
     let s = r.summary();
     assert!(s["world_passes"].as_u64().unwrap() <= 3, "{s}");
     assert!(s["frames"].as_u64().unwrap() <= 3, "{s}");
+    assert!(s["ext_tick_us_p95"].is_u64(), "{s}");
+    assert_eq!(s["rate_wishes_max"], 0, "{s}");
 }
 
 #[test]
@@ -266,6 +268,61 @@ fn expect_mismatch_exits_3() {
         "{}",
         r.stderr()
     );
+}
+
+#[test]
+fn dump_has_the_ext_section() {
+    let r = run(
+        "dump {dir}/world.json
+expect json /version 1
+expect json /mode \"NAV\"
+expect json /ext/router/world_mod \"ctrl+alt\"
+inject cats {\"postman\": {\"to\": \"alpha\"}}
+wait json /mode \"NAV\" 500
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let d = r.json("world.json");
+    assert_eq!(d["version"], 1);
+    for k in ["wm", "overlay", "cats", "objects", "router"] {
+        assert!(d["ext"].get(k).is_some(), "ext.{k} missing: {}", d["ext"]);
+    }
+}
+
+#[test]
+fn expect_json_mismatch_exits_3() {
+    let r = run("expect json /mode \"FOCO\"\n", &[], &[]);
+    assert_eq!(r.code(), 3);
+    assert!(
+        r.stderr()
+            .contains("script line 1: expected json /mode = \"FOCO\", actual \"NAV\""),
+        "{}",
+        r.stderr()
+    );
+}
+
+#[test]
+fn wait_json_times_out_with_exit_3() {
+    let r = run("key l\nwait json /mode \"FOCO\" 300\nquit\n", &[], &[]);
+    assert_eq!(r.code(), 3);
+    assert!(
+        r.stderr().contains("wait json: expected json /mode"),
+        "{}",
+        r.stderr()
+    );
+}
+
+#[test]
+fn wait_json_sees_the_world_move() {
+    let r = run(
+        "key J\nwait json /station/desk/room 1 2000\nexpect json /station/desk/desk 0\nquit\n",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
 }
 
 #[test]

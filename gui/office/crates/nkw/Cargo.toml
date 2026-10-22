@@ -17,6 +17,17 @@ png = "0.17"
 libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+nk-client = { path = "../nk-client" }
+nk-cats = { path = "../nk-cats" }
+nkw-objects = { path = "../nkw-objects" }
+nkw-sys = { path = "../nkw-sys" }
+wayland-client = "0.31"
+smithay-client-toolkit = "0.21"
+# wave 2b: each package appends its own deps, one per line, under its marker only
+# P2
+# P3
+# P4
+# P5
 
 [dependencies.smithay]
 git = "https://github.com/Smithay/smithay.git"

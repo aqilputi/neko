@@ -132,8 +132,10 @@ pub fn rooms_along_hall(lens: &[f32]) -> Vec<RoomSlot> {
         .collect()
 }
 
-/// A camera stop of NAV (§3.4).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A camera stop of NAV (§3.4). Serialised in snake_case (`{"desk": {…}}`,
+/// `{"free": {"pos": […], …}}`, `"board"`), the shape of `world.dump()`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Station {
     /// at a desk, facing its stack; `slot` is the selected screen
     Desk {
@@ -170,7 +172,7 @@ impl Station {
 
 /// A station of the current room with its camera pose and, for desks, how
 /// many screens its stack has. A room's spots are in `h`/`l` order.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Spot {
     pub station: Station,
     pub pose: Pose,
@@ -241,7 +243,7 @@ fn top_of(s: Station) -> Station {
 }
 
 /// A desk of a room's strip: a column of screens, maybe a cat's.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Desk {
     pub width: Width,
     pub screens: Vec<ScreenId>,
@@ -507,6 +509,48 @@ mod tests {
             "the desk stays, the cat goes"
         );
         assert_eq!(out[0].cat, None);
+    }
+
+    #[test]
+    fn serde_round_trips() {
+        let stations = [
+            desk(1, 2),
+            Station::Desk {
+                room: RoomId(1),
+                desk: 2,
+                slot: 0,
+            },
+            Station::Air(ScreenId(9)),
+            Station::Shelf {
+                dir: DirId(3),
+                row: 1,
+            },
+            Station::Door(RoomId(2)),
+            Station::Board,
+            Station::Free(Pose::new(Vec3::new(1.0, 1.5, -2.25), 0.5, -0.1)),
+        ];
+        for st in stations {
+            let j = serde_json::to_string(&st).unwrap();
+            assert_eq!(serde_json::from_str::<Station>(&j).unwrap(), st, "{j}");
+        }
+        assert_eq!(
+            serde_json::to_value(desk(1, 2)).unwrap(),
+            serde_json::json!({"desk": {"room": 1, "desk": 1, "slot": 2}})
+        );
+        assert_eq!(
+            serde_json::to_value(Station::Free(Pose::new(Vec3::X, 0.25, 0.5))).unwrap(),
+            serde_json::json!({"free": {"pos": [1.0, 0.0, 0.0], "yaw": 0.25, "pitch": 0.5}})
+        );
+        assert_eq!(serde_json::to_value(Station::Board).unwrap(), "board");
+        let mut d = user_desk(4);
+        d.cat = Some(CatId(2));
+        d.width = Width::TwoThirds;
+        let j = serde_json::to_string(&d).unwrap();
+        assert_eq!(serde_json::from_str::<Desk>(&j).unwrap(), d);
+        assert!(j.contains("\"two_thirds\""), "{j}");
+        let spot = spots()[1];
+        let j = serde_json::to_string(&spot).unwrap();
+        assert_eq!(serde_json::from_str::<Spot>(&j).unwrap(), spot);
     }
 
     #[test]

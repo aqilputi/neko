@@ -1,8 +1,14 @@
 //! `--script`: synthetic input and checks, one command per line, `#`
-//! comments (contract S2). Keys are xkb keysym names (or a single
+//! comments (contract S2, S12). Keys are xkb keysym names (or a single
 //! character), with modifiers `ctrl+ shift+ alt+ world+`.
+//!
+//! S12 adds `expect json <pointer> <json>` and `wait json <pointer> <json>
+//! <ms>` (RFC 6901 pointers into `world.dump()`) and `inject <plugin>
+//! <json>`; the JSON is the rest of the line, verbatim.
 
 use std::path::PathBuf;
+
+use serde_json::Value;
 
 /// Modifiers of a chord. `world` resolves to `ctrl+alt` nested.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -33,6 +39,23 @@ pub enum Cmd {
     Dump(PathBuf),
     ExpectMode(String),
     ExpectFocus(String),
+    /// the dump's value at `pointer` equals `value`
+    ExpectJson {
+        pointer: String,
+        value: Value,
+    },
+    /// poll each frame until the dump's value at `pointer` equals `value`;
+    /// after `ms`, fail
+    WaitJson {
+        pointer: String,
+        value: Value,
+        ms: u64,
+    },
+    /// `ext.<plugin>.inject(json)`
+    Inject {
+        plugin: String,
+        json: Value,
+    },
     Quit,
 }
 
@@ -133,6 +156,52 @@ fn words(s: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// Split off the first whitespace-separated word of `s`.
+fn first_word(s: &str) -> (&str, &str) {
+    let s = s.trim();
+    s.split_once(char::is_whitespace)
+        .map_or((s, ""), |(a, b)| (a, b.trim_start()))
+}
+
+fn pointer(p: &str) -> Result<String, String> {
+    if p.starts_with('/') {
+        Ok(p.to_string())
+    } else {
+        Err(format!("bad pointer {p:?} (RFC 6901: starts with /)"))
+    }
+}
+
+fn json(src: &str) -> Result<Value, String> {
+    if src.trim().is_empty() {
+        return Err("needs a JSON value".into());
+    }
+    serde_json::from_str(src.trim()).map_err(|e| format!("bad JSON {src:?}: {e}"))
+}
+
+/// `<pointer> <json>`
+fn pointer_json(tail: &str, what: &str) -> Result<(String, Value), String> {
+    let (p, rest) = first_word(tail);
+    if p.is_empty() {
+        return Err(format!("{what} <pointer> <json>"));
+    }
+    Ok((pointer(p)?, json(rest)?))
+}
+
+/// Is the dump's value at `pointer` `want`? `Err`: the message of an
+/// `expect json` / `wait json` that failed.
+pub fn json_check(doc: &Value, pointer: &str, want: &Value) -> Result<(), String> {
+    match doc.pointer(pointer) {
+        Some(v) if v == want => Ok(()),
+        Some(v) => Err(format!("expected json {pointer} = {want}, actual {v}")),
+        None => Err(format!(
+            "expected json {pointer} = {want}, actual <missing>"
+        )),
+    }
+}
+
+/// The plugins `inject` takes.
+pub const PLUGINS: [&str; 4] = ["wm", "overlay", "cats", "objects"];
+
 fn one<'a>(args: &'a [String], what: &str) -> Result<&'a str, String> {
     match args {
         [a] => Ok(a),
@@ -146,6 +215,34 @@ fn parse_line(line: &str) -> Result<Option<Cmd>, String> {
         return Ok(None);
     }
     let (head, tail) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
+    // the JSON commands take the rest of the line verbatim
+    match (head, first_word(tail)) {
+        ("expect", ("json", rest)) => {
+            let (pointer, value) = pointer_json(rest, "expect json")?;
+            return Ok(Some(Cmd::ExpectJson { pointer, value }));
+        }
+        ("wait", ("json", rest)) => {
+            let (body, ms) = rest
+                .trim_end()
+                .rsplit_once(char::is_whitespace)
+                .ok_or("wait json <pointer> <json> <ms>")?;
+            let ms = ms.parse().map_err(|_| format!("bad wait {ms:?} (ms)"))?;
+            let (pointer, value) = pointer_json(body, "wait json")?;
+            return Ok(Some(Cmd::WaitJson { pointer, value, ms }));
+        }
+        ("inject", (plugin, rest)) => {
+            if !PLUGINS.contains(&plugin) {
+                return Err(format!(
+                    "inject: unknown plugin {plugin:?} (wm overlay cats objects)"
+                ));
+            }
+            return Ok(Some(Cmd::Inject {
+                plugin: plugin.to_string(),
+                json: json(rest)?,
+            }));
+        }
+        _ => {}
+    }
     let args = words(tail)?;
     let cmd = match head {
         "key" => Cmd::Key(parse_chord(one(&args, "key")?)?),
@@ -177,7 +274,11 @@ fn parse_line(line: &str) -> Result<Option<Cmd>, String> {
                 Cmd::ExpectMode(v.clone())
             }
             [what, v] if what == "focus" => Cmd::ExpectFocus(v.clone()),
-            _ => return Err("expect mode <M> | expect focus <app_id>".into()),
+            _ => {
+                return Err(
+                    "expect mode <M> | expect focus <app_id> | expect json <pointer> <json>".into(),
+                );
+            }
         },
         "quit" => {
             if !args.is_empty() {
@@ -236,6 +337,10 @@ shot out.png
 dump world.json
 expect mode FOCO
 expect focus acme.demo
+expect json /mode "FOCO"
+expect json /ext/cats {"stub": true, "n": [1, 2]}
+wait json /station/desk/desk 2 1500
+inject cats {"postman": {"to": "alpha"}}
    quit
 "#;
         let got: Vec<Cmd> = parse(src).unwrap().into_iter().map(|l| l.cmd).collect();
@@ -262,8 +367,40 @@ expect focus acme.demo
                 Cmd::Dump("world.json".into()),
                 Cmd::ExpectMode("FOCO".into()),
                 Cmd::ExpectFocus("acme.demo".into()),
+                Cmd::ExpectJson {
+                    pointer: "/mode".into(),
+                    value: serde_json::json!("FOCO"),
+                },
+                Cmd::ExpectJson {
+                    pointer: "/ext/cats".into(),
+                    value: serde_json::json!({"stub": true, "n": [1, 2]}),
+                },
+                Cmd::WaitJson {
+                    pointer: "/station/desk/desk".into(),
+                    value: serde_json::json!(2),
+                    ms: 1500,
+                },
+                Cmd::Inject {
+                    plugin: "cats".into(),
+                    json: serde_json::json!({"postman": {"to": "alpha"}}),
+                },
                 Cmd::Quit,
             ]
+        );
+    }
+
+    #[test]
+    fn json_checks_say_what_they_saw() {
+        let doc = serde_json::json!({"mode": "NAV", "ext": {"wm": {"stub": true}}});
+        assert!(json_check(&doc, "/mode", &serde_json::json!("NAV")).is_ok());
+        assert!(json_check(&doc, "/ext/wm/stub", &serde_json::json!(true)).is_ok());
+        assert_eq!(
+            json_check(&doc, "/mode", &serde_json::json!("FOCO")).unwrap_err(),
+            "expected json /mode = \"FOCO\", actual \"NAV\""
+        );
+        assert_eq!(
+            json_check(&doc, "/nope", &serde_json::json!(1)).unwrap_err(),
+            "expected json /nope = 1, actual <missing>"
         );
     }
 
@@ -304,6 +441,16 @@ expect focus acme.demo
             ("spawn", 1, "needs a command"),
             ("expect mode WALK", 1, "unknown mode"),
             ("expect color red", 1, "expect mode"),
+            ("expect json", 1, "expect json <pointer>"),
+            ("expect json mode \"NAV\"", 1, "bad pointer"),
+            ("expect json /mode", 1, "needs a JSON"),
+            ("expect json /mode {nope", 1, "bad JSON"),
+            ("wait json /mode \"NAV\"", 1, "bad wait"),
+            ("wait json 5", 1, "wait json <pointer>"),
+            ("wait json /a 1 soon", 1, "bad wait"),
+            ("inject router {}", 1, "unknown plugin"),
+            ("inject cats", 1, "needs a JSON"),
+            ("inject cats [1,", 1, "bad JSON"),
             ("quit now", 1, "no arguments"),
             ("key hyper+x", 1, "unknown modifier"),
         ];

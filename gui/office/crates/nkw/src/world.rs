@@ -7,30 +7,30 @@ use std::collections::BTreeMap;
 
 use glam::{Vec2, Vec3};
 use nkw_core::collide::{Aabb, Door as Gap, Grid, WalkInput, WalkParams, Walker, Wall};
+use nkw_core::layout;
 use nkw_core::strip::{self, Desk, Dir, RoomSlot, Side, Spot, Station, Width};
 use nkw_core::walk_exit::{self, ExitRule};
 use nkw_core::{
-    Action, Effect, Machine, Mode, OneToOne, Output, Pose, RoomId, ScreenId, ScreenPlace, Target,
-    Time, Tween, TweenOpts, Want, Wish, onetoone,
+    Action, CatId, Effect, Machine, Mode, ObjectAction, ObjectId, OneToOne, Output, Pose, RoomId,
+    ScreenId, ScreenPlace, TalkPurpose, Target, Time, Tween, TweenOpts, Want, Wish, onetoone,
 };
 use serde::Serialize;
 
-/// Vertical field of view, radians (60°, fixed: §3.5).
-pub const FOV_Y: f32 = std::f32::consts::FRAC_PI_3;
-/// Eye height, metres.
-pub const EYE: f32 = 1.5;
-/// Width of the hall, metres (rooms open on both sides of it).
-pub const HALL_W: f32 = 3.0;
-/// Depth of a room, metres.
-pub const ROOM_DEPTH: f32 = 5.0;
-/// Screens hang this far in front of the back wall, metres.
-pub const SCREEN_FROM_WALL: f32 = 0.6;
-/// The NAV camera stands this far from a desk's screens, metres (§4.2).
-pub const NAV_DIST: f32 = 2.4;
-/// Free floor at both ends of a room's strip, metres.
-pub const ROOM_END: f32 = 1.0;
-/// Shortest room, metres.
-pub const ROOM_MIN: f32 = 6.0;
+use crate::router::sym;
+
+/// The geometry lives in `nkw_core::layout`; its constants are re-exported
+/// here for the hub and the plugins.
+pub use nkw_core::layout::{
+    EYE, FOV_Y, HALL_W, NAV_DIST, NAV_PITCH, ROOM_DEPTH, ROOM_END, ROOM_MIN, SCREEN_FROM_WALL,
+    facing,
+};
+
+/// The reception's name: always the first room (§6).
+pub const RECEPTION: &str = "recepção";
+/// The user's own room: always the last one.
+pub const MY_ROOM: &str = "minha sala";
+/// The time-of-day band before the clock says otherwise (§5.4).
+pub const DEFAULT_BAND: u8 = 3;
 
 /// A room and its strip of desks.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,7 +50,7 @@ pub struct Screen {
     pub size: Vec2,
 }
 
-/// World commands, already resolved from keys (see [`filter`]).
+/// World commands, already resolved from keys or names (S9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmd {
     /// h / l / j / k in NAV
@@ -66,102 +66,84 @@ pub enum Cmd {
     Walk,
     /// world+h/l/j/k in FOCO
     Neighbour(Dir),
+    /// `world.band {band}`: the time-of-day band (0..8)
+    Band(u8),
 }
 
-/// What the compositor must do after a command or a tick.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Cmd {
+    /// The command of an S9 name (`world.left` …); `None`: not a command
+    /// the World runs (the plugins may take it).
+    pub fn from_name(name: &str, args: &BTreeMap<String, String>) -> Option<Cmd> {
+        Some(match name {
+            "world.left" => Cmd::Move(Dir::Left),
+            "world.right" => Cmd::Move(Dir::Right),
+            "world.up" => Cmd::Move(Dir::Up),
+            "world.down" => Cmd::Move(Dir::Down),
+            "world.room_next" => Cmd::RoomNext,
+            "world.room_prev" => Cmd::RoomPrev,
+            "world.focus" => Cmd::Focus,
+            "world.back" | "world.walk_exit" => Cmd::Back,
+            "world.walk" => Cmd::Walk,
+            "world.focus_left" => Cmd::Neighbour(Dir::Left),
+            "world.focus_right" => Cmd::Neighbour(Dir::Right),
+            "world.focus_up" => Cmd::Neighbour(Dir::Up),
+            "world.focus_down" => Cmd::Neighbour(Dir::Down),
+            "world.band" => Cmd::Band(args.get("band")?.parse().ok().filter(|b| *b <= 8)?),
+            _ => return None,
+        })
+    }
+
+    /// The S9 name and args of the command (the inverse of `from_name`;
+    /// `Back` is `world.back`).
+    pub fn name(&self) -> (&'static str, BTreeMap<String, String>) {
+        let n = match self {
+            Cmd::Move(Dir::Left) => "world.left",
+            Cmd::Move(Dir::Right) => "world.right",
+            Cmd::Move(Dir::Up) => "world.up",
+            Cmd::Move(Dir::Down) => "world.down",
+            Cmd::RoomNext => "world.room_next",
+            Cmd::RoomPrev => "world.room_prev",
+            Cmd::Focus => "world.focus",
+            Cmd::Back => "world.back",
+            Cmd::Walk => "world.walk",
+            Cmd::Neighbour(Dir::Left) => "world.focus_left",
+            Cmd::Neighbour(Dir::Right) => "world.focus_right",
+            Cmd::Neighbour(Dir::Up) => "world.focus_up",
+            Cmd::Neighbour(Dir::Down) => "world.focus_down",
+            Cmd::Band(b) => {
+                return (
+                    "world.band",
+                    BTreeMap::from([("band".to_string(), b.to_string())]),
+                );
+            }
+        };
+        (n, BTreeMap::new())
+    }
+}
+
+/// What the compositor (and the plugins) must do after a command, an
+/// action or a tick.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Out {
     KeyboardEnter(ScreenId),
     KeyboardLeave,
     PopupsDone,
-}
-
-/// The modifiers the key filter looks at.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct KeyMods {
-    pub ctrl: bool,
-    pub alt: bool,
-    pub shift: bool,
-}
-
-/// What the key filter decided.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Verdict {
-    /// to the focused client (FOCO only)
-    Forward,
-    /// the world's; maybe a command
-    Intercept(Option<Cmd>),
-}
-
-/// keysyms the filter needs (xkb values; avoids depending on the keymap here)
-pub mod sym {
-    pub const H: u32 = 0x68;
-    pub const J: u32 = 0x6a;
-    pub const K: u32 = 0x6b;
-    pub const L: u32 = 0x6c;
-    pub const I: u32 = 0x69;
-    pub const W: u32 = 0x77;
-    pub const UPPER_J: u32 = 0x4a;
-    pub const UPPER_K: u32 = 0x4b;
-    pub const BRACKETRIGHT: u32 = 0x5d;
-    pub const RETURN: u32 = 0xff0d;
-    pub const KP_ENTER: u32 = 0xff8d;
-    pub const ESCAPE: u32 = 0xff1b;
-    pub const LEFT: u32 = 0xff51;
-    pub const UP: u32 = 0xff52;
-    pub const RIGHT: u32 = 0xff53;
-    pub const DOWN: u32 = 0xff54;
-}
-
-fn dir_of(s: u32) -> Option<Dir> {
-    match s {
-        sym::H | sym::LEFT => Some(Dir::Left),
-        sym::L | sym::RIGHT => Some(Dir::Right),
-        sym::K | sym::UP => Some(Dir::Up),
-        sym::J | sym::DOWN => Some(Dir::Down),
-        _ => None,
-    }
-}
-
-/// The key filter (§3.6): in FOCO only `ctrl+]` and the `world+` chords
-/// (`ctrl+alt` nested) are the world's, everything else goes to the client;
-/// in every other mode all keys are the world's. `s`: the modified keysym.
-pub fn filter(mode: &Mode, m: KeyMods, s: u32) -> Verdict {
-    let world = m.ctrl && m.alt;
-    if mode.focus().is_some() {
-        if world {
-            let lower = if (0x41..=0x5a).contains(&s) {
-                s | 0x20
-            } else {
-                s
-            };
-            return Verdict::Intercept(match lower {
-                sym::W => Some(Cmd::Walk),
-                _ => dir_of(lower).map(Cmd::Neighbour),
-            });
-        }
-        if m.ctrl && s == sym::BRACKETRIGHT {
-            return Verdict::Intercept(Some(Cmd::Back));
-        }
-        return Verdict::Forward;
-    }
-    if m.ctrl || m.alt {
-        return Verdict::Intercept(if world && s == sym::W {
-            Some(Cmd::Walk)
-        } else {
-            None
-        });
-    }
-    let walking = mode.walking();
-    Verdict::Intercept(match s {
-        sym::ESCAPE => Some(Cmd::Back),
-        _ if walking => None,
-        sym::W => Some(Cmd::Walk),
-        sym::UPPER_J => Some(Cmd::RoomNext),
-        sym::UPPER_K => Some(Cmd::RoomPrev),
-        sym::RETURN | sym::KP_ENTER | sym::I => Some(Cmd::Focus),
-        s => dir_of(s).map(Cmd::Move),
-    })
+    /// a machine effect the World does not handle itself (routed by the hub
+    /// to the plugins, S7)
+    Effect(Effect),
+    /// do this to an object (→ `Objects::on_object`)
+    Object(ObjectId, ObjectAction),
+    /// configure a toplevel
+    Configure {
+        screen: ScreenId,
+        size: Option<Vec2>,
+        fullscreen: Option<bool>,
+        maximized: Option<bool>,
+    },
+    /// `xdg_toplevel.close` (never kills)
+    Close(ScreenId),
+    /// a process with the world's `WAYLAND_DISPLAY`
+    Spawn(Vec<String>),
 }
 
 /// The keys held in ANDAR (§3.5).
@@ -221,11 +203,14 @@ pub struct World {
     pub camera: Pose,
     pub out: Output,
     pub opts: Opts,
+    /// the day band (0..8) the scene lights the world with; set by
+    /// `world.band {band}` (the clock)
+    pub band: u8,
     tween: Option<Tween>,
     /// the FOCO target to swap in when the tween ends
-    arrive: Option<ScreenId>,
-    /// the window composed 2D, 1:1 (FOCO, arrived)
-    focus_2d: Option<ScreenId>,
+    arrive: Option<Target>,
+    /// the target composed 2D, 1:1 (FOCO, arrived)
+    focus_2d: Option<Target>,
     /// FOCO: the world pass does not run
     pub frozen: bool,
     /// wants that end after the next frame (`Once`, `At`)
@@ -236,32 +221,12 @@ pub struct World {
     pub walking: Option<Walking>,
     pub walk_params: WalkParams,
     next_id: u32,
-}
-
-/// Where a room sits in the world: the origin of its local frame (left end
-/// of its back wall, on the floor) and the yaw a camera facing its back
-/// wall has. Local x runs to that camera's right, local z towards it.
-fn room_frame(slot: &RoomSlot) -> (Vec3, f32) {
-    let back = HALL_W / 2.0 + ROOM_DEPTH;
-    match slot.side {
-        Side::North => (Vec3::new(slot.x0, 0.0, -back), 0.0),
-        Side::South => (
-            Vec3::new(slot.x0 + slot.len, 0.0, back),
-            std::f32::consts::PI,
-        ),
-    }
-}
-
-/// The horizontal direction a camera with this yaw looks along.
-pub fn facing(yaw: f32) -> Vec3 {
-    Pose::new(Vec3::ZERO, yaw, 0.0).forward()
-}
-
-/// A point of a room's local frame in the world.
-fn to_world(slot: &RoomSlot, local: Vec3) -> Vec3 {
-    let (o, yaw) = room_frame(slot);
-    let p = Pose::new(Vec3::ZERO, yaw, 0.0);
-    o + p.right() * local.x + Vec3::Y * local.y - p.forward() * local.z
+    next_room: u32,
+    /// extra floor boxes per room, from the plugins (closed doors, furniture)
+    obstacles: BTreeMap<RoomId, Vec<Aabb>>,
+    /// the purpose of the CONVERSA the last action was about (routes its
+    /// effects: cats for `Session`, objects for `VaultUnlock`)
+    purpose: TalkPurpose,
 }
 
 impl World {
@@ -269,7 +234,7 @@ impl World {
     pub fn new(out: Output, opts: Opts) -> World {
         let rooms = vec![Room {
             id: RoomId(0),
-            name: "minha sala".into(),
+            name: MY_ROOM.into(),
             desks: Vec::new(),
         }];
         World::with_rooms(out, opts, rooms)
@@ -284,6 +249,7 @@ impl World {
             camera: Pose::default(),
             out,
             opts,
+            band: DEFAULT_BAND,
             tween: None,
             arrive: None,
             focus_2d: None,
@@ -293,7 +259,11 @@ impl World {
             walking: None,
             walk_params: WalkParams::default(),
             next_id: 1,
+            next_room: 0,
+            obstacles: BTreeMap::new(),
+            purpose: TalkPurpose::Session,
         };
+        w.next_room = w.rooms.iter().map(|r| r.id.0 + 1).max().unwrap_or(0);
         w.station = match w.rooms.first().map(|r| r.desks.is_empty()) {
             Some(false) => Station::Desk {
                 room: w.rooms[0].id,
@@ -369,10 +339,7 @@ impl World {
 
     /// Where a room is entered (no desks yet): its middle, facing the back.
     fn room_entry_pose(&self, room: usize) -> Pose {
-        let slot = self.slots()[room];
-        let (_, yaw) = room_frame(&slot);
-        let local = Vec3::new(slot.len / 2.0, EYE, SCREEN_FROM_WALL + NAV_DIST);
-        Pose::new(to_world(&slot, local), yaw, 0.0)
+        layout::room_entry(&self.slots()[room])
     }
 
     /// Centre (local x, metres) of each desk of a room.
@@ -385,22 +352,19 @@ impl World {
         xs.into_iter().map(|x| x + left).collect()
     }
 
-    /// Where screen `slot` of a desk hangs (stacked screens split the
-    /// height around the eye).
+    /// Where screen `slot` of a desk hangs (`layout::screen_place`: the
+    /// stack centred at the eye, on the desk's monitor).
     pub fn screen_place(&self, room: usize, desk: usize, slot: usize) -> ScreenPlace {
-        let slots = self.slots();
-        let s = &slots[room];
+        let s = self.slots()[room];
         let x = self.desk_local_xs(room)[desk];
-        let d = &self.rooms[room].desks[desk];
-        let n = d.screens.len().clamp(1, strip::STACK_VISIBLE);
-        let h = self.screen_logical(room, desk, slot).y * onetoone::M_PER_PX;
-        let y = EYE + h * ((n as f32 - 1.0) / 2.0 - slot.min(n - 1) as f32);
-        let (_, yaw) = room_frame(s);
-        ScreenPlace {
-            center: to_world(s, Vec3::new(x, y, SCREEN_FROM_WALL)),
-            yaw,
-            pitch: 0.0,
-        }
+        let n = self.rooms[room].desks[desk].screens.len();
+        let size = self.screen_logical(room, desk, slot) * onetoone::M_PER_PX;
+        layout::screen_place(&s, x, n, slot, size)
+    }
+
+    /// The local x (metres) of a desk's centre in its room.
+    pub fn desk_x(&self, room: usize, desk: usize) -> f32 {
+        self.desk_local_xs(room)[desk]
     }
 
     /// The logical size a desk's screen shows at: its committed size, or
@@ -433,12 +397,8 @@ impl World {
             Station::Desk { room, desk, .. } => {
                 let r = self.room_index(room)?;
                 self.rooms[r].desks.get(desk)?;
-                let slots = self.slots();
-                let s = &slots[r];
-                let x = self.desk_local_xs(r)[desk];
-                let (_, yaw) = room_frame(s);
-                let local = Vec3::new(x, EYE, SCREEN_FROM_WALL + NAV_DIST);
-                Some(Pose::new(to_world(s, local), yaw, 0.0))
+                let s = self.slots()[r];
+                Some(layout::desk_station(&s, self.desk_local_xs(r)[desk]))
             }
             Station::Free(p) => Some(p),
             Station::Door(room) => Some(self.room_entry_pose(self.room_index(room)?)),
@@ -489,10 +449,18 @@ impl World {
         ))
     }
 
-    /// FOCO, arrived: the window composed in 2D and its rectangle.
+    /// FOCO on a window, arrived: the window composed in 2D and its rectangle.
     pub fn focus_2d(&self) -> Option<(ScreenId, OneToOne)> {
-        let id = self.focus_2d?;
-        Some((id, self.one_to_one(id)?))
+        match self.focus_2d? {
+            Target::Screen(id) => Some((id, self.one_to_one(id)?)),
+            Target::CatTerm(_) => None,
+        }
+    }
+
+    /// FOCO, arrived, on whatever target (a window or a cat's terminal).
+    pub fn focus_2d_target(&self) -> Option<(Target, OneToOne)> {
+        let t = self.focus_2d?;
+        Some((t, self.one_to_one_target(t)?))
     }
 
     /// The FOCO target (also while gliding to it).
@@ -521,6 +489,12 @@ impl World {
         } else {
             self.tween = Some(t);
         }
+    }
+
+    /// Glide (or cut) to `to`; the station becomes `Free(to)`.
+    pub fn glide_free(&mut self, to: Pose, now: Time) {
+        self.station = Station::Free(to);
+        self.glide(to, now, false);
     }
 
     fn go_to(&mut self, st: Station, now: Time, lateral: bool) {
@@ -598,11 +572,10 @@ impl World {
     pub fn remove_screen(&mut self, id: ScreenId, now: Time) -> Vec<Out> {
         let mut out = Vec::new();
         if self.focus_target() == Some(id) {
-            let fx = self.machine.apply(Action::WindowClosed, self.camera);
-            out = self.effects(&fx, now);
+            out = self.action(Action::WindowClosed, now);
         }
-        self.focus_2d = self.focus_2d.filter(|s| *s != id);
-        self.arrive = self.arrive.filter(|s| *s != id);
+        self.focus_2d = self.focus_2d.filter(|s| *s != Target::Screen(id));
+        self.arrive = self.arrive.filter(|s| *s != Target::Screen(id));
         let Some((r, d, k)) = self.locate(id) else {
             return out;
         };
@@ -644,9 +617,27 @@ impl World {
         out
     }
 
+    /// Run a machine action at `now`: the mode changes and the effects the
+    /// World handles itself (camera, focus swap, walking …); the others come
+    /// back as `Out::Effect` / `Out::Object` for the hub to route.
+    pub fn action(&mut self, a: Action, now: Time) -> Vec<Out> {
+        let before = self.mode().clone();
+        let fx = self.machine.apply(a, self.camera);
+        self.purpose = self
+            .mode()
+            .purpose()
+            .or(before.purpose())
+            .unwrap_or(TalkPurpose::Session);
+        self.effects(&fx, now, before.focus())
+    }
+
+    /// The CONVERSA purpose the last action was about (`Session` when none).
+    pub fn purpose(&self) -> TalkPurpose {
+        self.purpose
+    }
+
     /// Run a world command at `now`.
     pub fn command(&mut self, cmd: Cmd, now: Time) -> Vec<Out> {
-        let cam = self.camera;
         match cmd {
             Cmd::Move(dir) => {
                 let room = self.current_room();
@@ -677,19 +668,17 @@ impl World {
                 Vec::new()
             }
             Cmd::Focus => match self.selected() {
-                Some(s) => {
-                    let fx = self.machine.apply(Action::Focus(Target::Screen(s)), cam);
-                    self.effects(&fx, now)
-                }
+                Some(s) => self.action(Action::Focus(Target::Screen(s)), now),
                 None => Vec::new(),
             },
-            Cmd::Back => {
-                let fx = self.machine.apply(Action::Back, cam);
-                self.effects(&fx, now)
-            }
-            Cmd::Walk => {
-                let fx = self.machine.apply(Action::Walk, cam);
-                self.effects(&fx, now)
+            Cmd::Back => self.action(Action::Back, now),
+            Cmd::Walk => self.action(Action::Walk, now),
+            Cmd::Band(b) => {
+                if self.band != b {
+                    self.band = b;
+                    self.pending.push(Wish::world(Want::Once));
+                }
+                Vec::new()
             }
             Cmd::Neighbour(dir) => {
                 let Some(cur) = self.focus_target() else {
@@ -708,29 +697,25 @@ impl World {
                 };
                 self.station = st;
                 match self.selected() {
-                    Some(s) => {
-                        let fx = self
-                            .machine
-                            .apply(Action::Neighbour(Target::Screen(s)), cam);
-                        self.effects(&fx, now)
-                    }
+                    Some(s) => self.action(Action::Neighbour(Target::Screen(s)), now),
                     None => Vec::new(),
                 }
             }
         }
     }
 
-    /// Turn the machine's effects into camera moves and compositor outs.
-    fn effects(&mut self, fx: &[Effect], now: Time) -> Vec<Out> {
+    /// Turn the machine's effects into camera moves and compositor outs;
+    /// `was`: the FOCO target before the action (a cat's terminal keeps its
+    /// keyboard leave for the cats).
+    fn effects(&mut self, fx: &[Effect], now: Time, was: Option<Target>) -> Vec<Out> {
         let mut out = Vec::new();
         for e in fx {
             match *e {
-                Effect::GlideOneToOne(Target::Screen(s))
-                | Effect::TravelOneToOne(Target::Screen(s)) => {
+                Effect::GlideOneToOne(t) | Effect::TravelOneToOne(t) => {
                     let lateral = matches!(e, Effect::TravelOneToOne(_));
                     self.focus_2d = None;
-                    if let Some(o) = self.one_to_one(s) {
-                        self.arrive = Some(s);
+                    if let Some(o) = self.one_to_one_target(t) {
+                        self.arrive = Some(t);
                         self.glide(o.pose, now, lateral);
                         if self.tween.is_none() {
                             self.focus_2d = self.arrive.take();
@@ -746,6 +731,9 @@ impl World {
                     self.glide(to, now, false);
                 }
                 Effect::KeyboardEnter(Target::Screen(s)) => out.push(Out::KeyboardEnter(s)),
+                Effect::KeyboardLeave if matches!(was, Some(Target::CatTerm(_))) => {
+                    out.push(Out::Effect(*e));
+                }
                 Effect::KeyboardLeave => out.push(Out::KeyboardLeave),
                 Effect::PopupsDone => out.push(Out::PopupsDone),
                 Effect::Freeze => self.frozen = true,
@@ -757,15 +745,60 @@ impl World {
                 Effect::WalkStart => self.walk_start(now),
                 Effect::WalkStop => self.walking = None,
                 Effect::WalkExit => self.walk_exit(now),
-                _ => {}
+                Effect::GoTo(st) => self.go_to(st, now, false),
+                Effect::GoToRoom(r) => {
+                    let st = match self.room_index(r) {
+                        Some(i) if !self.rooms[i].desks.is_empty() => Station::Desk {
+                            room: r,
+                            desk: 0,
+                            slot: 0,
+                        },
+                        _ => Station::Door(r),
+                    };
+                    self.go_to(st, now, false);
+                }
+                Effect::GoToStand(p) => self.glide_free(p, now),
+                Effect::Select(s) => {
+                    if let Some((r, d, k)) = self.locate(s) {
+                        let room = self.rooms[r].id;
+                        self.go_to(
+                            Station::Desk {
+                                room,
+                                desk: d,
+                                slot: k,
+                            },
+                            now,
+                            false,
+                        );
+                    }
+                }
+                Effect::Object(id, a) => out.push(Out::Object(id, a)),
+                other => out.push(Out::Effect(other)),
             }
         }
         self.pending.push(Wish::compose(Want::Once));
         out
     }
 
+    /// The furniture of a room's desks as floor boxes: each desk and its
+    /// chair (with the cat on it, if any).
+    pub fn desk_obstacles(&self, room: usize) -> Vec<Aabb> {
+        let s = self.slots()[room];
+        let mut v = Vec::new();
+        for d in 0..self.rooms[room].desks.len() {
+            let x = self.desk_local_xs(room)[d];
+            let w = self.screen_logical(room, d, 0).x * onetoone::M_PER_PX;
+            let (desk, _) = layout::desk_root(&s, x);
+            let half = Vec2::new(layout::desk_width(w) / 2.0, layout::DESK_DEPTH / 2.0);
+            v.push(floor_box(desk, half));
+            let (chair, _) = layout::chair_root(&s, x);
+            v.push(floor_box(chair, Vec2::splat(0.25)));
+        }
+        v
+    }
+
     /// The occupancy grid of a room: its floor, the door to the hall, the
-    /// desks and cats as boxes.
+    /// desks and chairs as boxes, and the plugins' extra obstacles.
     pub fn room_grid(&self, room: usize) -> Grid {
         let s = self.slots()[room];
         let (z0, z1, wall) = match s.side {
@@ -773,26 +806,36 @@ impl World {
             Side::South => (HALL_W / 2.0, HALL_W / 2.0 + ROOM_DEPTH, Wall::North),
         };
         let floor = Aabb::new(Vec2::new(s.x0, z0), Vec2::new(s.x0 + s.len, z1));
-        let mut obstacles = Vec::new();
-        for (d, desk) in self.rooms[room].desks.iter().enumerate() {
-            let p = self.screen_place(room, d, 0);
-            let toward = -facing(p.yaw);
-            let half = self.screen_logical(room, d, 0).x * onetoone::M_PER_PX / 2.0 + 0.2;
-            let c = p.center + toward * 0.25;
-            obstacles.push(Aabb::new(
-                Vec2::new(c.x - half, c.z - 0.4),
-                Vec2::new(c.x + half, c.z + 0.4),
-            ));
-            if desk.cat.is_some() {
-                let c = c + toward * 0.45;
-                obstacles.push(Aabb::new(
-                    Vec2::new(c.x - 0.3, c.z - 0.3),
-                    Vec2::new(c.x + 0.3, c.z + 0.3),
-                ));
-            }
+        let mut obstacles = self.desk_obstacles(room);
+        if let Some(extra) = self.obstacles.get(&self.rooms[room].id) {
+            obstacles.extend_from_slice(extra);
         }
         let r = self.walk_params.radius;
         Grid::room(floor, &[Gap::new(wall, s.door_x)], &obstacles, r)
+    }
+
+    /// The plugins' extra floor boxes for a room (`room_grid` adds them);
+    /// a walk in that room gets the new grid at once.
+    pub fn set_obstacles(&mut self, room: RoomId, extra: Vec<Aabb>) {
+        if self
+            .obstacles
+            .get(&room)
+            .map_or(extra.is_empty(), |o| *o == extra)
+        {
+            return;
+        }
+        if extra.is_empty() {
+            self.obstacles.remove(&room);
+        } else {
+            self.obstacles.insert(room, extra);
+        }
+        let here = self.room_at(self.camera.pos).unwrap_or(self.current_room());
+        if self.walking.is_some() && self.rooms.get(here).is_some_and(|r| r.id == room) {
+            let grid = self.room_grid(here);
+            if let Some(w) = self.walking.as_mut() {
+                w.grid = grid;
+            }
+        }
     }
 
     fn walk_start(&mut self, now: Time) {
@@ -904,6 +947,7 @@ impl World {
             w.push(Wish::world(Want::Continuous));
         }
         if self.frozen && self.focus_2d.is_some() {
+            // (a window or a cat's terminal)
             // FOCO: the world pass does not run; what wanted it only composes
             for x in &mut w {
                 x.pass = nkw_core::Pass::Compose;
@@ -920,6 +964,218 @@ impl World {
         self.arrival_pass = false;
         self.pending
             .retain(|w| matches!(w.want, Want::At(t) if t > now + 1e-6));
+    }
+
+    /// Bring the rooms in line with the core's contexts (§6.9): the
+    /// reception first, one room per context in order (kept by name, created
+    /// when new), "minha sala" last; each context's desks follow its cats
+    /// (`strip::reconcile`). A room whose context went away stays while it
+    /// holds screens of yours (its cats leave), and goes otherwise. The
+    /// station follows its desk; FOCO on a cat that left goes back to NAV.
+    pub fn sync_contexts(&mut self, contexts: &[(String, Vec<CatId>)], now: Time) -> Vec<Out> {
+        let anchor = self.anchor();
+        let mut old = std::mem::take(&mut self.rooms);
+        let mut take = |name: &str| {
+            old.iter()
+                .position(|r| r.name == name)
+                .map(|i| old.remove(i))
+        };
+        let reception = take(RECEPTION);
+        let mut rooms = vec![reception.unwrap_or_else(|| self.new_room(RECEPTION))];
+        let mut seen: Vec<&str> = vec![RECEPTION, MY_ROOM];
+        for (name, cats) in contexts {
+            if seen.contains(&name.as_str()) {
+                continue;
+            }
+            seen.push(name);
+            let mut r = take(name).unwrap_or_else(|| self.new_room(name));
+            r.desks = strip::reconcile(&r.desks, cats);
+            rooms.push(r);
+        }
+        let mine = take(MY_ROOM);
+        for mut r in old {
+            r.desks = strip::reconcile(&r.desks, &[]);
+            if !r.desks.is_empty() {
+                rooms.push(r);
+            }
+        }
+        rooms.push(mine.unwrap_or_else(|| self.new_room(MY_ROOM)));
+        self.rooms = rooms;
+
+        let mut out = Vec::new();
+        if let Some(Target::CatTerm(c)) = self.mode().focus()
+            && self.cat_desk(c).is_none()
+        {
+            out = self.action(Action::WindowClosed, now);
+        }
+        self.station = self.resolve(anchor);
+        // the strip may have moved under the camera: cut to where it belongs
+        if !self.gliding() {
+            let to = match self.focus_2d_target() {
+                Some((_, o)) => Some(o.pose),
+                None if self.mode().overlay.is_none() && !self.mode().walking() => {
+                    self.station_pose(&self.station)
+                }
+                None => None,
+            };
+            if let Some(p) = to
+                && p != self.camera
+            {
+                self.camera = p;
+            }
+        }
+        if self.walking.is_some() {
+            let here = self.room_at(self.camera.pos).unwrap_or(self.current_room());
+            let grid = self.room_grid(here);
+            if let Some(w) = self.walking.as_mut() {
+                w.grid = grid;
+            }
+        }
+        self.pending.push(Wish::world(Want::Once));
+        out
+    }
+
+    fn new_room(&mut self, name: &str) -> Room {
+        let id = RoomId(self.next_room);
+        self.next_room += 1;
+        Room {
+            id,
+            name: name.into(),
+            desks: Vec::new(),
+        }
+    }
+
+    /// What the station is at, independent of desk indices.
+    fn anchor(&self) -> Anchor {
+        match self.station {
+            Station::Desk { room, desk, slot } => {
+                let d = self
+                    .room_index(room)
+                    .and_then(|r| self.rooms[r].desks.get(desk));
+                let key = match d {
+                    Some(Desk { cat: Some(c), .. }) => DeskKey::Cat(*c),
+                    Some(d) if !d.screens.is_empty() => DeskKey::Screen(d.screens[0]),
+                    _ => DeskKey::Index(desk),
+                };
+                Anchor::Desk { room, key, slot }
+            }
+            other => Anchor::Other(other),
+        }
+    }
+
+    /// The station an anchor points at after the strip changed.
+    fn resolve(&self, a: Anchor) -> Station {
+        let first = |w: &World, r: usize| match w.rooms[r].desks.is_empty() {
+            true => Station::Free(w.room_entry_pose(r)),
+            false => Station::Desk {
+                room: w.rooms[r].id,
+                desk: 0,
+                slot: 0,
+            },
+        };
+        match a {
+            Anchor::Desk { room, key, slot } => {
+                let Some(r) = self.room_index(room) else {
+                    return first(self, 0);
+                };
+                let desks = &self.rooms[r].desks;
+                let at = match key {
+                    DeskKey::Cat(c) => desks.iter().position(|d| d.cat == Some(c)),
+                    DeskKey::Screen(s) => desks.iter().position(|d| d.screens.contains(&s)),
+                    DeskKey::Index(i) => (!desks.is_empty()).then(|| i.min(desks.len() - 1)),
+                };
+                match at {
+                    Some(desk) => Station::Desk {
+                        room,
+                        desk,
+                        slot: slot.min(desks[desk].screens.len().max(1) - 1),
+                    },
+                    None => first(self, r),
+                }
+            }
+            Anchor::Other(Station::Door(r)) if self.room_index(r).is_none() => first(self, 0),
+            Anchor::Other(st) => st,
+        }
+    }
+
+    /// The room and desk index of a cat's desk.
+    pub fn cat_desk(&self, cat: CatId) -> Option<(RoomId, usize)> {
+        self.rooms.iter().find_map(|r| {
+            r.desks
+                .iter()
+                .position(|d| d.cat == Some(cat))
+                .map(|i| (r.id, i))
+        })
+    }
+
+    /// The NAV pose of a desk.
+    pub fn desk_pose(&self, room: RoomId, desk: usize) -> Option<Pose> {
+        self.station_pose(&Station::Desk {
+            room,
+            desk,
+            slot: 0,
+        })
+    }
+
+    /// Where the cat of a desk sits (on its chair, back to the camera).
+    pub fn cat_seat(&self, room: RoomId, desk: usize) -> Option<Pose> {
+        let r = self.room_index(room)?;
+        self.rooms[r].desks.get(desk)?;
+        Some(layout::cat_seat(
+            &self.slots()[r],
+            self.desk_local_xs(r)[desk],
+        ))
+    }
+
+    /// A desk's own monitor (a cat's terminal): its place and the logical
+    /// size it shows (the desk's one-screen size).
+    pub fn monitor_place(&self, room: RoomId, desk: usize) -> Option<(ScreenPlace, Vec2)> {
+        let r = self.room_index(room)?;
+        let d = self.rooms[r].desks.get(desk)?;
+        let logical = self.configure_size(d.width, 1);
+        let place = layout::monitor_place(
+            &self.slots()[r],
+            self.desk_local_xs(r)[desk],
+            logical * onetoone::M_PER_PX,
+        );
+        Some((place, logical))
+    }
+
+    pub fn room_slot(&self, room: RoomId) -> Option<RoomSlot> {
+        self.room_index(room).map(|r| self.slots()[r])
+    }
+
+    /// The room's hall door: floor (x, z) and the yaw into the room.
+    pub fn room_door(&self, room: RoomId) -> Option<(Vec2, f32)> {
+        self.room_slot(room).map(|s| layout::door_world(&s))
+    }
+
+    pub fn current_room_id(&self) -> RoomId {
+        self.rooms[self.current_room()].id
+    }
+
+    /// The rooms this frame draws: the current one and `extra` (what the
+    /// plugins opened), once each, in strip order.
+    pub fn visible_rooms(&self, extra: &[RoomId]) -> Vec<RoomId> {
+        let cur = self.current_room_id();
+        self.rooms
+            .iter()
+            .map(|r| r.id)
+            .filter(|id| *id == cur || extra.contains(id))
+            .collect()
+    }
+
+    /// The 1:1 pose of a FOCO target: a window's, or a cat terminal's on
+    /// its desk's monitor.
+    pub fn one_to_one_target(&self, t: Target) -> Option<OneToOne> {
+        match t {
+            Target::Screen(s) => self.one_to_one(s),
+            Target::CatTerm(c) => {
+                let (room, desk) = self.cat_desk(c)?;
+                let (place, logical) = self.monitor_place(room, desk)?;
+                Some(onetoone::pose(&self.out, FOV_Y, logical, &place))
+            }
+        }
     }
 
     /// The JSON of `dump` (contract S2, `"version": 1`).
@@ -978,7 +1234,7 @@ impl World {
         let d = Dump {
             version: 1,
             mode: crate::script::mode_name(self.mode().label()).to_string(),
-            station: StationDump::from(&self.station),
+            station: self.station,
             camera: DumpCamera {
                 pos: self.camera.pos.to_array(),
                 yaw: self.camera.yaw,
@@ -992,6 +1248,25 @@ impl World {
         };
         serde_json::to_value(d).expect("dump serialises")
     }
+}
+
+/// A desk, whatever its index.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DeskKey {
+    Cat(CatId),
+    Screen(ScreenId),
+    Index(usize),
+}
+
+/// What the station is at, across a change of the strip.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Anchor {
+    Desk {
+        room: RoomId,
+        key: DeskKey,
+        slot: usize,
+    },
+    Other(Station),
 }
 
 fn want_name(w: &Wish) -> String {
@@ -1011,7 +1286,7 @@ fn want_name(w: &Wish) -> String {
 struct Dump {
     version: u32,
     mode: String,
-    station: StationDump,
+    station: Station,
     camera: DumpCamera,
     rooms: Vec<DumpRoom>,
     desks: Vec<DumpDesk>,
@@ -1020,37 +1295,10 @@ struct Dump {
     wants: Vec<String>,
 }
 
-/// `nkw_core::Station` has no serde impl (frozen crate): a local mirror.
-#[derive(Serialize, Debug, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum StationDump {
-    Desk { room: u32, desk: usize, slot: usize },
-    Air(u32),
-    Shelf { dir: u32, row: u32 },
-    Door(u32),
-    Board,
-    Free { pos: [f32; 3], yaw: f32, pitch: f32 },
-}
-
-impl From<&Station> for StationDump {
-    fn from(s: &Station) -> StationDump {
-        match *s {
-            Station::Desk { room, desk, slot } => StationDump::Desk {
-                room: room.0,
-                desk,
-                slot,
-            },
-            Station::Air(s) => StationDump::Air(s.0),
-            Station::Shelf { dir, row } => StationDump::Shelf { dir: dir.0, row },
-            Station::Door(r) => StationDump::Door(r.0),
-            Station::Board => StationDump::Board,
-            Station::Free(p) => StationDump::Free {
-                pos: p.pos.to_array(),
-                yaw: p.yaw,
-                pitch: p.pitch,
-            },
-        }
-    }
+/// A floor box (x, z) of half size `half` around `c`.
+fn floor_box(c: Vec3, half: Vec2) -> Aabb {
+    let c = Vec2::new(c.x, c.z);
+    Aabb::new(c - half, c + half)
 }
 
 #[derive(Serialize)]
@@ -1436,98 +1684,11 @@ mod tests {
         assert!(w.wishes().iter().all(|x| x.pass == nkw_core::Pass::Compose));
     }
 
-    fn nav() -> Mode {
-        Mode::base(Base::Nav)
-    }
-
-    fn focus() -> Mode {
-        let mut w = three();
-        w.command(Cmd::Focus, 0.0);
-        w.mode().clone()
-    }
-
     #[test]
-    fn key_filter_table() {
-        let none = KeyMods::default();
-        let ctrl = KeyMods { ctrl: true, ..none };
-        let world = KeyMods {
-            ctrl: true,
-            alt: true,
-            shift: false,
-        };
-        let shift = KeyMods {
-            shift: true,
-            ..none
-        };
-        let alt = KeyMods { alt: true, ..none };
-        use Verdict::{Forward as F, Intercept as I};
-        let cases: &[(Mode, KeyMods, u32, Verdict)] = &[
-            // NAV: everything is the world's
-            (nav(), none, sym::H, I(Some(Cmd::Move(Dir::Left)))),
-            (nav(), none, sym::L, I(Some(Cmd::Move(Dir::Right)))),
-            (nav(), none, sym::LEFT, I(Some(Cmd::Move(Dir::Left)))),
-            (nav(), none, sym::J, I(Some(Cmd::Move(Dir::Down)))),
-            (nav(), none, sym::K, I(Some(Cmd::Move(Dir::Up)))),
-            (nav(), shift, sym::UPPER_J, I(Some(Cmd::RoomNext))),
-            (nav(), shift, sym::UPPER_K, I(Some(Cmd::RoomPrev))),
-            (nav(), none, sym::RETURN, I(Some(Cmd::Focus))),
-            (nav(), none, sym::I, I(Some(Cmd::Focus))),
-            (nav(), none, sym::W, I(Some(Cmd::Walk))),
-            (nav(), none, sym::ESCAPE, I(Some(Cmd::Back))),
-            (nav(), none, 0x61, I(None)),
-            (nav(), ctrl, sym::BRACKETRIGHT, I(None)),
-            (nav(), alt, sym::H, I(None)),
-            (nav(), world, sym::W, I(Some(Cmd::Walk))),
-            // FOCO: only ctrl+] and world+ are intercepted
-            (focus(), none, sym::H, F),
-            (focus(), none, sym::RETURN, F),
-            (focus(), none, sym::ESCAPE, F),
-            (focus(), shift, sym::UPPER_J, F),
-            (focus(), ctrl, 0x63, F),
-            (focus(), alt, sym::H, F),
-            (focus(), ctrl, sym::BRACKETRIGHT, I(Some(Cmd::Back))),
-            (focus(), world, sym::H, I(Some(Cmd::Neighbour(Dir::Left)))),
-            (focus(), world, sym::L, I(Some(Cmd::Neighbour(Dir::Right)))),
-            (focus(), world, sym::J, I(Some(Cmd::Neighbour(Dir::Down)))),
-            (focus(), world, sym::K, I(Some(Cmd::Neighbour(Dir::Up)))),
-            (focus(), world, sym::W, I(Some(Cmd::Walk))),
-            (focus(), world, 0x57, I(Some(Cmd::Walk))),
-            (focus(), world, 0x61, I(None)),
-            (focus(), world, sym::BRACKETRIGHT, I(None)),
-        ];
-        for (mode, m, s, want) in cases {
-            assert_eq!(filter(mode, *m, *s), *want, "{} {m:?} {s:#x}", mode.label());
-        }
-    }
-
-    #[test]
-    fn walking_mode_keeps_only_esc_and_w() {
+    fn walking_mode_takes_esc_and_world_w() {
         let mut w = three();
         w.command(Cmd::Walk, 0.0);
         assert!(w.mode().walking());
-        let m = w.mode().clone();
-        assert_eq!(
-            filter(&m, KeyMods::default(), sym::H),
-            Verdict::Intercept(None)
-        );
-        assert_eq!(
-            filter(&m, KeyMods::default(), sym::W),
-            Verdict::Intercept(None),
-            "w walks forward"
-        );
-        let world = KeyMods {
-            ctrl: true,
-            alt: true,
-            shift: false,
-        };
-        assert_eq!(
-            filter(&m, world, sym::W),
-            Verdict::Intercept(Some(Cmd::Walk))
-        );
-        assert_eq!(
-            filter(&m, KeyMods::default(), sym::ESCAPE),
-            Verdict::Intercept(Some(Cmd::Back))
-        );
         w.command(Cmd::Back, 0.0);
         assert_eq!(w.mode().label(), "NAVEGAR");
     }
@@ -1547,18 +1708,20 @@ mod tests {
     }
 
     #[test]
-    fn walking_forward_stops_at_the_desk() {
+    fn walking_forward_stops_at_the_chair() {
         let mut w = three();
         let mut now = 0.0;
         w.command(Cmd::Walk, now);
         assert!(w.walking.is_some());
         let start = w.camera;
         walk(&mut w, &mut now, &[sym::W], 3.0);
-        let desk_front = w.screen_place(0, 0, 0).center.z + 0.25 + 0.4;
-        assert!(w.camera.pos.z < start.pos.z - 1.0, "moved forward");
+        // the chair's box in front of the desk (north room: +z is the room's front)
+        let (chair, _) = layout::chair_root(&w.slots()[0], w.desk_x(0, 0));
+        let chair_front = chair.z + 0.25;
+        assert!(w.camera.pos.z < start.pos.z - 0.8, "moved forward");
         assert!(
-            w.camera.pos.z >= desk_front + w.walk_params.radius - 0.26,
-            "{} vs desk front {desk_front}",
+            w.camera.pos.z >= chair_front + w.walk_params.radius - 0.26,
+            "{} vs chair front {chair_front}",
             w.camera.pos.z
         );
         for _ in 0..60 {
@@ -1630,5 +1793,398 @@ mod tests {
         assert_eq!(d["desks"][1]["cat"], 9);
         assert_eq!(d["desks"][1]["width"], "half");
         assert_eq!(d["screens"][2]["app_id"], "acme.3");
+        w.station = Station::Free(Pose::new(Vec3::new(1.0, 1.5, 2.0), 0.5, 0.0));
+        let d = w.dump(&[]);
+        assert_eq!(
+            d["station"]["free"]["pos"],
+            serde_json::json!([1.0, 1.5, 2.0])
+        );
+        assert_eq!(d["station"]["free"]["yaw"], 0.5);
+    }
+
+    const TALK: Action = Action::Talk {
+        cat: CatId(9),
+        purpose: TalkPurpose::Session,
+    };
+
+    #[test]
+    fn dialogue_effects_pass_through() {
+        let mut w = three();
+        let out = w.action(TALK, 0.0);
+        assert!(
+            out.contains(&Out::Effect(Effect::FrameFace(CatId(9)))),
+            "{out:?}"
+        );
+        assert!(
+            out.contains(&Out::Effect(Effect::CatTurns(CatId(9)))),
+            "{out:?}"
+        );
+        assert_eq!(w.purpose(), TalkPurpose::Session);
+        let out = w.action(Action::Reply, 0.0);
+        assert_eq!(out, [Out::Effect(Effect::OpenLine)]);
+        let out = w.action(Action::Send, 0.0);
+        assert_eq!(
+            out,
+            [
+                Out::Effect(Effect::CloseLine),
+                Out::Effect(Effect::SendLine)
+            ]
+        );
+        let out = w.action(Action::Back, 0.0);
+        assert!(out.contains(&Out::Effect(Effect::CatBackToWork(CatId(9)))));
+        assert_eq!(
+            w.purpose(),
+            TalkPurpose::Session,
+            "still about the talk it left"
+        );
+        // the vault's dialogue keeps its purpose for the routing
+        w.action(
+            Action::Talk {
+                cat: CatId(9),
+                purpose: TalkPurpose::VaultUnlock,
+            },
+            0.0,
+        );
+        assert_eq!(w.purpose(), TalkPurpose::VaultUnlock);
+        w.action(Action::Back, 0.0);
+        assert_eq!(w.purpose(), TalkPurpose::VaultUnlock);
+        w.action(Action::Walk, 0.0);
+        assert_eq!(
+            w.purpose(),
+            TalkPurpose::Session,
+            "no talk: back to the default"
+        );
+    }
+
+    #[test]
+    fn objects_come_out_as_outs() {
+        let mut w = three();
+        let id = ObjectId(4);
+        assert_eq!(
+            w.action(Action::Interact(id), 0.0),
+            [Out::Object(id, ObjectAction::Interact)]
+        );
+        w.command(Cmd::Walk, 0.0);
+        assert_eq!(
+            w.action(Action::Adjust(id, -1), 0.0),
+            [Out::Object(id, ObjectAction::Adjust(-1))]
+        );
+        w.command(Cmd::Focus, 0.0);
+        assert!(
+            w.action(Action::Interact(id), 0.0).is_empty(),
+            "not under FOCO"
+        );
+    }
+
+    #[test]
+    fn picking_an_object_in_nav_goes_to_its_stand() {
+        let mut w = three();
+        let mut now = 0.0;
+        let stand = layout::stand_before(Vec3::new(2.0, 1.0, -4.0), 0.0, 1.2);
+        w.action(Action::Hint { focus: false }, now);
+        let out = w.action(
+            Action::Pick(nkw_core::Pick::Object {
+                id: ObjectId(1),
+                stand,
+            }),
+            now,
+        );
+        assert_eq!(out, [Out::Effect(Effect::HideHints)]);
+        assert_eq!(w.station, Station::Free(stand));
+        settle(&mut w, &mut now);
+        assert_eq!(w.camera, stand);
+        w.glide_free(w.spots(0)[1].pose, now);
+        settle(&mut w, &mut now);
+        assert_eq!(w.camera, w.spots(0)[1].pose);
+    }
+
+    #[test]
+    fn go_to_room_lands_on_its_first_desk() {
+        let rooms = (0..2)
+            .map(|i| Room {
+                id: RoomId(i),
+                name: format!("r{i}"),
+                desks: if i == 1 {
+                    vec![desk(&[], None), desk(&[], None)]
+                } else {
+                    vec![]
+                },
+            })
+            .collect();
+        let mut w = World::with_rooms(OUT, OPTS, rooms);
+        w.action(Action::Hint { focus: false }, 0.0);
+        w.action(Action::Pick(nkw_core::Pick::Door(RoomId(1))), 0.0);
+        assert_eq!(
+            w.station,
+            Station::Desk {
+                room: RoomId(1),
+                desk: 0,
+                slot: 0
+            }
+        );
+    }
+
+    #[test]
+    fn a_cats_terminal_in_focus() {
+        let mut w = three();
+        let mut now = 0.0;
+        let t = Target::CatTerm(CatId(9));
+        let out = w.action(Action::Focus(t), now);
+        assert!(
+            out.contains(&Out::Effect(Effect::OpenPane(CatId(9)))),
+            "{out:?}"
+        );
+        assert!(
+            out.contains(&Out::Effect(Effect::KeyboardEnter(t))),
+            "{out:?}"
+        );
+        assert!(!out.iter().any(|o| matches!(o, Out::KeyboardEnter(_))));
+        settle(&mut w, &mut now);
+        let (got, o) = w.focus_2d_target().unwrap();
+        assert_eq!(got, t);
+        assert_eq!(w.camera, o.pose);
+        assert!(w.focus_2d().is_none(), "not a window");
+        let out = w.action(Action::Back, now);
+        assert!(out.contains(&Out::Effect(Effect::KeyboardLeave)), "{out:?}");
+        assert!(
+            !out.contains(&Out::KeyboardLeave),
+            "the cats' leave, not a client's"
+        );
+        assert!(w.focus_2d_target().is_none());
+    }
+
+    /// Project a world point to physical px (y down) like the 1:1 tests.
+    fn project(p: &Pose, out: &Output, world: Vec3) -> Vec2 {
+        use glam::{DVec3, DVec4};
+        let aspect = out.width_px as f64 / out.height_px as f64;
+        let proj = glam::dcamera::rh::proj::opengl::perspective(FOV_Y as f64, aspect, 0.05, 100.0);
+        let view = glam::dcamera::rh::view::look_to_mat4(
+            p.pos.as_dvec3(),
+            p.forward().as_dvec3(),
+            DVec3::Y,
+        );
+        let c = proj * view * DVec4::from((world.as_dvec3(), 1.0));
+        let n = c.truncate() / c.w;
+        Vec2::new(
+            ((n.x + 1.0) / 2.0 * out.width_px as f64) as f32,
+            ((1.0 - n.y) / 2.0 * out.height_px as f64) as f32,
+        )
+    }
+
+    #[test]
+    fn a_cats_terminal_lines_up_1_to_1_like_a_screen() {
+        for out in [
+            OUT,
+            Output {
+                width_px: 1920,
+                height_px: 1080,
+                scale: 1.25,
+            },
+        ] {
+            let mut w = three();
+            w.out = out;
+            let (room, d) = w.cat_desk(CatId(9)).unwrap();
+            assert_eq!((room, d), (RoomId(0), 1));
+            let (place, logical) = w.monitor_place(room, d).unwrap();
+            assert_eq!(logical, w.configure_size(Width::Half, 1));
+            let o = w.one_to_one_target(Target::CatTerm(CatId(9))).unwrap();
+            let pose = Pose::new(place.center, place.yaw, place.pitch);
+            let (r, u) = (pose.right(), pose.up());
+            let half = logical * onetoone::M_PER_PX / 2.0;
+            let tl = place.center - r * half.x + u * half.y;
+            let br = place.center + r * half.x - u * half.y;
+            assert!((project(&o.pose, &out, tl) - o.origin).abs().max_element() < 0.01);
+            assert!(
+                (project(&o.pose, &out, br) - (o.origin + o.size))
+                    .abs()
+                    .max_element()
+                    < 0.01
+            );
+            assert!(w.one_to_one_target(Target::CatTerm(CatId(77))).is_none());
+        }
+    }
+
+    #[test]
+    fn desk_poses_seats_doors_and_slots() {
+        let w = three();
+        let r = RoomId(0);
+        assert_eq!(w.desk_pose(r, 2), Some(w.spots(0)[2].pose));
+        assert_eq!(w.desk_pose(r, 3), None);
+        assert_eq!(w.desk_pose(RoomId(5), 0), None);
+        let seat = w.cat_seat(r, 1).unwrap();
+        assert!((seat.pos.x - w.spots(0)[1].pose.pos.x).abs() < 1e-5);
+        assert!((seat.pos.y - layout::SEAT_H).abs() < 1e-6);
+        let slot = w.room_slot(r).unwrap();
+        assert_eq!(slot, w.slots()[0]);
+        assert_eq!(w.room_door(r), Some(layout::door_world(&slot)));
+        assert_eq!(w.current_room_id(), r);
+        assert_eq!(w.cat_desk(CatId(1)), None);
+    }
+
+    #[test]
+    fn visible_rooms_in_strip_order() {
+        let rooms = (0..3)
+            .map(|i| Room {
+                id: RoomId(10 - i),
+                name: format!("r{i}"),
+                desks: vec![],
+            })
+            .collect();
+        let w = World::with_rooms(OUT, OPTS, rooms);
+        assert_eq!(w.current_room_id(), RoomId(10));
+        assert_eq!(w.visible_rooms(&[]), [RoomId(10)]);
+        assert_eq!(
+            w.visible_rooms(&[RoomId(8), RoomId(10), RoomId(8), RoomId(99)]),
+            [RoomId(10), RoomId(8)]
+        );
+    }
+
+    #[test]
+    fn extra_obstacles_block_the_walk() {
+        let mut w = three();
+        let mut now = 0.0;
+        w.command(Cmd::Walk, now);
+        let start = w.camera.pos;
+        // a wall of a box right in front
+        let wall = Aabb::new(
+            Vec2::new(start.x - 1.0, start.z - 0.6),
+            Vec2::new(start.x + 1.0, start.z - 0.5),
+        );
+        w.set_obstacles(RoomId(0), vec![wall]);
+        let g = w.room_grid(0);
+        assert!(g != three().room_grid(0), "the grid has the box");
+        walk(&mut w, &mut now, &[sym::W], 1.5);
+        assert!(
+            w.camera.pos.z > start.z - 0.5,
+            "{} stopped by the box",
+            w.camera.pos.z
+        );
+        w.set_obstacles(RoomId(0), vec![]);
+        walk(&mut w, &mut now, &[sym::W], 1.5);
+        assert!(w.camera.pos.z < start.z - 0.6, "free again");
+    }
+
+    #[test]
+    fn band_is_a_command() {
+        let mut w = three();
+        assert_eq!(w.band, DEFAULT_BAND);
+        w.frame_done(0.0);
+        let args = BTreeMap::from([("band".to_string(), "6".to_string())]);
+        let c = Cmd::from_name("world.band", &args).unwrap();
+        assert_eq!(c, Cmd::Band(6));
+        w.command(c, 0.0);
+        assert_eq!(w.band, 6);
+        assert!(!w.wishes().is_empty(), "a new light wants a pass");
+        let bad = BTreeMap::from([("band".to_string(), "9".to_string())]);
+        assert_eq!(Cmd::from_name("world.band", &bad), None);
+        assert_eq!(Cmd::from_name("world.band", &BTreeMap::new()), None);
+    }
+
+    #[test]
+    fn command_names_round_trip() {
+        let all = [
+            Cmd::Move(Dir::Left),
+            Cmd::Move(Dir::Right),
+            Cmd::Move(Dir::Up),
+            Cmd::Move(Dir::Down),
+            Cmd::RoomNext,
+            Cmd::RoomPrev,
+            Cmd::Focus,
+            Cmd::Back,
+            Cmd::Walk,
+            Cmd::Neighbour(Dir::Left),
+            Cmd::Neighbour(Dir::Right),
+            Cmd::Neighbour(Dir::Up),
+            Cmd::Neighbour(Dir::Down),
+            Cmd::Band(2),
+        ];
+        for c in all {
+            let (n, a) = c.name();
+            assert_eq!(Cmd::from_name(n, &a), Some(c), "{n}");
+        }
+        assert_eq!(
+            Cmd::from_name("world.walk_exit", &BTreeMap::new()),
+            Some(Cmd::Back)
+        );
+        assert_eq!(Cmd::from_name("world.talk", &BTreeMap::new()), None);
+    }
+
+    fn names(w: &World) -> Vec<String> {
+        w.rooms.iter().map(|r| r.name.clone()).collect()
+    }
+
+    #[test]
+    fn sync_contexts_builds_the_rooms() {
+        let mut w = World::new(OUT, OPTS);
+        let (mine, _) = w.add_screen("acme.term", "", 0.0);
+        let ctx = |v: &[(&str, &[u32])]| -> Vec<(String, Vec<CatId>)> {
+            v.iter()
+                .map(|(n, c)| (n.to_string(), c.iter().map(|&i| CatId(i)).collect()))
+                .collect()
+        };
+        w.sync_contexts(&ctx(&[("acme", &[1, 2]), ("demo", &[3])]), 0.0);
+        assert_eq!(names(&w), [RECEPTION, "acme", "demo", MY_ROOM]);
+        assert_eq!(w.cat_desk(CatId(2)).map(|d| d.1), Some(1));
+        assert_eq!(
+            w.locate(mine).map(|l| w.rooms[l.0].name.clone()),
+            Some(MY_ROOM.into())
+        );
+        let ids: Vec<RoomId> = w.rooms.iter().map(|r| r.id).collect();
+        assert_eq!(ids.len(), 4);
+        assert_eq!(ids[3], RoomId(0), "minha sala kept its id");
+        // the station followed its desk into the last room
+        assert_eq!(w.selected(), Some(mine));
+        assert_eq!(
+            w.camera,
+            w.station_pose(&w.station).unwrap(),
+            "cut to the new place"
+        );
+
+        // kept by name, in the new order; a cat leaves, a context goes
+        let acme = w.rooms[1].id;
+        w.rooms[1].desks[0].screens.push(ScreenId(50));
+        w.screens.insert(
+            ScreenId(50),
+            Screen {
+                id: ScreenId(50),
+                app_id: "acme.log".into(),
+                title: String::new(),
+                size: Vec2::ZERO,
+            },
+        );
+        w.sync_contexts(&ctx(&[("demo", &[3, 4]), ("bravo", &[])]), 0.0);
+        assert_eq!(
+            names(&w),
+            [RECEPTION, "demo", "bravo", "acme", MY_ROOM],
+            "acme stays for the screen left there"
+        );
+        assert_eq!(w.rooms[3].id, acme);
+        assert_eq!(w.rooms[3].desks.len(), 1, "only the desk with a screen");
+        assert_eq!(w.rooms[3].desks[0].cat, None);
+        assert_eq!(w.cat_desk(CatId(4)).map(|d| d.1), Some(1));
+        assert!(w.rooms[2].desks.is_empty());
+
+        // idempotent
+        let before = w.rooms.clone();
+        w.sync_contexts(&ctx(&[("demo", &[3, 4]), ("bravo", &[])]), 0.0);
+        assert_eq!(w.rooms, before);
+
+        // an empty vanished context just goes
+        w.sync_contexts(&ctx(&[("demo", &[3, 4])]), 0.0);
+        assert_eq!(names(&w), [RECEPTION, "demo", "acme", MY_ROOM]);
+    }
+
+    #[test]
+    fn sync_contexts_ends_focus_on_a_cat_that_left() {
+        let mut w = World::new(OUT, OPTS);
+        let one = vec![("acme".to_string(), vec![CatId(1)])];
+        w.sync_contexts(&one, 0.0);
+        let mut now = 0.0;
+        w.action(Action::Focus(Target::CatTerm(CatId(1))), now);
+        settle(&mut w, &mut now);
+        assert_eq!(w.mode().label(), "FOCO");
+        let out = w.sync_contexts(&[("acme".to_string(), vec![])], now);
+        assert_eq!(w.mode().label(), "NAVEGAR");
+        assert!(out.contains(&Out::Effect(Effect::KeyboardLeave)), "{out:?}");
     }
 }

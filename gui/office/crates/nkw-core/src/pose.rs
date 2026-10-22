@@ -5,8 +5,9 @@
 //! right (towards +x); positive pitch looks up.
 
 use glam::{Mat4, Vec2, Vec3};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Pose {
     pub pos: Vec3,
     /// radians, positive turns right

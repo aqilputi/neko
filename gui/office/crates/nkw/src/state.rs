@@ -1,7 +1,7 @@
 //! The compositor state: Smithay's protocol states, the windows, the world
 //! and the graphics. The shape follows Smithay's `smallvil` (MIT).
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,13 +24,39 @@ use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::shm::ShmState;
 
-use nkw_core::{ScreenId, Time, Want, Wish};
+use nkw_core::{Effect, RoomId, ScreenId, Time, Want, Wish};
+use serde_json::Value;
 
 use crate::cli::Cli;
+use crate::ext::{self, EffectTo, Ext, Plugin, Req};
 use crate::frame::Gfx;
 use crate::render::{self, Lod};
 use crate::stats::{Stats, mono_s};
-use crate::world::{Out, World};
+use crate::world::{Cmd, Out, World};
+
+/// A `Ctx` for a hook call, borrowing the hub's fields (so `self.ext` stays
+/// free to be borrowed mutably next to it).
+#[macro_export]
+#[doc(hidden)]
+macro_rules! hook_ctx {
+    ($st:expr, $now:expr) => {
+        $crate::hook_ctx!($st, $now, None)
+    };
+    ($st:expr, $now:expr, $line:expr) => {
+        $crate::ext::Ctx {
+            world: &$st.world,
+            now: $now,
+            frame: $st.stats.frames,
+            reduced_motion: $st.cli.reduced_motion,
+            demo: $st.cli.demo,
+            scale: $st.world.out.scale as f64,
+            size_px: [$st.world.out.width_px, $st.world.out.height_px],
+            pids: &$st.pids,
+            visible_rooms: &$st.visible,
+            line: $line,
+        }
+    };
+}
 
 /// Per-client data.
 #[derive(Default)]
@@ -99,6 +125,12 @@ pub struct Nkw {
     pub script: Option<crate::app::Script>,
     /// the keysym of the key being handled (the filter sees it)
     pub last_sym: u32,
+    /// the plugins and the router (S7)
+    pub ext: Ext,
+    /// client pids, from Smithay credentials
+    pub pids: BTreeMap<ScreenId, u32>,
+    /// the rooms the last world pass drew (current + what plugins opened)
+    pub visible: Vec<RoomId>,
 }
 
 impl Nkw {
@@ -143,6 +175,23 @@ impl Nkw {
         for o in outs {
             let serial = SERIAL_COUNTER.next_serial();
             match o {
+                Out::Effect(e) => self.route_effect(e),
+                Out::Object(id, a) => {
+                    let now = self.now();
+                    let reqs = {
+                        let ctx = crate::hook_ctx!(self, now);
+                        self.ext.objects.on_object(id, a, &ctx)
+                    };
+                    self.apply_reqs(reqs);
+                }
+                Out::Configure {
+                    screen,
+                    size,
+                    fullscreen,
+                    maximized,
+                } => self.configure(screen, size, fullscreen, maximized),
+                Out::Close(s) => self.close(s),
+                Out::Spawn(argv) => self.spawn(&argv),
                 Out::KeyboardEnter(id) => {
                     let Some(w) = self.window(id).cloned() else {
                         continue;
@@ -183,6 +232,174 @@ impl Nkw {
                     }
                 }
             }
+        }
+    }
+
+    /// An effect the World passed through, to its plugin (S7 table).
+    pub fn route_effect(&mut self, e: Effect) {
+        let now = self.now();
+        let line = match e {
+            Effect::SendLine => self.ext.overlay.take_line(),
+            _ => None,
+        };
+        let to = ext::route_effect(&e, self.world.purpose());
+        let reqs = {
+            let ctx = crate::hook_ctx!(self, now, line.as_deref());
+            match to {
+                EffectTo::Overlay => self.ext.overlay.effect(&e, &ctx),
+                EffectTo::Cats => self.ext.cats.effect(&e, &ctx),
+                EffectTo::Objects => self.ext.objects.effect(&e, &ctx),
+                EffectTo::Wm => self.ext.wm.effect(&e, &ctx),
+            }
+        };
+        self.apply_reqs(reqs);
+    }
+
+    /// Apply what a plugin asked for, in order.
+    pub fn apply_reqs(&mut self, reqs: Vec<Req>) {
+        for r in reqs {
+            let now = self.now();
+            match r {
+                Req::Action(a) => {
+                    let outs = self.world.action(a, now);
+                    self.apply(outs);
+                }
+                Req::Cmd(c) => {
+                    let outs = self.world.command(c, now);
+                    self.apply(outs);
+                }
+                Req::Command { name, args } => self.dispatch(&name, &args),
+                Req::Wish(w) => self.world.want(w),
+                Req::GlideTo(p) => self.world.glide_free(p, now),
+                Req::Spawn(argv) => self.spawn(&argv),
+                Req::Configure {
+                    screen,
+                    size,
+                    fullscreen,
+                    maximized,
+                } => self.configure(screen, size, fullscreen, maximized),
+                Req::Close(s) => self.close(s),
+                Req::Toast { text, kind, ms } => self.ext.overlay.toast(&text, kind, ms, now),
+                Req::Cue { cue, at } => {
+                    let ctx = crate::hook_ctx!(self, now);
+                    self.ext.objects.cue(cue, at, &ctx);
+                }
+                Req::Keymap(b) => self.ext.router.set_bindings(b),
+                Req::Quit(code) => self.quit(code),
+            }
+        }
+    }
+
+    /// A command by name (router, palette, plugins): the World's when
+    /// `Cmd::from_name` knows it, else the first plugin that takes it.
+    pub fn dispatch(&mut self, name: &str, args: &BTreeMap<String, String>) {
+        if let Some(c) = Cmd::from_name(name, args) {
+            self.run_cmd(c);
+            return;
+        }
+        let now = self.now();
+        let reqs = {
+            let ctx = crate::hook_ctx!(self, now);
+            let e = &mut self.ext;
+            let mut ps: [&mut dyn Plugin; 4] =
+                [&mut e.overlay, &mut e.cats, &mut e.objects, &mut e.wm];
+            ext::command(&mut ps, name, args, &ctx)
+        };
+        match reqs {
+            Some(r) => self.apply_reqs(r),
+            None => tracing::warn!("command {name}: nobody takes it"),
+        }
+        self.wake();
+    }
+
+    /// The plugins' wakeup: drain, tick, their obstacles into the World.
+    pub fn ext_step(&mut self, now: Time) {
+        for i in 0..4 {
+            let reqs = {
+                let ctx = crate::hook_ctx!(self, now);
+                self.ext.plugins()[i].drain(&ctx)
+            };
+            self.apply_reqs(reqs);
+        }
+        for i in 0..4 {
+            let reqs = {
+                let ctx = crate::hook_ctx!(self, now);
+                self.ext.plugins()[i].tick(&ctx)
+            };
+            self.apply_reqs(reqs);
+        }
+        let room = self.world.current_room_id();
+        let extra = {
+            let ctx = crate::hook_ctx!(self, now);
+            ext::obstacles(&self.ext.plugins_ref(), room, &ctx)
+        };
+        self.world.set_obstacles(room, extra);
+    }
+
+    /// A plugin thread pinged the loop.
+    pub fn ext_wake(&mut self) {
+        let now = self.now();
+        self.ext_step(now);
+        self.world.tick(now);
+        self.wake();
+    }
+
+    /// Every wish of this frame: the World's and the plugins'.
+    pub fn all_wishes(&self) -> Vec<Wish> {
+        let mut w = self.world.wishes();
+        let ctx = crate::hook_ctx!(self, self.now());
+        for p in self.ext.plugins_ref() {
+            w.extend(p.wishes(&ctx));
+        }
+        w
+    }
+
+    /// `dump`: the World's JSON and `"ext"` (S12).
+    pub fn dump(&self) -> Value {
+        let mut v = self.world.dump(&self.all_wishes());
+        v["ext"] = self.ext.dump();
+        v
+    }
+
+    /// Configure a toplevel (size, fullscreen, maximized) and send it.
+    pub fn configure(
+        &mut self,
+        screen: ScreenId,
+        size: Option<glam::Vec2>,
+        fullscreen: Option<bool>,
+        maximized: Option<bool>,
+    ) {
+        let Some(t) = self.window(screen).and_then(|w| w.toplevel().cloned()) else {
+            return;
+        };
+        t.with_pending_state(|s| {
+            if let Some(v) = size {
+                s.size = Some((v.x as i32, v.y as i32).into());
+            }
+            for (on, st) in [
+                (fullscreen, xdg_toplevel::State::Fullscreen),
+                (maximized, xdg_toplevel::State::Maximized),
+            ] {
+                match on {
+                    Some(true) => {
+                        s.states.set(st);
+                    }
+                    Some(false) => {
+                        s.states.unset(st);
+                    }
+                    None => {}
+                }
+            }
+        });
+        if t.is_initial_configure_sent() {
+            t.send_pending_configure();
+        }
+    }
+
+    /// Ask a window to close (`xdg_toplevel.close`; never kills).
+    pub fn close(&mut self, screen: ScreenId) {
+        if let Some(t) = self.window(screen).and_then(|w| w.toplevel()) {
+            t.send_close();
         }
     }
 
