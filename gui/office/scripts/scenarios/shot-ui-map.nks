@@ -1,0 +1,13 @@
+# The map (P3): `o` shows the current room from above, `o` again the whole floor.
+key J
+wait 300
+key o
+wait 200
+expect json /ext/overlay/map/floor false
+shot ${OUT}/shot-ui-map.png
+key o
+wait 200
+expect json /ext/overlay/map/floor true
+shot ${OUT}/shot-ui-map-floor.png
+dump ${OUT}/dump-ui-map.json
+quit

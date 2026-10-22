@@ -25,6 +25,7 @@ wayland-client = "0.31"
 smithay-client-toolkit = "0.21"
 # wave 2b: each package appends its own deps, one per line, under its marker only
 # P2
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 # P3
 # P4
 # P5

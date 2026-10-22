@@ -11,7 +11,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub mod clock;
 mod dbus;
@@ -42,7 +42,7 @@ pub enum SysEvent {
     Error { source: &'static str, msg: String },
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MediaState {
     pub playing: bool,
     pub title: String,
@@ -55,7 +55,7 @@ pub struct MediaState {
     pub player: String,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PowerState {
     pub present: bool,
     pub pct: u8,
@@ -63,7 +63,7 @@ pub struct PowerState {
     pub time_to_empty_s: Option<u32>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetState {
     pub connected: bool,
     pub wifi: bool,
@@ -71,7 +71,7 @@ pub struct NetState {
     pub strength: u8,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClockTick {
     pub unix_s: i64,
     pub hour: u8,
@@ -81,10 +81,10 @@ pub struct ClockTick {
 }
 
 /// A PipeWire node id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StreamId(pub u32);
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StreamInfo {
     pub id: StreamId,
     /// `application.process.id` (self-declared, but filled by libpulse/libpipewire from `getpid()`).
@@ -96,7 +96,7 @@ pub struct StreamInfo {
     pub output: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum AudioEvent {
     Added(StreamInfo),
     Removed(StreamId),
@@ -299,9 +299,20 @@ impl Sys {
         &*self.audio
     }
 
+    /// The same, shared: for a caller that must reach PipeWire from elsewhere (a panic hook
+    /// restoring the volumes it changed).
+    pub fn audio_handle(&self) -> Arc<dyn StreamVolume> {
+        self.audio.clone()
+    }
+
     /// Some only with the pipewire feature and a running daemon.
     pub fn playback(&self) -> Option<&dyn Playback> {
         self.playback.as_deref()
+    }
+
+    /// The same, shared (the caller keeps it to `wake()` the stream later).
+    pub fn playback_handle(&self) -> Option<Arc<dyn Playback>> {
+        self.playback.clone()
     }
 
     /// Stops and joins every adapter thread, waiting at most 1 s in total; a thread still stuck

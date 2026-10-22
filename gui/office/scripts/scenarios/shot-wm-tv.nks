@@ -1,0 +1,17 @@
+# Fullscreen as a TV (P2): a testclient that asks for fullscreen; in NAV its quad is a TV
+# on the desk (the whole output's size); in FOCO it covers the output (no world pass).
+key J
+expect json /station/desk/room 1
+spawn ${TESTCLIENT} --app-id alpha --checker --fullscreen --no-frame-wait
+wait json /screens/0/fullscreen true 3000
+wait json /screens/0/size [1280.0,720.0] 3000
+wait 600
+expect mode NAV
+shot ${OUT}/shot-wm-tv.png
+dump ${OUT}/dump-wm-tv.json
+key Return
+expect mode FOCO
+wait 600
+expect json /focus/rect [0.0,0.0,1280.0,720.0]
+shot ${OUT}/shot-wm-tv-foco.png
+quit

@@ -1,0 +1,11 @@
+# S3 (plano-mundo §1.3): demo ocupado, 5 gatos ativos e 1 carteiro (o fixture "busy" do
+# plugin dos gatos, P4), 3 janelas em NAV. Mede CPU do mundo animado e CPU por quadro.
+# Até os gatos do P4 existirem, o inject é um no-op e o cenário mede só as janelas.
+#@warmup 3000
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait --log ${RUN}/client-alpha.json
+spawn ${TESTCLIENT} --app-id bravo --color cc6633 --no-frame-wait --log ${RUN}/client-bravo.json
+spawn ${TESTCLIENT} --app-id demo --checker --no-frame-wait --log ${RUN}/client-demo.json
+wait 1000
+inject cats {"fixture":"busy"}
+wait 1000
+expect mode NAV

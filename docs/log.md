@@ -5,6 +5,27 @@ e as entradas antigas mantêm o nome da época.
 
 ## 2026-10-22
 
+- **progresso:** onda 2 do mundo (`nkw`), seis pacotes em paralelo sobre os contratos congelados:
+  - **WM:** operações da faixa e presets, pilhas, telas no ar, diálogos na mesa da mãe, tela cheia como TV,
+    xdg-activation, `world.json` com regras e memória de lugar, ponte da área de transferência com o host,
+    lançador `.desktop`.
+  - **interface:** caixa de diálogo no estilo Animal Crossing com texto letra a letra, HUD com selos,
+    toasts, SALTO, COMANDOS, crachás e mapa; router com os modos do keymap.
+  - **gatos:** aldeões por sessão nas mesas, com o rig do `nkw-gl` e pelagem por id; monitores com tail ou
+    painel ao vivo; CONVERSA ligada aos comandos do core; inbox com A\*. Aceite da fase 2 verde contra
+    `nk serve --demo` ("1" responde o `api-gateway`).
+  - **objetos e áudio:** vitrola, relógio e faixa do dia, bateria, planta, portas com estado (colisão,
+    culling, som, auto-fechar), áudio por proximidade v1 e o cofre. Tick do plugin ≈ 6 µs.
+  - **modelos:** 41 malhas novas, gatos aldeões, filhotes e os móveis dos objetos.
+  - **infra:** dano real da textura do mundo e upload só do que é visível (S4 p95 de 4–6 para 3 ms com a
+    máquina carregada); `wp_fractional_scale_v1` (FOCO pixel-exato a 1,25); cenários S3, S3r e S5; patch
+    de 60 linhas no backend winit do Smithay para movimento relativo, como proposta.
+- **decisão:** orçamento de RAM na partida de 45 para ~90 MB: o driver Mesa sozinho ocupa 48 MB
+  (`NKW_MEM=1`); continua ≤ 110 MB com 8 janelas.
+- **pendências:** medir `make world-perf` com a máquina ociosa; S4 p50 ainda acima de 1 ms; aplicar o patch
+  de movimento relativo (mouse-look); "N" espelhado no ON AIR; a sala não tem teto; gatos andando usam o rig
+  sentado; overrides de tecla do Lua ainda não chegam ao `/v1/keymap`.
+
 - **progresso:** fase 0 do mundo (`nkw`, [plano-mundo.md](plano-mundo.md)) fechada. Medida aninhada no niri
   (Iris Xe), `world-perf.sh` com janelas de 60 s, binário `--profile world`:
   1. foot, um app GTK4 e o mpv (dmabuf) aparecem nos quads e digitam no FOCO, com tecla morta ✓;

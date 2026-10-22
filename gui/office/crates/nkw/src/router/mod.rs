@@ -1,15 +1,26 @@
-//! Keys → what to do with them (§3.6, §3.12). P3 replaces this stub in wave
-//! 2b with the keymap modes of S9; the stub is phase 0's key filter moved
-//! here: in FOCO only `ctrl+]` and the `world+` chords are the world's,
-//! everything else goes to the client; in every other mode all keys are the
-//! world's.
+//! Keys → what to do with them (§3.6, §3.12, S9). Every key event is named
+//! the core's way (`KeyEv.name`, built by the hub), looked up in the keymap
+//! mode of the world mode along its chain (`names::chain`), with multi-key
+//! sequences (`gg`) through `nk_cats::keys::Router::feed_in`:
+//!
+//! - the bindings are the core's (`/v1/keymap`, `Req::Keymap`) or, until
+//!   they come, the S9 table ([`table::FALLBACK`]); any key with `world+`
+//!   is global whatever mode it was registered in;
+//! - FOCO: what the global layer and `world.focus` do not take goes to the
+//!   window (`Forward`);
+//! - SALTO, COMANDOS, the reply line and the map: printable keys are text
+//!   (`Text`, for the overlay), the rest resolves in the mode;
+//! - ANDAR's held keys (`w a s d q e`, arrows) are swallowed: the World
+//!   walks with them itself.
 
-use std::collections::BTreeMap;
+pub mod names;
+pub mod table;
 
-use nkw_core::{Dir, Mode};
+use std::collections::{BTreeMap, HashSet};
+
+use nk_cats::keys::{self as ck, Bind};
+use nkw_core::Mode;
 use serde_json::Value;
-
-use crate::world::Cmd;
 
 /// The modifiers of a key event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,72 +75,9 @@ impl WorldMod {
             WorldMod::Super => "super",
         }
     }
-
-    fn held(self, m: KeyMods) -> bool {
-        match self {
-            WorldMod::CtrlAlt => m.ctrl && m.alt,
-            WorldMod::Super => m.logo,
-        }
-    }
 }
 
-pub struct Router {
-    world_mod: WorldMod,
-    focus_escape: String,
-    bindings: Vec<nk_client::Binding>,
-}
-
-impl Router {
-    /// Starts with the fallback table.
-    pub fn new(world_mod: WorldMod, focus_escape: &str) -> Router {
-        Router {
-            world_mod,
-            focus_escape: focus_escape.into(),
-            bindings: Vec::new(),
-        }
-    }
-
-    /// `/v1/keymap` replaces the fallback; empty = fallback. (The stub keeps
-    /// them for `dump` and routes with the fallback.)
-    pub fn set_bindings(&mut self, b: Vec<nk_client::Binding>) {
-        self.bindings = b;
-    }
-
-    pub fn route(&mut self, mode: &Mode, sub: Option<&str>, ev: &KeyEv) -> Route {
-        let _ = sub;
-        match filter_with(mode, ev.mods, ev.sym, self.world_mod) {
-            Verdict::Forward => Route::Forward,
-            Verdict::Intercept(None) => Route::Swallow,
-            Verdict::Intercept(Some(c)) => {
-                let (name, args) = c.name();
-                Route::Command {
-                    name: name.into(),
-                    args,
-                }
-            }
-        }
-    }
-
-    pub fn dump(&self) -> Value {
-        serde_json::json!({
-            "stub": true,
-            "world_mod": self.world_mod.name(),
-            "focus_escape": self.focus_escape,
-            "bindings": self.bindings.len(),
-        })
-    }
-}
-
-/// What the key filter decided.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Verdict {
-    /// to the focused client (FOCO only)
-    Forward,
-    /// the world's; maybe a command
-    Intercept(Option<Cmd>),
-}
-
-/// keysyms the filter needs (xkb values; avoids depending on the keymap here)
+/// keysyms the World's walking keys use (xkb values)
 pub mod sym {
     pub const H: u32 = 0x68;
     pub const J: u32 = 0x6a;
@@ -149,212 +97,211 @@ pub mod sym {
     pub const DOWN: u32 = 0xff54;
 }
 
-fn dir_of(s: u32) -> Option<Dir> {
-    match s {
-        sym::H | sym::LEFT => Some(Dir::Left),
-        sym::L | sym::RIGHT => Some(Dir::Right),
-        sym::K | sym::UP => Some(Dir::Up),
-        sym::J | sym::DOWN => Some(Dir::Down),
-        _ => None,
-    }
+/// ANDAR's held keys: the World reads them itself (`World::walk_key`).
+const HELD: [&str; 8] = [
+    "world.forward",
+    "world.back",
+    "world.strafe_left",
+    "world.strafe_right",
+    "world.turn_left",
+    "world.turn_right",
+    "world.look_up",
+    "world.look_down",
+];
+
+/// A modifier key alone (Shift, Control, Alt, Super, AltGr …).
+fn is_modifier(sym: u32) -> bool {
+    (0xffe1..=0xffee).contains(&sym) || (0xfe01..=0xfe0f).contains(&sym)
 }
 
-/// The key filter (§3.6) with `world+` = `ctrl+alt`. `s`: the modified
-/// keysym.
-pub fn filter(mode: &Mode, m: KeyMods, s: u32) -> Verdict {
-    filter_with(mode, m, s, WorldMod::CtrlAlt)
+pub struct Router {
+    world_mod: WorldMod,
+    focus_escape: String,
+    /// what `/v1/keymap` sent (empty: the fallback is in use)
+    keymap: Vec<nk_client::Binding>,
+    /// the bindings in effect, keys canonical
+    binds: Vec<Bind>,
+    inner: ck::Router,
+    /// the keymap mode of the last key (a mode change drops a sequence)
+    last_mode: &'static str,
+    routed: u64,
 }
 
-fn filter_with(mode: &Mode, m: KeyMods, s: u32, wm: WorldMod) -> Verdict {
-    let world = wm.held(m);
-    if mode.focus().is_some() {
-        if world {
-            let lower = if (0x41..=0x5a).contains(&s) {
-                s | 0x20
-            } else {
-                s
-            };
-            return Verdict::Intercept(match lower {
-                sym::W => Some(Cmd::Walk),
-                _ => dir_of(lower).map(Cmd::Neighbour),
-            });
+impl Router {
+    /// Starts with the S9 fallback table.
+    pub fn new(world_mod: WorldMod, focus_escape: &str) -> Router {
+        let binds = fallback_binds(world_mod, focus_escape);
+        Router {
+            world_mod,
+            focus_escape: focus_escape.into(),
+            keymap: Vec::new(),
+            inner: build(&binds),
+            binds,
+            last_mode: "normal.world",
+            routed: 0,
         }
-        if m.ctrl && s == sym::BRACKETRIGHT {
-            return Verdict::Intercept(Some(Cmd::Back));
-        }
-        return Verdict::Forward;
     }
-    if m.ctrl || m.alt || m.logo {
-        return Verdict::Intercept(if world && s == sym::W {
-            Some(Cmd::Walk)
+
+    /// `/v1/keymap` replaces the fallback; empty = fallback. A world mode
+    /// the keymap does not mention at all keeps its fallback rows.
+    pub fn set_bindings(&mut self, b: Vec<nk_client::Binding>) {
+        self.binds = if b.iter().all(|x| x.keys.is_empty()) {
+            fallback_binds(self.world_mod, &self.focus_escape)
         } else {
-            None
+            keymap_binds(&b, self.world_mod, &self.focus_escape)
+        };
+        self.keymap = b;
+        self.inner = build(&self.binds);
+    }
+
+    pub fn route(&mut self, mode: &Mode, sub: Option<&str>, ev: &KeyEv) -> Route {
+        let m = names::mode_of(mode, sub);
+        let focus = mode.focus().is_some();
+        if m != self.last_mode {
+            self.inner.reset();
+            self.last_mode = m;
+        }
+        if is_modifier(ev.sym) {
+            return if focus {
+                Route::Forward
+            } else {
+                Route::Swallow
+            };
+        }
+        self.routed += 1;
+        let text = names::is_text_mode(m);
+        let printable = ev.utf8.is_some() && !ev.mods.ctrl && !ev.mods.alt && !ev.mods.logo;
+        if text && printable {
+            return Route::Text(ev.clone());
+        }
+        match self.inner.feed_in(m, &ev.name) {
+            ck::Route::Core(c) | ck::Route::Unsupported(c) => {
+                if (m == "world.talk" && names::is_client_command(&c))
+                    || (m == "world.walk" && HELD.contains(&c.as_str()))
+                {
+                    return Route::Swallow;
+                }
+                Route::Command {
+                    name: c,
+                    args: BTreeMap::new(),
+                }
+            }
+            ck::Route::Pending => Route::Pending,
+            ck::Route::Client(_) => Route::Swallow,
+            ck::Route::None if focus => Route::Forward,
+            ck::Route::None if text => Route::Text(ev.clone()),
+            ck::Route::None => Route::Swallow,
+        }
+    }
+
+    /// The keys in effect for a command in a mode (for the palette's key
+    /// column and the help).
+    pub fn keys_of(&self, cmd: &str) -> Vec<String> {
+        self.binds
+            .iter()
+            .filter(|b| b.command == cmd)
+            .flat_map(|b| b.keys.iter().cloned())
+            .collect()
+    }
+
+    pub fn dump(&self) -> Value {
+        serde_json::json!({
+            "world_mod": self.world_mod.name(),
+            "focus_escape": self.focus_escape,
+            "source": if self.keymap.is_empty() { "fallback" } else { "keymap" },
+            "bindings": self.keymap.len(),
+            "binds": self.binds.iter().map(|b| b.keys.len()).sum::<usize>(),
+            "mode": self.last_mode,
+            "pending": self.inner.pending(),
+            "routed": self.routed,
+        })
+    }
+}
+
+/// The router over `binds`, with every world mode's chain known.
+fn build(binds: &[Bind]) -> ck::Router {
+    let mut all = binds.to_vec();
+    // a mode without bindings still needs its chain (the global layer)
+    for m in names::MODES.iter().chain(&["world"]) {
+        all.push(Bind {
+            command: String::new(),
+            keys: Vec::new(),
+            mode: m.to_string(),
+            help: String::new(),
         });
     }
-    let walking = mode.walking();
-    Verdict::Intercept(match s {
-        sym::ESCAPE => Some(Cmd::Back),
-        _ if walking => None,
-        sym::W => Some(Cmd::Walk),
-        sym::UPPER_J => Some(Cmd::RoomNext),
-        sym::UPPER_K => Some(Cmd::RoomPrev),
-        sym::RETURN | sym::KP_ENTER | sym::I => Some(Cmd::Focus),
-        s => dir_of(s).map(Cmd::Move),
-    })
+    ck::Router::with_modes(&all, &HashSet::new(), &names::chain)
+}
+
+/// One binding, its keys canonical; `world+` keys go to the global layer.
+fn push(out: &mut Vec<Bind>, mode: &str, key: &str, cmd: &str, wm: WorldMod) {
+    let mode = if names::is_global(key) { "world" } else { mode };
+    let key = names::canonical(key, wm);
+    match out.iter_mut().find(|b| b.mode == mode && b.command == cmd) {
+        Some(b) => {
+            if !b.keys.contains(&key) {
+                b.keys.push(key);
+            }
+        }
+        None => out.push(Bind {
+            command: cmd.into(),
+            keys: vec![key],
+            mode: mode.into(),
+            help: table::title(cmd).unwrap_or_default().into(),
+        }),
+    }
+}
+
+/// The S9 table, with `keys.focus_escape` as FOCO's way out.
+pub fn fallback_binds(wm: WorldMod, focus_escape: &str) -> Vec<Bind> {
+    let mut out = Vec::new();
+    for (mode, key, cmd) in table::FALLBACK {
+        let key = if *mode == "world.focus" && *cmd == "world.back" {
+            focus_escape
+        } else {
+            key
+        };
+        push(&mut out, mode, key, cmd, wm);
+    }
+    out
+}
+
+/// The core's keymap; world modes it never mentions keep the fallback.
+fn keymap_binds(b: &[nk_client::Binding], wm: WorldMod, focus_escape: &str) -> Vec<Bind> {
+    let mut out = Vec::new();
+    for x in b {
+        for k in &x.keys {
+            push(&mut out, &x.mode, k, &x.command, wm);
+        }
+    }
+    let named: HashSet<&str> = b.iter().map(|x| x.mode.as_str()).collect();
+    let global = b
+        .iter()
+        .any(|x| x.keys.iter().any(|k| names::is_global(k)) || x.mode == "world");
+    for f in fallback_binds(wm, focus_escape) {
+        let missing = if f.mode == "world" {
+            !global
+        } else {
+            !named.contains(f.mode.as_str())
+        };
+        if missing {
+            for k in &f.keys {
+                // already canonical: push as is into the same mode
+                match out
+                    .iter_mut()
+                    .find(|o: &&mut Bind| o.mode == f.mode && o.command == f.command)
+                {
+                    Some(o) => o.keys.push(k.clone()),
+                    None => out.push(Bind {
+                        keys: vec![k.clone()],
+                        ..f.clone()
+                    }),
+                }
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::world::World;
-    use nkw_core::Base;
-
-    fn nav() -> Mode {
-        Mode::base(Base::Nav)
-    }
-
-    fn focus() -> Mode {
-        let mut w = crate::render::tests::world(&[&[1]]);
-        w.command(Cmd::Focus, 0.0);
-        w.mode().clone()
-    }
-
-    fn walking() -> Mode {
-        let mut w: World = crate::render::tests::world(&[&[1]]);
-        w.command(Cmd::Walk, 0.0);
-        w.mode().clone()
-    }
-
-    const NONE: KeyMods = KeyMods {
-        ctrl: false,
-        alt: false,
-        shift: false,
-        logo: false,
-    };
-    const CTRL: KeyMods = KeyMods { ctrl: true, ..NONE };
-    const WORLD: KeyMods = KeyMods {
-        ctrl: true,
-        alt: true,
-        ..NONE
-    };
-    const SHIFT: KeyMods = KeyMods {
-        shift: true,
-        ..NONE
-    };
-    const ALT: KeyMods = KeyMods { alt: true, ..NONE };
-    const LOGO: KeyMods = KeyMods { logo: true, ..NONE };
-
-    #[test]
-    fn key_filter_table() {
-        use Verdict::{Forward as F, Intercept as I};
-        let cases: &[(Mode, KeyMods, u32, Verdict)] = &[
-            // NAV: everything is the world's
-            (nav(), NONE, sym::H, I(Some(Cmd::Move(Dir::Left)))),
-            (nav(), NONE, sym::L, I(Some(Cmd::Move(Dir::Right)))),
-            (nav(), NONE, sym::LEFT, I(Some(Cmd::Move(Dir::Left)))),
-            (nav(), NONE, sym::J, I(Some(Cmd::Move(Dir::Down)))),
-            (nav(), NONE, sym::K, I(Some(Cmd::Move(Dir::Up)))),
-            (nav(), SHIFT, sym::UPPER_J, I(Some(Cmd::RoomNext))),
-            (nav(), SHIFT, sym::UPPER_K, I(Some(Cmd::RoomPrev))),
-            (nav(), NONE, sym::RETURN, I(Some(Cmd::Focus))),
-            (nav(), NONE, sym::I, I(Some(Cmd::Focus))),
-            (nav(), NONE, sym::W, I(Some(Cmd::Walk))),
-            (nav(), NONE, sym::ESCAPE, I(Some(Cmd::Back))),
-            (nav(), NONE, 0x61, I(None)),
-            (nav(), CTRL, sym::BRACKETRIGHT, I(None)),
-            (nav(), ALT, sym::H, I(None)),
-            (nav(), WORLD, sym::W, I(Some(Cmd::Walk))),
-            // FOCO: only ctrl+] and world+ are intercepted
-            (focus(), NONE, sym::H, F),
-            (focus(), NONE, sym::RETURN, F),
-            (focus(), NONE, sym::ESCAPE, F),
-            (focus(), SHIFT, sym::UPPER_J, F),
-            (focus(), CTRL, 0x63, F),
-            (focus(), ALT, sym::H, F),
-            (focus(), LOGO, sym::H, F),
-            (focus(), CTRL, sym::BRACKETRIGHT, I(Some(Cmd::Back))),
-            (focus(), WORLD, sym::H, I(Some(Cmd::Neighbour(Dir::Left)))),
-            (focus(), WORLD, sym::L, I(Some(Cmd::Neighbour(Dir::Right)))),
-            (focus(), WORLD, sym::J, I(Some(Cmd::Neighbour(Dir::Down)))),
-            (focus(), WORLD, sym::K, I(Some(Cmd::Neighbour(Dir::Up)))),
-            (focus(), WORLD, sym::W, I(Some(Cmd::Walk))),
-            (focus(), WORLD, 0x57, I(Some(Cmd::Walk))),
-            (focus(), WORLD, 0x61, I(None)),
-            (focus(), WORLD, sym::BRACKETRIGHT, I(None)),
-            // ANDAR keeps only esc and world+w
-            (walking(), NONE, sym::H, I(None)),
-            (walking(), NONE, sym::W, I(None)),
-            (walking(), WORLD, sym::W, I(Some(Cmd::Walk))),
-            (walking(), NONE, sym::ESCAPE, I(Some(Cmd::Back))),
-        ];
-        for (mode, m, s, want) in cases {
-            assert_eq!(filter(mode, *m, *s), *want, "{} {m:?} {s:#x}", mode.label());
-        }
-    }
-
-    fn ev(sym: u32, mods: KeyMods) -> KeyEv {
-        KeyEv {
-            code: 0,
-            sym,
-            name: String::new(),
-            utf8: None,
-            mods,
-            pressed: true,
-        }
-    }
-
-    #[test]
-    fn route_gives_the_filters_verdicts_by_name() {
-        let mut r = Router::new(WorldMod::CtrlAlt, "ctrl+]");
-        let cmd = |n: &str| Route::Command {
-            name: n.into(),
-            args: BTreeMap::new(),
-        };
-        assert_eq!(r.route(&nav(), None, &ev(sym::H, NONE)), cmd("world.left"));
-        assert_eq!(r.route(&nav(), None, &ev(0x61, NONE)), Route::Swallow);
-        assert_eq!(r.route(&focus(), None, &ev(sym::H, NONE)), Route::Forward);
-        assert_eq!(
-            r.route(&focus(), None, &ev(sym::BRACKETRIGHT, CTRL)),
-            cmd("world.back")
-        );
-        assert_eq!(
-            r.route(&focus(), None, &ev(sym::L, WORLD)),
-            cmd("world.focus_right")
-        );
-        // every command the table can give resolves back to itself
-        for (mode, m, s) in [
-            (nav(), NONE, sym::J),
-            (nav(), SHIFT, sym::UPPER_K),
-            (nav(), NONE, sym::RETURN),
-            (nav(), NONE, sym::W),
-            (focus(), WORLD, sym::K),
-        ] {
-            let Verdict::Intercept(Some(c)) = filter(&mode, m, s) else {
-                panic!("{s:#x}");
-            };
-            let Route::Command { name, args } = r.route(&mode, None, &ev(s, m)) else {
-                panic!("{s:#x}");
-            };
-            assert_eq!(Cmd::from_name(&name, &args), Some(c), "{name}");
-        }
-    }
-
-    #[test]
-    fn super_is_the_world_key_in_an_own_session() {
-        let mut r = Router::new(WorldMod::Super, "ctrl+]");
-        assert_eq!(
-            r.route(&focus(), None, &ev(sym::H, LOGO)),
-            Route::Command {
-                name: "world.focus_left".into(),
-                args: BTreeMap::new()
-            }
-        );
-        assert_eq!(r.route(&focus(), None, &ev(sym::H, WORLD)), Route::Forward);
-        assert_eq!(r.route(&nav(), None, &ev(sym::H, LOGO)), Route::Swallow);
-        r.set_bindings(vec![nk_client::Binding::default()]);
-        let d = r.dump();
-        assert_eq!(d["world_mod"], "super");
-        assert_eq!(d["focus_escape"], "ctrl+]");
-        assert_eq!(d["bindings"], 1);
-    }
-}
+mod tests;

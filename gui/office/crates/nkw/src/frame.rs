@@ -15,7 +15,9 @@ use smithay::backend::renderer::element::texture::{TextureRenderBuffer, TextureR
 use smithay::backend::renderer::element::{AsRenderElements, Kind};
 use smithay::backend::renderer::gles::GlesTexture;
 use smithay::backend::renderer::glow::GlowRenderer;
-use smithay::backend::renderer::utils::{import_surface_tree, with_renderer_surface_state};
+use smithay::backend::renderer::utils::{
+    CommitCounter, import_surface_tree, with_renderer_surface_state,
+};
 use smithay::backend::renderer::{Bind, ExportMem, Renderer, Texture, TextureMapping};
 use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::utils::{Physical, Point, Rectangle, Scale, Size, Transform};
@@ -55,6 +57,15 @@ pub struct Gfx {
     pub world: Option<WorldRenderer>,
     /// the world texture as Smithay sees it: (GL id, size, buffer)
     world_buf: Option<(u32, [u32; 2], TextureRenderBuffer<GlesTexture>)>,
+    /// the last world pass's list and each screen's commit then: what the
+    /// next pass compares against to damage only what changed (S4)
+    last_list: Option<nkw_gl::draw::DrawList>,
+    commits: HashMap<ScreenId, CommitCounter>,
+    /// world passes skipped because nothing visible changed
+    pub skipped_passes: u64,
+    /// `NKW_FULL_DAMAGE=1`: the phase-0 path (upload every window, damage the
+    /// whole world texture every pass), for A/B measurements
+    full_damage: bool,
     fade: SolidColorBuffer,
     dim: SolidColorBuffer,
     dim_size: (i32, i32),
@@ -76,6 +87,10 @@ impl Gfx {
             damage,
             world: None,
             world_buf: None,
+            last_list: None,
+            commits: HashMap::new(),
+            skipped_passes: 0,
+            full_damage: std::env::var_os("NKW_FULL_DAMAGE").is_some_and(|v| v == "1"),
             fade: SolidColorBuffer::default(),
             dim: SolidColorBuffer::default(),
             dim_size: (0, 0),
@@ -272,28 +287,49 @@ impl Nkw {
                     cats.upload(gl, &ctx);
                 });
             }
+            // upload only what this pass can show: a window out of view, in
+            // another room or frozen behind FOCO keeps its last texture (S4, b)
+            let shown: Vec<bool> = self
+                .windows
+                .iter()
+                .map(|(id, _)| {
+                    self.gfx.full_damage || render::lod(&self.world, *id) != render::Lod::Hidden
+                })
+                .collect();
             let renderer = self.gfx.renderer();
-            for (_, w) in &self.windows {
-                if let Some(tl) = w.toplevel() {
+            for ((_, w), show) in self.windows.iter().zip(&shown) {
+                if *show && let Some(tl) = w.toplevel() {
                     let _ = import_surface_tree(renderer, tl.wl_surface());
                 }
             }
             let ctx = renderer.context_id();
+            let mut commits: HashMap<ScreenId, CommitCounter> = HashMap::new();
             let texs: HashMap<ScreenId, ClientTex> = self
                 .windows
                 .iter()
-                .filter_map(|(id, w)| {
+                .zip(&shown)
+                .filter_map(|((id, w), show)| {
                     let s = w.toplevel()?.wl_surface().clone();
-                    let t = with_renderer_surface_state(&s, |st| {
-                        st.texture::<GlesTexture>(ctx.clone()).map(|t| ClientTex {
+                    let (t, c) = with_renderer_surface_state(&s, |st| {
+                        let t = st.texture::<GlesTexture>(ctx.clone()).map(|t| ClientTex {
                             id: t.tex_id(),
                             external: external(t.format()),
                             size: [t.width(), t.height()],
                             y_flip: t.is_y_inverted(),
                             opaque: true,
-                        })
-                    })??;
-                    Some((*id, t))
+                        });
+                        (t, st.current_commit())
+                    })?;
+                    // a window not uploaded keeps the commit its texture shows
+                    let seen = if *show {
+                        Some(c)
+                    } else {
+                        self.gfx.commits.get(id).copied()
+                    };
+                    if let Some(c) = seen {
+                        commits.insert(*id, c);
+                    }
+                    Some((*id, t?))
                 })
                 .collect();
             let mut list =
@@ -304,30 +340,75 @@ impl Nkw {
                 self.ext.objects.draw(&ctx, &mut list);
                 self.ext.cats.draw(&ctx, &mut list);
             }
-            cost.cull_us = t.elapsed().as_micros() as u64;
-            let t = Instant::now();
-            let world = self.gfx.world.as_mut().unwrap();
-            let host_r = match &mut self.gfx.host {
-                Host::Winit(b) => b.renderer(),
-                Host::Headless { renderer, .. } => &mut **renderer,
+            // what changed since the last pass: the list itself, or only the
+            // contents of some screens (a client commit; a plugin's texture
+            // may change under the same list, so those always count)
+            let by_tex: HashMap<u32, ScreenId> = texs.iter().map(|(id, t)| (t.id, *id)).collect();
+            let committed: Vec<usize> = list
+                .screens
+                .iter()
+                .enumerate()
+                .filter(|(_, q)| match by_tex.get(&q.tex.id) {
+                    Some(id) => self.gfx.commits.get(id) != commits.get(id),
+                    None => true,
+                })
+                .map(|(i, _)| i)
+                .collect();
+            let tex_rows_gl = self
+                .gfx
+                .world
+                .as_ref()
+                .and_then(|w| w.world_texture())
+                .is_none_or(|t| t.y_flipped);
+            let buf_ok = !self.gfx.full_damage
+                && self
+                    .gfx
+                    .world_buf
+                    .as_ref()
+                    .is_some_and(|(_, size, _)| *size == out_px);
+            let damage = if buf_ok {
+                render::world_damage(
+                    self.gfx.last_list.as_ref(),
+                    &list,
+                    &committed,
+                    out_px,
+                    tex_rows_gl,
+                )
+            } else {
+                render::WorldDamage::Full
             };
-            let res = host_r.with_context(|gl| unsafe {
-                world.resize(gl, out_px)?;
-                world.draw(gl, &list, Target::Offscreen)
-            });
-            cost.submit_us = t.elapsed().as_micros() as u64;
-            match res {
-                Ok(Ok(s)) => {
-                    cost.draws = s.draws;
-                    cost.tris = s.triangles;
-                    cost.gpu_us = s.gpu_ns.map(|n| n / 1000);
+            self.gfx.commits = commits;
+            cost.cull_us = t.elapsed().as_micros() as u64;
+            if damage == render::WorldDamage::None {
+                // the texture already shows this list: no GL work at all
+                self.gfx.skipped_passes += 1;
+                self.sched.last_world = now;
+            } else {
+                let t = Instant::now();
+                let world = self.gfx.world.as_mut().unwrap();
+                let host_r = match &mut self.gfx.host {
+                    Host::Winit(b) => b.renderer(),
+                    Host::Headless { renderer, .. } => &mut **renderer,
+                };
+                let res = host_r.with_context(|gl| unsafe {
+                    world.resize(gl, out_px)?;
+                    world.draw(gl, &list, Target::Offscreen)
+                });
+                cost.submit_us = t.elapsed().as_micros() as u64;
+                match res {
+                    Ok(Ok(s)) => {
+                        cost.draws = s.draws;
+                        cost.tris = s.triangles;
+                        cost.gpu_us = s.gpu_ns.map(|n| n / 1000);
+                    }
+                    Ok(Err(e)) => eprintln!("nkw: world pass: {e:?}"),
+                    Err(e) => eprintln!("nkw: world pass context: {e}"),
                 }
-                Ok(Err(e)) => eprintln!("nkw: world pass: {e:?}"),
-                Err(e) => eprintln!("nkw: world pass context: {e}"),
+                self.sched.last_world = now;
+                self.gfx.check("world pass");
+                self.refresh_world_buf(&damage);
+                self.gfx.last_list = Some(list);
             }
-            self.sched.last_world = now;
-            self.gfx.check("world pass");
-            self.refresh_world_buf();
         }
 
         let t = Instant::now();
@@ -545,7 +626,7 @@ impl Nkw {
     /// Wrap the world renderer's texture for Smithay; on a new GL id (a
     /// resize), the old wrapper is leaked on purpose: `GlesTexture` would
     /// delete an id that `nkw-gl` owns.
-    fn refresh_world_buf(&mut self) {
+    fn refresh_world_buf(&mut self, damage: &render::WorldDamage) {
         let Some(t) = self.gfx.world.as_ref().and_then(|w| w.world_texture()) else {
             return;
         };
@@ -578,7 +659,15 @@ impl Nkw {
         }
         if let Some((_, size, buf)) = self.gfx.world_buf.as_mut() {
             let full = Rectangle::from_size((size[0] as i32, size[1] as i32).into());
-            let _ = buf.render().draw(|_| Ok::<_, ()>(vec![full]));
+            let rects = match damage {
+                render::WorldDamage::Rects(r) if !stale => r
+                    .iter()
+                    .map(|&[x, y, w, h]| Rectangle::new((x, y).into(), (w, h).into()))
+                    .collect(),
+                render::WorldDamage::None if !stale => return,
+                _ => vec![full],
+            };
+            let _ = buf.render().draw(|_| Ok::<_, ()>(rects));
         }
     }
 }

@@ -647,6 +647,9 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
         data_device_state: DataDeviceState::new::<Nkw>(&dh),
         decoration_state: XdgDecorationState::new::<Nkw>(&dh),
         viewporter_state: smithay::wayland::viewporter::ViewporterState::new::<Nkw>(&dh),
+        fractional_state: smithay::wayland::fractional_scale::FractionalScaleManagerState::new::<Nkw>(
+            &dh,
+        ),
         dmabuf: Some((dmabuf_state, dmabuf_global)),
         popups: PopupManager::default(),
         seat,
@@ -659,7 +662,8 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
             ..Sched::default()
         },
         intercepted: HashSet::new(),
-        stats: Stats::from_env(std::env::var("NKW_STATS").ok().as_deref()),
+        stats: Stats::from_env(std::env::var("NKW_STATS").ok().as_deref())
+            .with_mem(std::env::var_os("NKW_MEM").is_some_and(|v| v == "1")),
         exit: None,
         shots: Vec::new(),
         children: Vec::new(),
@@ -721,6 +725,7 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
                     height_px: size.h as u32,
                     scale: scale as f32,
                 };
+                st.broadcast_scale();
                 st.sched.full = true;
                 st.world.want(nkw_core::Wish::world(nkw_core::Want::Once));
                 st.request_frame();

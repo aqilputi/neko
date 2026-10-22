@@ -39,7 +39,6 @@ const WALL: [u8; 4] = [0xf6, 0xee, 0xdf, 0xff];
 const HALL: [u8; 4] = [0xd8, 0xc8, 0xac, 0xff];
 const WOOD: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
 const FRAME: [u8; 4] = [0x6b, 0x5a, 0x4e, 0xff];
-const STAND: [u8; 4] = [0x8a, 0x7a, 0x6e, 0xff];
 const CHAIR: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
 /// A monitor with nothing on it (a cat's terminal before P4, an empty desk).
 const SCREEN_OFF: [u8; 4] = [0x3a, 0x3f, 0x4f, 0xff];
@@ -233,24 +232,16 @@ fn bezel(list: &mut DrawList, p: &ScreenPlace, size: Vec2) {
 /// The placeholder stand (until `nkw_gl::rig::monitor`): a neck from the
 /// desk top up to the lowest screen, and a foot on the desk.
 fn monitor_stand(list: &mut DrawList, slot: &nkw_core::RoomSlot, x: f32, size: Vec2, lift: f32) {
+    // P6's monitor body (S10): neck + foot; the scene keeps one bezel per screen
     let (foot, yaw) = layout::monitor_root(slot, x, size);
-    let neck = foot + Vec3::Y * (lift / 2.0);
-    push(
-        list,
-        MeshId::Cylinder,
-        model(neck, yaw, Vec3::new(NECK_D, lift.max(0.01), NECK_D)),
-        STAND,
-    );
-    push(
-        list,
-        MeshId::Box,
-        model(
-            foot + Vec3::Y * (FOOT_H / 2.0),
-            yaw,
-            Vec3::new(0.4 * size.x, FOOT_H, FOOT_DEPTH),
-        ),
-        STAND,
-    );
+    let root = Mat4::from_rotation_translation(Quat::from_rotation_y(-yaw), foot);
+    let mut parts = Vec::with_capacity(2);
+    nkw_gl::rig::monitor_stand(root, size, lift, &mut parts);
+    let cam = list.camera.pose.pos;
+    for mut i in parts {
+        i.fade = layout::fade_for(cam, i.model.transform_point3(Vec3::ZERO));
+        list.instances.push(i);
+    }
 }
 
 #[cfg(test)]
@@ -348,7 +339,8 @@ mod tests {
         let l = draw_list(&w, &tex, ALL);
         assert_eq!(count(&l, MeshId::Desk), desks);
         assert_eq!(count(&l, MeshId::Chair), desks);
-        assert_eq!(count(&l, MeshId::Cylinder), desks, "one stand each");
+        assert_eq!(count(&l, MeshId::MonitorStand), desks, "one stand each");
+        assert_eq!(count(&l, MeshId::MonitorFoot), desks, "one foot each");
         assert_eq!(
             count(&l, MeshId::MonitorFrame),
             desks,
@@ -360,8 +352,9 @@ mod tests {
         assert_eq!(count(&one, MeshId::Desk), w.rooms[1].desks.len());
         assert_eq!(
             count(&one, MeshId::Box),
-            count(&l, MeshId::Box) - (desks - 3) * 2
+            count(&l, MeshId::Box) - (desks - 3),
         );
+        assert_eq!(count(&one, MeshId::MonitorStand), w.rooms[1].desks.len());
     }
 
     #[test]
@@ -371,17 +364,19 @@ mod tests {
         let neck = l
             .instances
             .iter()
-            .find(|i| i.mesh == MeshId::Cylinder)
+            .find(|i| i.mesh == MeshId::MonitorStand)
             .unwrap();
+        // the neck mesh runs y = 0..1 (kit convention)
         let (bot, top) = (
-            neck.model.transform_point3(Vec3::new(0.0, -0.5, 0.0)).y,
-            neck.model.transform_point3(Vec3::new(0.0, 0.5, 0.0)).y,
+            neck.model.transform_point3(Vec3::ZERO).y,
+            neck.model.transform_point3(Vec3::Y).y,
         );
         assert!((bot - layout::DESK_TOP).abs() < 1e-5, "{bot}");
         let p = w.screen_place(0, 0, 0);
+        let screen_bottom = p.center.y - 0.36;
         assert!(
-            (top - (p.center.y - 0.36)).abs() < 1e-5,
-            "up to the screen: {top}"
+            top >= screen_bottom && top <= p.center.y + 0.36,
+            "up into the screen: {top} vs bottom {screen_bottom}"
         );
         let desk = l.instances.iter().find(|i| i.mesh == MeshId::Desk).unwrap();
         let d = desk.model.transform_point3(Vec3::ZERO);

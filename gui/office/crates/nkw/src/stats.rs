@@ -88,6 +88,8 @@ pub struct Stats {
     last_animated: Option<f64>,
     ext_tick_us: Vec<u64>,
     pub rate_wishes_max: u64,
+    /// `NKW_MEM=1`: an RSS attribution line (`nkw-mem …`) at the first frame and at exit
+    pub mem: bool,
 }
 
 impl Stats {
@@ -98,6 +100,12 @@ impl Stats {
             gpu: v == Some("gpu"),
             ..Stats::default()
         }
+    }
+
+    /// `NKW_MEM=1`: print the RSS attribution at the first frame and at exit.
+    pub fn with_mem(mut self, on: bool) -> Stats {
+        self.mem = on;
+        self
     }
 
     /// A frame was drawn; `animated`: something wanted every frame, so a
@@ -111,6 +119,9 @@ impl Stats {
             .push(f.update_us + f.cull_us + f.submit_us + f.compose_us);
         if self.first_frame_ms.is_none() {
             self.first_frame_ms = since_process_start_ms();
+            if self.mem {
+                print_mem("first_frame");
+            }
         }
         if animated {
             if let Some(prev) = self.last_animated {
@@ -156,6 +167,9 @@ impl Stats {
     }
 
     pub fn print_summary(&mut self) {
+        if self.mem {
+            print_mem("exit");
+        }
         if self.enabled {
             let s = self.summary();
             eprintln!("nkw-stats {}", serde_json::to_string(&s).unwrap());
@@ -175,6 +189,89 @@ fn parse_kb(status: &str, key: &str) -> Option<u64> {
         .find_map(|l| l.strip_prefix(key))
         .and_then(|v| v.split_whitespace().next())
         .and_then(|v| v.parse().ok())
+}
+
+/// Where a mapping's resident pages come from (the RSS attribution).
+pub fn mem_kind(path: &str, exe: &str) -> &'static str {
+    let lib = path.rsplit('/').next().unwrap_or(path);
+    if path.is_empty() {
+        "anon"
+    } else if path == "[heap]" {
+        "heap"
+    } else if path.starts_with("[stack") {
+        "stack"
+    } else if path.starts_with('[') {
+        "kernel"
+    } else if !exe.is_empty() && (path == exe || path.strip_suffix(" (deleted)") == Some(exe)) {
+        "binary"
+    } else if path.starts_with("/dev/dri") || path.contains("i915") || path.contains("drm") {
+        "gpu_buffers"
+    } else if lib.contains("_dri")
+        || lib.starts_with("libgallium")
+        || lib.starts_with("libLLVM")
+        || lib.starts_with("libEGL_mesa")
+        || lib.starts_with("libGLX_mesa")
+        || lib.starts_with("libglapi")
+        || lib.starts_with("libdrm")
+        || lib.starts_with("libvulkan")
+        || lib.starts_with("libgbm")
+    {
+        "gpu_driver"
+    } else if path.starts_with("/memfd:")
+        || path.starts_with("/dev/shm")
+        || path.starts_with("/SYSV")
+    {
+        "shm"
+    } else if lib.contains(".so") {
+        "libs"
+    } else {
+        "files"
+    }
+}
+
+/// `Rss` of `/proc/PID/smaps`, summed by [`mem_kind`], kB.
+pub fn mem_attribution(smaps: &str, exe: &str) -> std::collections::BTreeMap<&'static str, u64> {
+    let mut by = std::collections::BTreeMap::new();
+    let mut kind = "anon";
+    for l in smaps.lines() {
+        let mut f = l.split_whitespace();
+        let Some(first) = f.next() else { continue };
+        if first.contains('-')
+            && first.chars().next().is_some_and(|c| c.is_ascii_hexdigit())
+            && !first.ends_with(':')
+        {
+            // "start-end perms offset dev inode [path]": the path may hold spaces
+            let path = f
+                .nth(4)
+                .map(|p| &l[l.find(p).unwrap_or(l.len())..])
+                .unwrap_or("");
+            kind = mem_kind(path.trim(), exe);
+        } else if first == "Rss:" {
+            let kb: u64 = f.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            *by.entry(kind).or_insert(0) += kb;
+        }
+    }
+    by
+}
+
+/// `nkw-mem {"at":…,"rss_kb":…,"hwm_kb":…,"by":{kind: kB}}` on stderr.
+fn print_mem(at: &str) {
+    let smaps = std::fs::read_to_string("/proc/self/smaps").unwrap_or_default();
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let exe = std::fs::read_link("/proc/self/exe")
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let v = serde_json::json!({
+        "at": at,
+        "rss_kb": parse_kb(&status, "VmRSS:"),
+        "hwm_kb": parse_kb(&status, "VmHWM:"),
+        "anon_kb": parse_kb(&status, "RssAnon:"),
+        "file_kb": parse_kb(&status, "RssFile:"),
+        "shmem_kb": parse_kb(&status, "RssShmem:"),
+        "threads": parse_kb(&status, "Threads:"),
+        "by": mem_attribution(&smaps, &exe),
+    });
+    eprintln!("nkw-mem {v}");
 }
 
 /// The process start time (`/proc/self/stat` field 22) to now, ms.
@@ -285,6 +382,49 @@ mod tests {
         let g = Stats::from_env(Some("gpu"));
         assert!(g.enabled && g.gpu);
         assert!(!Stats::from_env(Some("0")).enabled);
+    }
+
+    #[test]
+    fn mem_kinds() {
+        let exe = "/w/target/world/nkw";
+        let cases = [
+            ("", "anon"),
+            ("[heap]", "heap"),
+            ("[stack]", "stack"),
+            ("[vdso]", "kernel"),
+            (exe, "binary"),
+            ("/dev/dri/renderD128", "gpu_buffers"),
+            ("/usr/lib/dri/iris_dri.so", "gpu_driver"),
+            ("/usr/lib/libgallium-25.2.so", "gpu_driver"),
+            ("/usr/lib/libLLVM.so.20.1", "gpu_driver"),
+            ("/usr/lib/libEGL_mesa.so.0.0.0", "gpu_driver"),
+            ("/usr/lib/libc.so.6", "libs"),
+            ("/memfd:wayland-shm (deleted)", "shm"),
+            ("/usr/share/fonts/x.ttf", "files"),
+        ];
+        for (p, want) in cases {
+            assert_eq!(mem_kind(p, exe), want, "{p}");
+        }
+        let smaps = "\
+55d0-55e0 r-xp 00000000 103:02 123   /w/target/world/nkw
+Size:                 64 kB
+Rss:                  40 kB
+7f00-7f10 rw-p 00000000 00:00 0
+Rss:                   8 kB
+7f10-7f20 rw-s 00000000 00:05 9   /memfd:wayland-shm (deleted)
+Rss:                   4 kB
+7f20-7f30 rw-p 00000000 00:00 0   [heap]
+Rss:                  16 kB
+7f30-7f40 rw-p 00000000 00:00 0
+Rss:                   2 kB
+";
+        let by = mem_attribution(smaps, exe);
+        assert_eq!(by.get("binary"), Some(&40));
+        assert_eq!(by.get("anon"), Some(&10));
+        assert_eq!(by.get("shm"), Some(&4));
+        assert_eq!(by.get("heap"), Some(&16));
+        let real = mem_attribution(&std::fs::read_to_string("/proc/self/smaps").unwrap(), "");
+        assert!(real.values().sum::<u64>() > 0);
     }
 
     #[test]

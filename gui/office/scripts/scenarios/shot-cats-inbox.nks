@@ -1,0 +1,11 @@
+# The inbox comes to you (P4): at acme's first desk, the busy fixture (5 active cats, a letter):
+# api-gateway (blocked), alpha (done) and the postman leave their rooms and come; the ones that fit
+# hop onto the desk tops beside your screen, in view, the rest sit on the floor before you.
+key J
+wait 500
+inject cats {"fixture":"busy"}
+wait json /ext/cats/inbox/visible 3 4000
+wait 12000
+shot ${OUT}/shot-cats-inbox.png
+dump ${OUT}/dump-cats-inbox.json
+quit

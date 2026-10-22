@@ -1,0 +1,11 @@
+# S3 com movimento reduzido (plano-mundo §10, fase 2: ≤ 0,5 %): o mesmo demo ocupado, sem
+# animação contínua; os gatos trocam de pose sem interpolar.
+#@args --reduced-motion
+#@warmup 3000
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait --log ${RUN}/client-alpha.json
+spawn ${TESTCLIENT} --app-id bravo --color cc6633 --no-frame-wait --log ${RUN}/client-bravo.json
+spawn ${TESTCLIENT} --app-id demo --checker --no-frame-wait --log ${RUN}/client-demo.json
+wait 1000
+inject cats {"fixture":"busy"}
+wait 1000
+expect mode NAV

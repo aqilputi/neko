@@ -121,6 +121,77 @@ pub fn layers(w: &World, fading: bool) -> Vec<Layer> {
     l
 }
 
+/// What a world pass changed in the world texture (S4, hypothesis a).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorldDamage {
+    /// the camera, the instances or the list changed: everything
+    Full,
+    /// the same list and no client committed: the texture is still right
+    None,
+    /// only these screens' contents changed: their bounds, texture px `[x, y, w, h]`
+    Rects(Vec<[i32; 4]>),
+}
+
+/// Padding around a screen's projected bounds (outline glow, MSAA), px.
+pub const DAMAGE_PAD: i32 = 12;
+
+/// The damage of the world texture for this pass: `prev` is the last pass's
+/// list, `committed` the indices of `now.screens` whose client committed
+/// since then; `size` the texture's px; `gl_rows`: row 0 is the bottom
+/// (a GL render target read as a buffer).
+pub fn world_damage(
+    prev: Option<&nkw_gl::draw::DrawList>,
+    now: &nkw_gl::draw::DrawList,
+    committed: &[usize],
+    size: [u32; 2],
+    gl_rows: bool,
+) -> WorldDamage {
+    if prev != Some(now) {
+        return WorldDamage::Full;
+    }
+    if committed.is_empty() {
+        return WorldDamage::None;
+    }
+    let vp = now.camera.proj() * now.camera.view();
+    let (w, h) = (size[0] as f32, size[1] as f32);
+    let mut rects = Vec::new();
+    for &i in committed {
+        let Some(q) = now.screens.get(i) else {
+            continue;
+        };
+        let mut lo = glam::Vec2::splat(f32::INFINITY);
+        let mut hi = glam::Vec2::splat(f32::NEG_INFINITY);
+        for (x, y) in [(-0.5, -0.5), (0.5, -0.5), (-0.5, 0.5), (0.5, 0.5)] {
+            let c = vp * (q.model * Vec4::new(x, y, 0.0, 1.0));
+            if c.w <= 1e-4 {
+                // a corner behind the camera: the projection is unbounded
+                return WorldDamage::Full;
+            }
+            let n = c.truncate() / c.w;
+            let px = (n.x * 0.5 + 0.5) * w;
+            let py = if gl_rows {
+                (n.y * 0.5 + 0.5) * h
+            } else {
+                (0.5 - n.y * 0.5) * h
+            };
+            lo = lo.min(glam::Vec2::new(px, py));
+            hi = hi.max(glam::Vec2::new(px, py));
+        }
+        let x0 = (lo.x.floor() as i32 - DAMAGE_PAD).max(0);
+        let y0 = (lo.y.floor() as i32 - DAMAGE_PAD).max(0);
+        let x1 = (hi.x.ceil() as i32 + DAMAGE_PAD).min(size[0] as i32);
+        let y1 = (hi.y.ceil() as i32 + DAMAGE_PAD).min(size[1] as i32);
+        if x1 > x0 && y1 > y0 {
+            rects.push([x0, y0, x1 - x0, y1 - y0]);
+        }
+    }
+    if rects.is_empty() {
+        WorldDamage::None
+    } else {
+        WorldDamage::Rects(rects)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -248,6 +319,86 @@ pub(crate) mod tests {
                 Layer::Dim,
                 Layer::World
             ]
+        );
+    }
+
+    fn list_with_screen() -> nkw_gl::draw::DrawList {
+        use nkw_gl::draw::{Camera, ClientTex, DrawList, ScreenQuad, sky_for_band};
+        let mut l = DrawList::empty(
+            Camera {
+                pose: nkw_core::Pose {
+                    pos: glam::Vec3::new(0.0, 1.5, 2.0),
+                    yaw: 0.0,
+                    pitch: 0.0,
+                },
+                fov_y: FOV_Y,
+                near: 0.05,
+                far: 60.0,
+                aspect: 16.0 / 9.0,
+            },
+            sky_for_band(3),
+        );
+        l.screens.push(ScreenQuad {
+            model: glam::Mat4::from_scale_rotation_translation(
+                glam::Vec3::new(0.6, 0.4, 1.0),
+                glam::Quat::IDENTITY,
+                glam::Vec3::new(0.0, 1.5, 0.0),
+            ),
+            tex: ClientTex {
+                id: 7,
+                external: false,
+                size: [640, 480],
+                y_flip: false,
+                opaque: true,
+            },
+            dim: 0.0,
+            selected: false,
+        });
+        l
+    }
+
+    #[test]
+    fn world_damage_rules() {
+        let a = list_with_screen();
+        let size = [1280, 720];
+        assert_eq!(world_damage(None, &a, &[], size, true), WorldDamage::Full);
+        assert_eq!(
+            world_damage(Some(&a), &a, &[], size, true),
+            WorldDamage::None
+        );
+        let mut moved = a.clone();
+        moved.camera.pose.pos.x += 0.01;
+        assert_eq!(
+            world_damage(Some(&a), &moved, &[0], size, true),
+            WorldDamage::Full
+        );
+        let WorldDamage::Rects(r) = world_damage(Some(&a), &a, &[0], size, true) else {
+            panic!("rects")
+        };
+        assert_eq!(r.len(), 1);
+        let [x, y, w, h] = r[0];
+        // centred on the frame (the screen is straight ahead at eye height)
+        assert!(((x + w / 2) - 640).abs() <= 1, "{r:?}");
+        assert!(((y + h / 2) - 360).abs() <= 1, "{r:?}");
+        // 0.6 m at 2 m with a 60° fov: 0.6 / (2·tan30°·2) of the height ≈ 0.26·720·(16/9)… in px
+        let want_w = 0.6 / (2.0 * 2.0 * (FOV_Y / 2.0).tan() * 16.0 / 9.0) * 1280.0;
+        assert!(
+            (w as f32 - (want_w + 2.0 * DAMAGE_PAD as f32)).abs() <= 3.0,
+            "{w} vs {want_w}"
+        );
+        assert!(w < 1280 / 2 && h < 720 / 2);
+        // top-down rows mirror the GL rows
+        let WorldDamage::Rects(t) = world_damage(Some(&a), &a, &[0], [1280, 700], false) else {
+            panic!()
+        };
+        let WorldDamage::Rects(g) = world_damage(Some(&a), &a, &[0], [1280, 700], true) else {
+            panic!()
+        };
+        assert_eq!(t[0][1], 700 - g[0][1] - g[0][3]);
+        // an unknown index is ignored
+        assert_eq!(
+            world_damage(Some(&a), &a, &[5], size, true),
+            WorldDamage::None
         );
     }
 }

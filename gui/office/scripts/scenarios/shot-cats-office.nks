@@ -1,0 +1,19 @@
+# The demo office (P4): the fixture's villagers at their desks, back to the camera, each in
+# front of its monitor. First the reception (the receptionist), then acme (acme typing with
+# two kittens, api-gateway alert with "!") and demo (alpha asleep, bravo idle, demo after its puff).
+wait 300
+expect json /ext/cats/core "none"
+expect json /ext/cats/cats/1/label "api-gateway"
+shot ${OUT}/shot-cats-office-reception.png
+key J
+wait 600
+expect json /station/desk/room 1
+shot ${OUT}/shot-cats-office.png
+key l
+wait 600
+shot ${OUT}/shot-cats-office-gateway.png
+key J
+wait 600
+shot ${OUT}/shot-cats-office-demo.png
+dump ${OUT}/dump-cats-office.json
+quit

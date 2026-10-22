@@ -235,9 +235,11 @@ impl Door {
         Some(Aabb::new(self.pos - half, self.pos + half))
     }
 
-    /// Any gap at all: the room beyond stays in the culling set.
+    /// Any gap at all: the room beyond stays in the culling set. A swing
+    /// towards open counts from its first instant (openness is still 0
+    /// then), so the room appears the frame the door is touched.
     pub fn see_through(&self, now: Time) -> bool {
-        self.openness(now) > 0.0
+        self.openness(now) > 0.0 || self.swing.is_some_and(|s| s.to > s.from)
     }
 
     /// When `tick` has something to do: the end of a swing, or the
@@ -354,6 +356,21 @@ mod tests {
         w.geom = nkw_core::Door::new(Wall::West, 4.0);
         let leaf = w.blocks(0.0, &p).unwrap();
         assert!(leaf.contains(Vec2::new(4.0, 0.55)) && !leaf.contains(Vec2::new(4.2, 0.0)));
+    }
+
+    #[test]
+    fn an_opening_door_is_see_through_from_its_first_instant() {
+        // the room beyond enters the culling set the frame the toggle lands
+        let p = Params::default();
+        let mut d = door(State::Closed);
+        d.toggle(5.0, &p);
+        assert!(d.see_through(5.0));
+        // a closing one stays visible until it meets the frame
+        let mut d = door(State::Open);
+        d.toggle(5.0, &p);
+        assert!(d.see_through(5.0 + p.swing_s * 0.9));
+        d.tick(5.0 + p.swing_s, FAR, &p);
+        assert!(!d.see_through(5.0 + p.swing_s));
     }
 
     #[test]

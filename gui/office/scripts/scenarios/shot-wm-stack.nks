@@ -1,0 +1,17 @@
+# A stack of three (P2): three testclients joined on one desk of acme (`,` twice), the desk
+# two-thirds wide (`=`); each screen a third of the height, the stack tilted to the eye.
+key J
+expect json /station/desk/room 1
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait
+spawn ${TESTCLIENT} --app-id bravo --color cc6633 --no-frame-wait
+inject wm {"command": "world.consume"}
+spawn ${TESTCLIENT} --app-id demo --color 33aa66 --no-frame-wait
+inject wm {"command": "world.consume"}
+inject wm {"command": "world.wider"}
+wait json /desks/2/width "two_thirds" 2000
+wait json /screens/2/size [837.0,240.0] 3000
+wait 600
+expect mode NAV
+shot ${OUT}/shot-wm-stack.png
+dump ${OUT}/dump-wm-stack.json
+quit

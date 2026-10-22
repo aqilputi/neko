@@ -1,0 +1,10 @@
+# P5: the battery at 12 %: the HUD badge, and the oil jar's cat awake, calling.
+wait 100
+inject objects {"Command":{"name":"world.goto_object","args":{"name":"bateria"}}}
+wait 600
+inject objects {"Power":{"present":true,"pct":12,"charging":false,"time_to_empty_s":1800}}
+expect json /ext/objects/badges/0 {"BatteryLow":12}
+wait 300
+shot ${OUT}/shot-obj-battery.png
+dump ${OUT}/dump-obj-battery.json
+quit

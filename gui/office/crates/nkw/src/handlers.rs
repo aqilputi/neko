@@ -22,7 +22,19 @@ use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 use smithay::wayland::shell::xdg::{PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState, XdgToplevelSurfaceData};
 use smithay::wayland::shm::{ShmHandler, ShmState};
 
+use std::os::fd::OwnedFd;
+
+use nkw_core::ScreenId;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
+use smithay::wayland::selection::{SelectionSource, SelectionTarget};
+use smithay::wayland::shell::xdg::dialog::{ToplevelDialogHint, XdgDialogHandler};
+use smithay::wayland::xdg_activation::{
+    XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
+};
+
 use crate::state::{ClientState, Nkw};
+use crate::world::Out;
 
 impl CompositorHandler for Nkw {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -44,20 +56,22 @@ impl CompositorHandler for Nkw {
                 let w = self.window(id).unwrap().clone();
                 w.on_commit();
                 if surface == &root {
-                    initial_configure(&w);
-                    let (app_id, title) = with_states(&root, |s| {
-                        let d = s
-                            .data_map
-                            .get::<XdgToplevelSurfaceData>()
-                            .unwrap()
-                            .lock()
-                            .unwrap();
-                        (
-                            d.app_id.clone().unwrap_or_default(),
-                            d.title.clone().unwrap_or_default(),
-                        )
-                    });
+                    let (app_id, title) = toplevel_ids(&root);
                     self.world.set_app_id(id, &app_id, &title);
+                    // its app_id is known: the rules, the restored places
+                    // and the place memory say where it goes (before the
+                    // first configure, so it gets its desk's size)
+                    if !app_id.is_empty() && !self.world.screen_state(id).placed {
+                        let now = self.now();
+                        match self.ext.wm.place_for(&app_id, now) {
+                            Some(p) => {
+                                let outs = self.world.place_new(id, &p, now);
+                                self.apply(outs);
+                            }
+                            None => self.world.mark_placed(id),
+                        }
+                    }
+                    initial_configure(&w);
                     let g = w.geometry().size;
                     if g.w > 0 && g.h > 0 {
                         self.world
@@ -79,6 +93,22 @@ impl CompositorHandler for Nkw {
             }
         }
     }
+}
+
+/// A toplevel's (app_id, title) as last committed.
+fn toplevel_ids(root: &WlSurface) -> (String, String) {
+    with_states(root, |s| {
+        s.data_map
+            .get::<XdgToplevelSurfaceData>()
+            .map(|d| {
+                let d = d.lock().unwrap();
+                (
+                    d.app_id.clone().unwrap_or_default(),
+                    d.title.clone().unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default()
+    })
 }
 
 fn initial_configure(w: &Window) {
@@ -150,6 +180,48 @@ impl XdgShellHandler for Nkw {
         self.wake();
     }
 
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
+        self.wm_toplevel(&surface, |w, id, now| w.set_fullscreen(id, true, now));
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.wm_toplevel(&surface, |w, id, now| w.set_fullscreen(id, false, now));
+    }
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        self.wm_toplevel(&surface, |w, id, now| w.set_maximized(id, true, now));
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        self.wm_toplevel(&surface, |w, id, now| w.set_maximized(id, false, now));
+    }
+
+    fn parent_changed(&mut self, surface: ToplevelSurface) {
+        let parent = surface.parent().and_then(|p| self.screen_of(&p));
+        if parent.is_some() {
+            // a dialog picks its own size; it is not tiled
+            surface.with_pending_state(|s| {
+                for st in [
+                    xdg_toplevel::State::TiledLeft,
+                    xdg_toplevel::State::TiledRight,
+                    xdg_toplevel::State::TiledTop,
+                    xdg_toplevel::State::TiledBottom,
+                ] {
+                    s.states.unset(st);
+                }
+            });
+        }
+        self.wm_toplevel(&surface, |w, id, now| w.set_parent(id, parent, now));
+    }
+
+    fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        self.ids_changed(&surface);
+    }
+
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        self.ids_changed(&surface);
+    }
+
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
         self.unconstrain_popup(&surface);
         let _ = self.popups.track_popup(PopupKind::Xdg(surface));
@@ -208,6 +280,33 @@ impl XdgShellHandler for Nkw {
 }
 
 impl Nkw {
+    /// A WM change of a toplevel: the World's outs applied, a frame.
+    fn wm_toplevel(
+        &mut self,
+        surface: &ToplevelSurface,
+        f: impl FnOnce(&mut crate::world::World, ScreenId, nkw_core::Time) -> Vec<Out>,
+    ) {
+        let Some(id) = self.screen_of(surface.wl_surface()) else {
+            return;
+        };
+        let now = self.now();
+        let outs = f(&mut self.world, id, now);
+        self.apply(outs);
+        self.wake();
+    }
+
+    /// The title or app_id changed (the selected screen's tag shows it).
+    fn ids_changed(&mut self, surface: &ToplevelSurface) {
+        let Some(id) = self.screen_of(surface.wl_surface()) else {
+            return;
+        };
+        let (app_id, title) = toplevel_ids(surface.wl_surface());
+        self.world.set_app_id(id, &app_id, &title);
+        self.world
+            .want(nkw_core::Wish::compose(nkw_core::Want::Once));
+        self.wake();
+    }
+
     /// Keep a popup inside the output, relative to its window as composed.
     fn unconstrain_popup(&self, popup: &PopupSurface) {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
@@ -276,6 +375,74 @@ impl SeatHandler for Nkw {
 
 impl SelectionHandler for Nkw {
     type SelectionUserData = ();
+
+    /// A client of ours set the clipboard: the host gets it too (mimes
+    /// only; the bytes go fd to fd when someone pastes).
+    fn new_selection(
+        &mut self,
+        ty: SelectionTarget,
+        source: Option<SelectionSource>,
+        _seat: Seat<Self>,
+    ) {
+        if ty != SelectionTarget::Clipboard {
+            return;
+        }
+        if let Some(src) = source {
+            self.ext.wm.our_selection(src.mime_types());
+        }
+    }
+
+    /// A client of ours pastes the selection we mirror from the host.
+    fn send_selection(
+        &mut self,
+        ty: SelectionTarget,
+        mime_type: String,
+        fd: OwnedFd,
+        _seat: Seat<Self>,
+        _user_data: &(),
+    ) {
+        if ty == SelectionTarget::Clipboard {
+            self.ext.wm.host_receive(mime_type, fd);
+        }
+    }
+}
+
+impl XdgActivationHandler for Nkw {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        self.ext
+            .wm
+            .activation
+            .as_mut()
+            .expect("the activation global exists")
+    }
+
+    /// A valid recent token selects the screen's station (NAV) or badges;
+    /// none (or a stale one): "quer atenção" on the screen for 6 s.
+    fn request_activation(
+        &mut self,
+        token: XdgActivationToken,
+        token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        let valid = token_data.timestamp.elapsed() < crate::wm::TOKEN_MAX_AGE;
+        if let Some(a) = self.ext.wm.activation.as_mut() {
+            a.remove_token(&token);
+        }
+        let Some(id) = self.screen_of(&surface) else {
+            return;
+        };
+        let now = self.now();
+        let outs = self.world.activate(id, valid, now);
+        self.apply(outs);
+        self.wake();
+    }
+}
+
+impl XdgDialogHandler for Nkw {
+    fn dialog_hint_changed(&mut self, toplevel: ToplevelSurface, hint: ToplevelDialogHint) {
+        let modal = hint == ToplevelDialogHint::Modal;
+        self.wm_toplevel(&toplevel, |w, id, now| w.set_modal(id, modal, now));
+    }
 }
 
 impl DataDeviceHandler for Nkw {

@@ -103,6 +103,8 @@ pub struct Nkw {
     pub decoration_state: XdgDecorationState,
     /// mpv and other GL clients need `wp_viewporter`
     pub viewporter_state: smithay::wayland::viewporter::ViewporterState,
+    /// `wp_fractional_scale_v1` (see `backend::fractional`)
+    pub fractional_state: smithay::wayland::fractional_scale::FractionalScaleManagerState,
     pub dmabuf: Option<(DmabufState, DmabufGlobal)>,
     pub popups: PopupManager,
     pub seat: Seat<Nkw>,

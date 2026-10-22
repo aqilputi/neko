@@ -138,17 +138,42 @@ quit
 
 #[test]
 fn shot_focus_is_pixel_exact() {
+    focus_pixel_exact("", &[]);
+}
+
+/// Plan §5.5 at a fractional scale: the client renders at the preferred
+/// scale (`wp_fractional_scale_v1` + viewport), FOCO places it at integer
+/// physical px, 1:1.
+#[test]
+fn shot_focus_is_pixel_exact_at_1_25() {
+    let log = focus_pixel_exact("--fractional", &["--scale", "1.25"]);
+    let scale: Vec<_> = common::evs(&log, "scale");
+    assert_eq!(
+        scale.last().map(|e| e["scale_120"].clone()),
+        Some(150.into()),
+        "{log:?}"
+    );
+}
+
+/// FOCO on a checker testclient (`flags` added to it), nkw run with `args`:
+/// the shot's crop at the dump's focus rect equals the checker, 0 px off.
+/// Returns the client's log.
+fn focus_pixel_exact(flags: &str, args: &[&str]) -> Vec<serde_json::Value> {
     if testclient().is_none() {
-        return;
+        return Vec::new();
     }
     let r = run(
-        "spawn testclient --app-id acme.check --checker --log {dir}/a.json
+        &format!(
+            "spawn testclient --app-id acme.check --checker {flags} --log {{dir}}/a.json
+wait 200
 key Return
-shot {dir}/focus.png
-dump {dir}/world.json
+wait 200
+shot {{dir}}/focus.png
+dump {{dir}}/world.json
 quit
-",
-        &[],
+"
+        ),
+        args,
         &[],
     );
     assert_eq!(r.code(), 0, "{}", r.stderr());
@@ -177,6 +202,7 @@ quit
         }
     }
     assert_eq!(bad, 0, "{bad} pixels differ in the FOCO crop {rect:?}");
+    r.log("a.json")
 }
 
 #[test]
@@ -221,7 +247,12 @@ quit
 
 #[test]
 fn idle_demo_takes_no_world_passes() {
-    let r = run("wait 5000\nquit\n", &[], &[("NKW_STATS", "1")]);
+    // S1 is measured under reduced motion (plan §1.3): no ambient cat animation
+    let r = run(
+        "wait 5000\nquit\n",
+        &["--reduced-motion"],
+        &[("NKW_STATS", "1")],
+    );
     assert_eq!(r.code(), 0, "{}", r.stderr());
     let s = r.summary();
     assert!(s["world_passes"].as_u64().unwrap() <= 3, "{s}");

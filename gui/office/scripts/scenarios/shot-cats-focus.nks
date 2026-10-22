@@ -1,0 +1,15 @@
+# FOCO on a cat's terminal (P4): acme's pane at 1:1 over the dimmed world, a key typed into it.
+key J
+wait 500
+inject cats {"cmd":"world.talk"}
+wait 300
+inject cats {"cmd":"world.talk_sit"}
+wait 800
+expect mode FOCO
+key o
+wait json /ext/cats/by_label/acme/screen/9 "❯ o" 2000
+shot ${OUT}/shot-cats-focus.png
+key ctrl+bracketright
+wait 600
+expect mode NAV
+quit

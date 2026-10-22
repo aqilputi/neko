@@ -1,9 +1,13 @@
 //! The HUD fallback (addendum §2.3): badges, never pop-ups, only for what
 //! is critical; visible even in FOCO. Everything else lives on objects.
 
+use serde::Serialize;
+
 use crate::object::{BATTERY_LOW, Data, World};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Serialised externally tagged (`{"BatteryLow":12}`, `"NetDown"`): the
+/// shape of `nkw`'s `dump`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Badge {
     BatteryLow(u8),
     NetDown,
@@ -78,6 +82,12 @@ mod tests {
             time_to_empty_s: None,
             present: true,
         })
+    }
+
+    #[test]
+    fn badges_serialise_externally_tagged() {
+        let v = serde_json::to_value([Badge::BatteryLow(12), Badge::NetDown]).unwrap();
+        assert_eq!(v, serde_json::json!([{"BatteryLow": 12}, "NetDown"]));
     }
 
     #[test]

@@ -10,6 +10,7 @@
 //! [`router`] for every key.
 
 pub mod app;
+pub mod backend;
 pub mod cats;
 pub mod cli;
 pub mod demo;

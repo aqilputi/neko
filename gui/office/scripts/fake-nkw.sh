@@ -8,6 +8,8 @@
 #   FAKE_NKW_DROPPED     summary dropped frames (0)
 #   FAKE_NKW_RSS_KB      summary RSS (61440)
 #   FAKE_NKW_FIRST_MS    summary first frame (120)
+#   FAKE_NKW_EXT_US      summary ext_tick_us_p95 (40)
+#   FAKE_NKW_RATES       summary rate_wishes_max (1)
 #   FAKE_NKW_DRAWS / FAKE_NKW_TRIS      per-frame counters (40 / 20000)
 #   FAKE_NKW_KEY_LAT_US  injected key → client log delay (300)
 #   FAKE_NKW_EXIT        exit code (0)
@@ -117,8 +119,8 @@ while ((now < end)); do
 done
 
 if [ "${FAKE_NKW_NO_SUMMARY:-0}" != 1 ]; then
-	printf 'nkw-stats {"summary":true,"frames":%d,"world_passes":%d,"p50_us":%d,"p95_us":%d,"dropped":%d,"first_frame_ms":%d,"rss_kb":%d}\n' \
+	printf 'nkw-stats {"summary":true,"frames":%d,"world_passes":%d,"p50_us":%d,"p95_us":%d,"dropped":%d,"first_frame_ms":%d,"rss_kb":%d,"ext_tick_us_p95":%d,"rate_wishes_max":%d}\n' \
 		"$frames" "$frames" "${FAKE_NKW_P50_US:-600}" "${FAKE_NKW_P95_US:-1200}" "${FAKE_NKW_DROPPED:-0}" \
-		"${FAKE_NKW_FIRST_MS:-120}" "${FAKE_NKW_RSS_KB:-61440}" >&2
+		"${FAKE_NKW_FIRST_MS:-120}" "${FAKE_NKW_RSS_KB:-61440}" "${FAKE_NKW_EXT_US:-40}" "${FAKE_NKW_RATES:-1}" >&2
 fi
 exit "${FAKE_NKW_EXIT:-0}"

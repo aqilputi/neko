@@ -1,12 +1,38 @@
 //! nkw-testclient's pure parts: the CLI, the buffer contents and the JSON log
 //! (contract S3 of the nkw work packages). The Wayland side lives in main.rs.
+//!
+//! Wave-2 additions to S3 (all optional, the S3 lines are unchanged):
+//! - `--copy TEXT`: offers TEXT as the selection (`text/plain;charset=utf-8`,
+//!   `text/plain`, `UTF8_STRING`) at the first keyboard `enter` after mapping
+//!   (compositors refuse `set_selection` from unfocused clients); logs
+//!   `{"ev":"selection_set"}`, and `{"ev":"selection_cancelled"}` when replaced.
+//! - `--log-selection`: each selection offer is read as text and logged as
+//!   `{"ev":"selection","mime":"text/plain;charset=utf-8","text":"…"}`.
+//! - `--damage WxH`: every frame repaints and damages only the top-left `W`×`H`
+//!   rect (alternating content), like a terminal while typing.
+//! - `--fractional`: binds `wp_fractional_scale_v1` + `wp_viewporter`, renders the
+//!   buffer at the preferred scale (`round(logical·scale/120)` px) with the viewport
+//!   destination at the logical size; logs `{"ev":"scale","scale_120":150}`.
+//! - `--fullscreen`: asks for fullscreen before the first commit.
+//! - `--parent-of APP_ID`: the same process first maps a mother window
+//!   (`app_id` = `title` = APP_ID, solid grey), then, after the mother's first
+//!   configure, maps the main window with `xdg_toplevel.set_parent(mother)`
+//!   (`set_parent` only takes toplevels of the same client). The mother's lines
+//!   carry `"win":"parent"`; the main window's lines have no `win` key.
 
 use std::io::Write;
 
 use serde::Serialize;
 
 pub const USAGE: &str = "usage: nkw-testclient [--app-id ID] [--title T] [--color RRGGBB | --checker] \
-[--size WxH] [--log PATH|-] [--popup-on-key] [--exit-after-ms N] [--no-frame-wait]";
+[--size WxH] [--log PATH|-] [--popup-on-key] [--exit-after-ms N] [--no-frame-wait] [--copy TEXT] \
+[--log-selection] [--damage WxH] [--fractional] [--fullscreen] [--parent-of APP_ID]";
+
+/// The mimes `--copy` offers and `--log-selection` prefers, best first.
+pub const TEXT_MIMES: [&str; 3] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"];
+
+/// Fill of the `--parent-of` mother window.
+pub const MOTHER_FILL: Fill = Fill::Color(0x808080);
 
 /// What the buffer shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +62,17 @@ pub struct Args {
     pub exit_after_ms: Option<u64>,
     /// Draw on configure only and never ask for frame callbacks (an idle client).
     pub no_frame_wait: bool,
+    /// `--copy`: the text offered as the selection.
+    pub copy: Option<String>,
+    /// `--log-selection`: read and log every selection offer.
+    pub log_selection: bool,
+    /// `--damage`: the top-left rect redrawn each frame.
+    pub damage: Option<(u32, u32)>,
+    /// `--fractional`: render at `wp_fractional_scale_v1`'s preferred scale.
+    pub fractional: bool,
+    pub fullscreen: bool,
+    /// `--parent-of`: the mother window's app_id (and title).
+    pub parent_of: Option<String>,
 }
 
 impl Default for Args {
@@ -49,6 +86,12 @@ impl Default for Args {
             popup_on_key: false,
             exit_after_ms: None,
             no_frame_wait: false,
+            copy: None,
+            log_selection: false,
+            damage: None,
+            fractional: false,
+            fullscreen: false,
+            parent_of: None,
         }
     }
 }
@@ -92,6 +135,21 @@ pub fn parse_args<S: AsRef<str>>(argv: &[S]) -> Result<Args, String> {
                 );
             }
             "--no-frame-wait" => a.no_frame_wait = true,
+            "--copy" => a.copy = Some(value()?.to_string()),
+            "--log-selection" => a.log_selection = true,
+            "--damage" => {
+                let v = value()?;
+                a.damage = Some(parse_size(v).map_err(|_| format!("--damage wants WxH, got {v}"))?);
+            }
+            "--fractional" => a.fractional = true,
+            "--fullscreen" => a.fullscreen = true,
+            "--parent-of" => {
+                let v = value()?;
+                if v.is_empty() {
+                    return Err("--parent-of needs an app_id".into());
+                }
+                a.parent_of = Some(v.to_string());
+            }
             other => return Err(format!("unknown argument: {other}")),
         }
     }
@@ -138,6 +196,42 @@ pub fn paint(canvas: &mut [u8], w: u32, h: u32, fill: Fill) {
         let v = pixel(fill, (i % w) as u32, (i / w) as u32);
         px.copy_from_slice(&v.to_le_bytes());
     }
+}
+
+/// Paints the `rw`×`rh` rect at the origin of a canvas `w` px wide, clamped to
+/// `w`×`h`. `odd` inverts the colours, so successive frames really differ.
+pub fn paint_rect(canvas: &mut [u8], w: u32, h: u32, (rw, rh): (u32, u32), fill: Fill, odd: bool) {
+    let (rw, rh) = (rw.min(w) as usize, rh.min(h) as usize);
+    let w = w as usize;
+    let px = canvas.as_chunks_mut::<4>().0;
+    for y in 0..rh {
+        for (x, p) in px[y * w..y * w + rw].iter_mut().enumerate() {
+            let mut v = pixel(fill, x as u32, y as u32);
+            if odd {
+                v ^= 0x00ff_ffff;
+            }
+            p.copy_from_slice(&v.to_le_bytes());
+        }
+    }
+}
+
+/// The damage rect of `--damage` for a buffer of `size`: clamped, never empty.
+pub fn damage_rect((rw, rh): (u32, u32), (w, h): (u32, u32)) -> (u32, u32) {
+    (rw.clamp(1, w.max(1)), rh.clamp(1, h.max(1)))
+}
+
+/// Buffer size for a logical size at a `wp_fractional_scale_v1` scale (in 120ths):
+/// `round(logical · scale / 120)`, half away from zero, as the protocol says.
+pub fn physical_size((w, h): (u32, u32), scale_120: u32) -> (u32, u32) {
+    let f = |v: u32| ((v as u64 * scale_120 as u64 + 60) / 120).max(1) as u32;
+    (f(w), f(h))
+}
+
+/// The text mime `--log-selection` reads from an offer, best first.
+pub fn pick_text_mime(offered: &[String]) -> Option<&'static str> {
+    TEXT_MIMES
+        .into_iter()
+        .find(|m| offered.iter().any(|o| o == m))
 }
 
 /// `CLOCK_MONOTONIC` in µs: the clock `nkw`'s `NKW_STATS` uses too.
@@ -217,6 +311,19 @@ pub enum Event {
     Frame,
     PopupDone,
     Close,
+    /// `--copy`: the selection was offered.
+    SelectionSet,
+    /// `--copy`: someone else took the selection.
+    SelectionCancelled,
+    /// `--log-selection`: an offer arrived and was read to the end.
+    Selection {
+        mime: String,
+        text: String,
+    },
+    /// `--fractional`: the compositor's preferred scale, in 120ths.
+    Scale {
+        scale_120: u32,
+    },
 }
 
 #[derive(Serialize)]
@@ -224,11 +331,18 @@ struct Line<'a> {
     #[serde(flatten)]
     ev: &'a Event,
     t_us: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    win: Option<&'a str>,
 }
 
 /// The JSON line for `ev` at `t_us` (no trailing newline).
 pub fn line(ev: &Event, t_us: u64) -> String {
-    serde_json::to_string(&Line { ev, t_us }).expect("events always serialise")
+    line_win(ev, t_us, None)
+}
+
+/// [`line`] for a secondary window: `win` tags it (`"parent"` for `--parent-of`).
+pub fn line_win(ev: &Event, t_us: u64, win: Option<&str>) -> String {
+    serde_json::to_string(&Line { ev, t_us, win }).expect("events always serialise")
 }
 
 /// Writes one flushed line per event, so a reader sees it immediately.
@@ -249,7 +363,11 @@ impl Log {
     }
 
     pub fn emit(&mut self, ev: Event) {
-        let l = line(&ev, monotonic_us());
+        self.emit_win(ev, None);
+    }
+
+    pub fn emit_win(&mut self, ev: Event, win: Option<&str>) {
+        let l = line_win(&ev, monotonic_us(), win);
         // A test client must not die because its reader went away.
         let _ = writeln!(self.out, "{l}").and_then(|_| self.out.flush());
     }
@@ -325,6 +443,159 @@ mod tests {
         for (argv, want) in cases {
             assert_eq!(ok(argv), want, "{argv:?}");
         }
+    }
+
+    #[test]
+    fn cli_wave2_flags() {
+        let d = Args::default();
+        let cases: Vec<(&[&str], Args)> = vec![
+            (
+                &["--copy", "olá mundo"],
+                Args {
+                    copy: Some("olá mundo".into()),
+                    ..d.clone()
+                },
+            ),
+            (
+                &["--log-selection"],
+                Args {
+                    log_selection: true,
+                    ..d.clone()
+                },
+            ),
+            (
+                &["--damage", "80x16"],
+                Args {
+                    damage: Some((80, 16)),
+                    ..d.clone()
+                },
+            ),
+            (
+                &["--fractional", "--checker"],
+                Args {
+                    fractional: true,
+                    fill: Fill::Checker,
+                    ..d.clone()
+                },
+            ),
+            (
+                &["--fullscreen"],
+                Args {
+                    fullscreen: true,
+                    ..d.clone()
+                },
+            ),
+            (
+                &["--parent-of", "acme.mother", "--app-id", "acme.dialog"],
+                Args {
+                    parent_of: Some("acme.mother".into()),
+                    app_id: "acme.dialog".into(),
+                    ..d.clone()
+                },
+            ),
+        ];
+        for (argv, want) in cases {
+            assert_eq!(ok(argv), want, "{argv:?}");
+        }
+        for bad in [
+            &["--copy"][..],
+            &["--damage", "8"],
+            &["--damage", "0x4"],
+            &["--damage"],
+            &["--parent-of"],
+            &["--parent-of", ""],
+        ] {
+            assert!(parse_args(bad).is_err(), "{bad:?} should fail");
+        }
+        assert!(USAGE.contains("--parent-of APP_ID") && USAGE.contains("--damage WxH"));
+    }
+
+    #[test]
+    fn damage_rect_paints_only_the_corner_and_alternates() {
+        let (w, h) = (6, 4);
+        let mut c = vec![0u8; (w * h * 4) as usize];
+        paint(&mut c, w, h, Fill::Color(0x112233));
+        let before = c.clone();
+        paint_rect(&mut c, w, h, (2, 3), Fill::Color(0x112233), true);
+        let px = |c: &[u8], x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            u32::from_le_bytes(c[i..i + 4].try_into().unwrap())
+        };
+        for y in 0..h {
+            for x in 0..w {
+                let inside = x < 2 && y < 3;
+                if inside {
+                    assert_eq!(px(&c, x, y), 0xffee_ddcc, "({x},{y})");
+                } else {
+                    assert_eq!(px(&c, x, y), px(&before, x, y), "({x},{y})");
+                }
+            }
+        }
+        paint_rect(&mut c, w, h, (2, 3), Fill::Color(0x112233), false);
+        assert_eq!(c, before, "an even frame restores the original");
+        // Clamped to the canvas.
+        paint_rect(&mut c, w, h, (100, 100), Fill::Checker, false);
+        assert_eq!(px(&c, 5, 3), pixel(Fill::Checker, 5, 3));
+        assert_eq!(damage_rect((100, 100), (6, 4)), (6, 4));
+        assert_eq!(damage_rect((3, 2), (6, 4)), (3, 2));
+        assert_eq!(damage_rect((0, 0), (6, 4)), (1, 1));
+    }
+
+    #[test]
+    fn physical_size_rounds_like_the_protocol() {
+        let cases = [
+            ((640, 480), 120, (640, 480)),
+            ((640, 480), 150, (800, 600)),
+            ((641, 479), 150, (801, 599)), // 801.25 → 801, 598.75 → 599
+            ((100, 1), 180, (150, 2)),     // 1.5 → 2 (half away from zero)
+            ((1, 1), 60, (1, 1)),
+        ];
+        for (l, s, want) in cases {
+            assert_eq!(physical_size(l, s), want, "{l:?}@{s}");
+        }
+    }
+
+    #[test]
+    fn text_mime_preference() {
+        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            pick_text_mime(&v(&["UTF8_STRING", "text/plain;charset=utf-8"])),
+            Some("text/plain;charset=utf-8")
+        );
+        assert_eq!(
+            pick_text_mime(&v(&["text/plain", "UTF8_STRING"])),
+            Some("text/plain")
+        );
+        assert_eq!(pick_text_mime(&v(&["image/png"])), None);
+        assert_eq!(pick_text_mime(&[]), None);
+    }
+
+    #[test]
+    fn wave2_log_lines() {
+        let cases = vec![
+            (Event::SelectionSet, json!({"ev":"selection_set","t_us":7})),
+            (
+                Event::SelectionCancelled,
+                json!({"ev":"selection_cancelled","t_us":7}),
+            ),
+            (
+                Event::Selection {
+                    mime: "text/plain;charset=utf-8".into(),
+                    text: "olá".into(),
+                },
+                json!({"ev":"selection","mime":"text/plain;charset=utf-8","text":"olá","t_us":7}),
+            ),
+            (
+                Event::Scale { scale_120: 150 },
+                json!({"ev":"scale","scale_120":150,"t_us":7}),
+            ),
+        ];
+        for (ev, want) in cases {
+            assert_eq!(parsed(ev.clone(), 7), want, "{ev:?}");
+        }
+        let tagged: Value =
+            serde_json::from_str(&line_win(&Event::Enter, 7, Some("parent"))).unwrap();
+        assert_eq!(tagged, json!({"ev":"enter","t_us":7,"win":"parent"}));
     }
 
     #[test]

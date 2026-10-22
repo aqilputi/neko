@@ -2,7 +2,9 @@
 # The screenshot set (plano-mundo §9): nkw --demo --headless plays each scenarios/shot-*.nks,
 # whose `shot`/`dump` lines write into target/shots/. Only the demo world and the testclient,
 # never real windows.
-# Usage: world-shot.sh [--bin PATH] [--out DIR] [NAME...]   (NAME = nav, focus, ...)
+# Usage: world-shot.sh [--bin PATH] [--out DIR] [--list] [NAME...]
+#   NAME = nav, focus, wm-stack, ...; a NAME with no shot-NAME.nks is a prefix: `wm` or `wm-`
+#   runs every shot-wm-*.nks. --list prints the names and exits.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -10,22 +12,45 @@ OFFICE=$(dirname "$HERE")
 BIN="$OFFICE/target/world/nkw"
 OUT="$OFFICE/target/shots"
 names=()
+list=false
 while (($#)); do
 	case $1 in
 	--bin) BIN=${2:?}; shift ;;
 	--out) OUT=${2:?}; shift ;;
-	-h | --help) sed -n '2,6p' "$0"; exit 0 ;;
+	--list) list=true ;;
+	-h | --help) sed -n '2,8p' "$0"; exit 0 ;;
 	-*) echo "world-shot: opção desconhecida: $1" >&2; exit 2 ;;
 	*) names+=("$1") ;;
 	esac
 	shift
 done
+# expand NAME → names: itself when shot-NAME.nks exists, else every shot-NAME*.nks (prefix)
+expand() {
+	local f n
+	if [ -f "$HERE/scenarios/shot-$1.nks" ]; then
+		echo "$1"
+		return
+	fi
+	for f in "$HERE"/scenarios/shot-"${1%-}"*.nks; do
+		[ -f "$f" ] || continue
+		n=${f##*/shot-}
+		echo "${n%.nks}"
+	done
+}
+[ ${#names[@]} -gt 0 ] || names=("")
+wanted=()
+for n in "${names[@]}"; do
+	mapfile -t got < <(expand "$n")
+	[ ${#got[@]} -gt 0 ] || got=("$n") # reported below as missing
+	wanted+=("${got[@]}")
+done
+names=("${wanted[@]}")
+if [ "$list" = true ]; then
+	printf '%s\n' "${names[@]}"
+	exit 0
+fi
 [ -x "$BIN" ] || { echo "world-shot: nkw não encontrado em $BIN (make world-build)" >&2; exit 2; }
 TESTCLIENT="$(dirname "$BIN")/nkw-testclient"
-[ ${#names[@]} -gt 0 ] || for f in "$HERE"/scenarios/shot-*.nks; do
-	n=${f##*/shot-}
-	names+=("${n%.nks}")
-done
 mkdir -p "$OUT"
 work=$(mktemp -d "${TMPDIR:-/tmp}/nkw-shot.XXXXXX")
 trap 'rm -rf "$work"' EXIT

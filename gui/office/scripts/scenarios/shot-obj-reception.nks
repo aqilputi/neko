@@ -1,0 +1,14 @@
+# P5: the reception's objects (the demo's fixture world), the clock at a fixed time. ANDAR, a
+# few steps back from the desk towards the door, so the back wall (clock, ON AIR, calendar,
+# vault, plant) and the turntable on the left wall are in frame.
+wait 100
+inject objects {"Clock":{"unix_s":1000000000,"hour":14,"minute":5,"band":3}}
+key w
+expect mode ANDAR
+down s
+wait 600
+up s
+wait 400
+shot ${OUT}/shot-obj-reception.png
+dump ${OUT}/dump-obj-reception.json
+quit

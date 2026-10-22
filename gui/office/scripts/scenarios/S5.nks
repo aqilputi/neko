@@ -1,0 +1,11 @@
+# S5 (plano-mundo §1.3): laço de ANDAR. Anda e gira ao mesmo tempo (w e e seguros): um círculo
+# contínuo pela sala, a câmera nunca para. Mede quadros perdidos e CPU por quadro.
+#@warmup 2000
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait --log ${RUN}/client-alpha.json
+spawn ${TESTCLIENT} --app-id bravo --color cc6633 --no-frame-wait --log ${RUN}/client-bravo.json
+wait 1000
+key w
+expect mode ANDAR
+down w
+down e
+wait 600000

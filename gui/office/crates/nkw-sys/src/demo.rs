@@ -79,4 +79,47 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn event_payloads_round_trip_through_json() {
+        // `inject objects` in nkw scripts carries these shapes
+        let p: PowerState = serde_json::from_str(
+            r#"{"present":true,"pct":12,"charging":false,"time_to_empty_s":1800}"#,
+        )
+        .unwrap();
+        assert_eq!(p.pct, 12);
+        for e in fixture() {
+            let v = serde_json::to_value(&e).unwrap();
+            match e {
+                SysEvent::Power(x) => {
+                    assert_eq!(
+                        serde_json::from_value::<PowerState>(v["Power"].clone()).unwrap(),
+                        x
+                    )
+                }
+                SysEvent::Net(x) => {
+                    assert_eq!(
+                        serde_json::from_value::<NetState>(v["Net"].clone()).unwrap(),
+                        x
+                    )
+                }
+                SysEvent::Media(x) => {
+                    assert_eq!(
+                        serde_json::from_value::<MediaState>(v["Media"].clone()).unwrap(),
+                        x
+                    )
+                }
+                SysEvent::Clock(x) => assert_eq!(
+                    serde_json::from_value::<crate::ClockTick>(v["Clock"].clone()).unwrap(),
+                    x
+                ),
+                _ => {}
+            }
+        }
+        let a: crate::AudioEvent = serde_json::from_str(
+            r#"{"Added":{"id":7,"pid":42,"binary":"mpv","app_id":null,"output":true}}"#,
+        )
+        .unwrap();
+        assert!(matches!(a, crate::AudioEvent::Added(s) if s.id == crate::StreamId(7)));
+    }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Measures nkw against the budgets of docs/plano-mundo.md §1.3 (scenarios S1, S2, S4; S3/S5
-# once their scripts exist). Drives nkw through --script, samples /proc over the window,
+# Measures nkw against the budgets of docs/plano-mundo.md §1.3 (scenarios S1 to S5, plus S3r:
+# S3 under --reduced-motion). Drives nkw through --script, samples /proc over the window,
 # parses the NKW_STATS lines, compares with world-perf-budget.toml and with the last recorded
 # run (world-perf-last.json). Exit 1 on any failure, 2 on usage errors.
 #
@@ -12,7 +12,7 @@ uso: world-perf.sh [--bin PATH] [--headless] [--scenario S1[,S2,...]] [--seconds
                    [--warmup MS] [--testclient PATH] [--budget FILE] [--last FILE] [--scenarios DIR] [--keep]
   --bin         o nkw (padrão: target/world/nkw)
   --headless    backend surfaceless: só regressão relativa, exceto contadores (plano §1.4)
-  --scenario    cenários, separados por vírgula (padrão: S1,S2,S4)
+  --scenario    cenários, separados por vírgula (padrão: S1,S2,S3,S3r,S4,S5)
   --seconds     janela de medida por cenário (padrão: 60)
   --warmup      espera antes da janela, em ms (padrão: o #@warmup do cenário)
   --json        o relatório em JSON na saída padrão (a tabela vai para a saída de erro)
@@ -101,6 +101,8 @@ stats_json() {
 			dropped: $s.dropped,
 			first_frame_ms: $s.first_frame_ms,
 			rss_mb: (if $s.rss_kb == null then null else ($s.rss_kb / 1024 * 10 | round) / 10 end),
+			ext_tick_p95_ms: ($s.ext_tick_us_p95 | ms),
+			rate_wishes_max: $s.rate_wishes_max,
 			draws_max: ($f | map(.draws | numbers) | max),
 			tris_max: ($f | map(.tris | numbers) | max),
 			gpu_ms: ($f | map(.gpu_us | numbers) | pct(0.95) | ms),
@@ -243,7 +245,7 @@ main() {
 	set -euo pipefail
 	BIN="$PERF_OFFICE/target/world/nkw"
 	HEADLESS=false
-	SCENARIOS="S1,S2,S4"
+	SCENARIOS="S1,S2,S3,S3r,S4,S5"
 	SECONDS_WINDOW=60
 	WARMUP_MS=""
 	JSON=false

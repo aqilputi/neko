@@ -1,0 +1,13 @@
+# SALTO (P3): two testclient windows on the acme desks, `f` puts a label on each.
+# Until the WM's pickables land (P2), the screens are handed in with `inject overlay`.
+key J
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait
+spawn ${TESTCLIENT} --app-id bravo --color cc6633 --no-frame-wait
+wait 900
+inject overlay {"pickables": [{"app_id": "alpha"}, {"app_id": "bravo"}]}
+key f
+wait 300
+expect mode SALTO
+shot ${OUT}/shot-ui-hints.png
+dump ${OUT}/dump-ui-hints.json
+quit

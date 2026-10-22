@@ -45,6 +45,14 @@ target = 3
 fail = 6
 noise = 0.2
 
+# mundo animado com movimento reduzido | S3r | ≤ 0,5 % (plano §10, fase 2) | 3 %
+[cpu_animated_reduced]
+metric = "cpu_pct"
+scenarios = ["S3r"]
+target = 0.5
+fail = 3
+noise = 0.1
+
 # CPU por quadro do mundo | S3/S4 | p50 ≤ 1 ms, p95 ≤ 2 ms | p95 3 ms
 [frame_cpu_p50]
 metric = "frame_p50_ms"
@@ -93,7 +101,7 @@ gated = false
 
 [ram_windows]
 metric = "rss_mb"
-scenarios = ["S1", "S2", "S4"]
+scenarios = ["S1", "S2", "S3", "S4", "S5"]
 target = 110
 fail = 150
 noise = 5
@@ -109,7 +117,7 @@ noise = 0.5
 # partida | até o 1º quadro / até os gatos aparecerem | ≤ 250 ms / ≤ 1 s | 500 ms / 2 s
 [startup_first_frame]
 metric = "first_frame_ms"
-scenarios = ["S1", "S2", "S4"]
+scenarios = ["S1", "S2", "S3", "S4", "S5"]
 target = 250
 fail = 500
 noise = 25
@@ -147,3 +155,17 @@ fail = 200
 metric = "tris_max"
 scenarios = ["S4"]
 target = 100000
+
+# plugins: o custo dos tick de todos os plugins por quadro (S12, ext_tick_us_p95); só relatado
+[ext_tick]
+metric = "ext_tick_p95_ms"
+scenarios = ["S1", "S3", "S4", "S5"]
+target = 0.3
+gated = false
+
+# objetos: no máximo 4 vontades Rate simultâneas (P5, rate_wishes_max)
+[rate_wishes]
+metric = "rate_wishes_max"
+scenarios = ["S1", "S3", "S4", "S5"]
+target = 4
+fail = 4

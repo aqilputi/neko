@@ -1,0 +1,22 @@
+# CONVERSA with api-gateway (P4): the camera frames its face, the box asks the fixture's question
+# with its options; `inject cats {"cmd":…}` is the command a key sends (`t`, `1`), so the shot does
+# not depend on the keymap.
+key J
+wait 500
+key l
+wait 500
+inject cats {"cmd":"world.talk"}
+wait 100
+expect mode CONVERSA
+wait json /ext/cats/dialog/choices/0 "sim, aplicar agora" 3000
+wait 300
+shot ${OUT}/shot-cats-talk.png
+dump ${OUT}/dump-cats-talk.json
+inject cats {"cmd":"world.choice_1"}
+wait 400
+expect mode NAV
+expect json /ext/cats/calls/0/reply "1"
+wait json /ext/cats/by_label/api-gateway/screen/4 "> sim, aplicar agora" 3000
+wait 300
+shot ${OUT}/shot-cats-talk-answered.png
+quit

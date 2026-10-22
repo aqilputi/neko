@@ -4,7 +4,7 @@
 //! Client-handled commands (nav, zoom, quit…) map to local actions; the rest
 //! go to the core with the focused session as context.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Something the GUI does by itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,10 +68,25 @@ const NAMED: &[&str] = &[
 /// Splits a binding key into the key names it is typed as: "dd" → [d, d],
 /// "gg" → [g, g], "ctrl+d" → [ctrl+d], "enter" → [enter], "f5" → [f5].
 pub fn split_seq(k: &str) -> Vec<String> {
-    if k.chars().count() <= 1 || k.contains('+') || NAMED.contains(&k) || is_fkey(k) {
+    if k.chars().count() <= 1
+        || k.contains('+')
+        || NAMED.contains(&k)
+        || is_fkey(k)
+        || is_keysym_name(k)
+    {
         return vec![k.to_string()];
     }
     k.chars().map(|c| c.to_string()).collect()
+}
+
+/// An XKB keysym name (`XF86AudioPlay`, `Print`, `Menu`): one key, not a
+/// sequence of letters.
+fn is_keysym_name(k: &str) -> bool {
+    let mut cs = k.chars();
+    k.starts_with("XF86")
+        || (k.len() > 2
+            && cs.next().is_some_and(|c| c.is_ascii_uppercase())
+            && cs.any(|c| c.is_ascii_lowercase()))
 }
 
 fn is_fkey(k: &str) -> bool {
@@ -145,6 +160,10 @@ pub struct Router {
     binds: Vec<(Vec<String>, String, String)>, // (sequence, command, mode)
     client: HashSet<String>,
     buf: Vec<String>,
+    /// `with_modes`: mode → the modes it resolves through, in order
+    chains: HashMap<String, Vec<String>>,
+    /// `with_modes`: routes carry the command's name (no [`Client`] mapping)
+    named: bool,
 }
 
 impl Router {
@@ -164,11 +183,97 @@ impl Router {
             binds: out,
             client: client_cmds.clone(),
             buf: Vec::new(),
+            chains: HashMap::new(),
+            named: false,
+        }
+    }
+
+    /// A router over every mode of `binds`, for [`Router::feed_in`]:
+    /// `chain(mode)` lists the modes a key in `mode` is looked up in, first
+    /// wins (the mode itself included where it belongs). The chains are
+    /// taken once, for every mode the bindings name. Routes name the command
+    /// (`Core` or `Unsupported` by `client_cmds`, never `Client`): the
+    /// caller dispatches by name.
+    pub fn with_modes(
+        binds: &[Bind],
+        client_cmds: &HashSet<String>,
+        chain: &dyn Fn(&str) -> Vec<String>,
+    ) -> Router {
+        let mut out = Vec::new();
+        let mut chains = HashMap::new();
+        for b in binds {
+            for k in &b.keys {
+                out.push((split_seq(k), b.command.clone(), b.mode.clone()));
+            }
+            chains
+                .entry(b.mode.clone())
+                .or_insert_with(|| chain(&b.mode));
+        }
+        Router {
+            binds: out,
+            client: client_cmds.clone(),
+            buf: Vec::new(),
+            chains,
+            named: true,
         }
     }
 
     pub fn pending(&self) -> &[String] {
         &self.buf
+    }
+
+    /// Feeds one key typed in `mode`, resolved along that mode's chain (a
+    /// mode no binding names resolves in itself only). A sequence in
+    /// progress (`Pending`) continues across calls; a key that breaks it is
+    /// retried alone.
+    pub fn feed_in(&mut self, mode: &str, key: &str) -> Route {
+        let chain = self
+            .chains
+            .get(mode)
+            .cloned()
+            .unwrap_or_else(|| vec![mode.to_string()]);
+        self.buf.push(key.to_string());
+        if let Some(r) = self.resolve_in(&chain) {
+            return r;
+        }
+        if self.buf.len() > 1 {
+            self.buf = vec![key.to_string()];
+            if let Some(r) = self.resolve_in(&chain) {
+                return r;
+            }
+        }
+        self.buf.clear();
+        Route::None
+    }
+
+    /// Drop a sequence in progress (the mode changed under it).
+    pub fn reset(&mut self) {
+        self.buf.clear();
+    }
+
+    fn resolve_in(&mut self, chain: &[String]) -> Option<Route> {
+        let rank = |mode: &str| chain.iter().position(|m| m == mode);
+        let exact = self
+            .binds
+            .iter()
+            .filter(|(seq, _, _)| *seq == self.buf)
+            .filter_map(|(_, c, m)| rank(m).map(|r| (r, c)))
+            .min_by_key(|(r, _)| *r)
+            .map(|(_, c)| c.clone());
+        let longer = self.binds.iter().any(|(seq, _, m)| {
+            seq.len() > self.buf.len() && seq.starts_with(&self.buf) && rank(m).is_some()
+        });
+        if let Some(cmd) = exact {
+            if !longer || self.buf.len() > 1 {
+                self.buf.clear();
+                return Some(self.route_cmd(&cmd));
+            }
+            return Some(Route::Pending);
+        }
+        if longer {
+            return Some(Route::Pending);
+        }
+        None
     }
 
     /// Feeds one key (NORMAL mode, office or zoomed).
@@ -220,7 +325,9 @@ impl Router {
     }
 
     fn route_cmd(&self, cmd: &str) -> Route {
-        if let Some(a) = client_action(cmd) {
+        if !self.named
+            && let Some(a) = client_action(cmd)
+        {
             return Route::Client(a);
         }
         let is_client = if self.client.is_empty() {
@@ -327,6 +434,9 @@ mod tests {
         assert_eq!(split_seq("G"), vec!["G"]);
         assert_eq!(split_seq("f5"), vec!["f5"]);
         assert_eq!(split_seq("ctrl+/"), vec!["ctrl+/"]);
+        assert_eq!(split_seq("XF86AudioPlay"), vec!["XF86AudioPlay"]);
+        assert_eq!(split_seq("Print"), vec!["Print"]);
+        assert_eq!(split_seq("GG"), vec!["G", "G"]);
     }
 
     #[test]
@@ -375,6 +485,114 @@ mod tests {
         }];
         let mut r = Router::new(&b, &client);
         assert_eq!(r.feed("u"), Route::Unsupported("usage.show".into()));
+    }
+
+    fn bind(mode: &str, keys: &[&str], command: &str) -> Bind {
+        Bind {
+            command: command.into(),
+            keys: keys.iter().map(|k| k.to_string()).collect(),
+            mode: mode.into(),
+            help: String::new(),
+        }
+    }
+
+    /// The world's chains (plano-mundo §3.12), as `nkw` passes them.
+    fn chain(mode: &str) -> Vec<String> {
+        let c: &[&str] = match mode {
+            "normal.world" => &["world", "normal.world", "normal", "*"],
+            "world.walk" => &["world", "world.walk", "*"],
+            "world.focus" => &["world", "world.focus"],
+            m => return vec!["world".into(), m.into()],
+        };
+        c.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn world_router() -> Router {
+        let b = vec![
+            bind("world", &["ctrl+alt+w"], "world.walk"),
+            bind("normal.world", &["w"], "world.walk"),
+            bind("normal.world", &["h", "left"], "world.left"),
+            bind("normal.world", &["gg"], "world.first"),
+            bind("normal", &["h"], "nav.collapse"),
+            bind("normal", &["x"], "session.stop"),
+            bind("normal", &["dd"], "session.remove"),
+            bind("*", &["ctrl+k"], "switcher.open"),
+            bind("world.walk", &["w"], "world.forward"),
+            bind("world.focus", &["ctrl+]"], "world.back"),
+            bind("normal.todos", &["D"], "todo.done"),
+        ];
+        let mut client = HashSet::new();
+        for c in [
+            "world.walk",
+            "world.left",
+            "world.first",
+            "world.forward",
+            "world.back",
+        ] {
+            client.insert(c.to_string());
+        }
+        client.insert("nav.collapse".into());
+        client.insert("switcher.open".into());
+        Router::with_modes(&b, &client, &chain)
+    }
+
+    #[test]
+    fn feed_in_resolves_along_the_chain() {
+        use Route::{Core, Pending, Unsupported as U};
+        let mut r = world_router();
+        let rows: &[(&str, &str, Route)] = &[
+            ("normal.world", "h", U("world.left".into())), // shadows normal's h
+            ("normal.world", "left", U("world.left".into())),
+            ("normal.world", "x", Core("session.stop".into())), // falls to normal
+            ("normal.world", "ctrl+k", U("switcher.open".into())), // then *
+            ("normal.world", "ctrl+alt+w", U("world.walk".into())), // world first
+            ("normal.world", "D", Route::None),                 // not in the chain
+            ("world.walk", "w", U("world.forward".into())),
+            ("world.walk", "x", Route::None), // normal is not in ANDAR's chain
+            ("world.walk", "ctrl+k", U("switcher.open".into())),
+            ("world.focus", "ctrl+alt+w", U("world.walk".into())),
+            ("world.focus", "ctrl+]", U("world.back".into())),
+            ("world.focus", "h", Route::None), // no fallback in FOCO
+            ("world.focus", "ctrl+k", Route::None),
+            ("world.nothing", "ctrl+alt+w", Route::None), // unknown mode: itself only
+            ("normal.world", "g", Pending),
+            ("normal.world", "g", U("world.first".into())),
+            ("normal.world", "d", Pending),
+            ("normal.world", "d", Core("session.remove".into())),
+        ];
+        for (mode, key, want) in rows {
+            assert_eq!(r.feed_in(mode, key), *want, "{mode} {key}");
+        }
+    }
+
+    #[test]
+    fn feed_in_sequences_break_and_retry() {
+        let mut r = world_router();
+        assert_eq!(r.feed_in("normal.world", "g"), Route::Pending);
+        assert_eq!(r.pending(), ["g"]);
+        // a broken sequence retries the key alone
+        assert_eq!(
+            r.feed_in("normal.world", "h"),
+            Route::Unsupported("world.left".into())
+        );
+        assert!(r.pending().is_empty());
+        assert_eq!(r.feed_in("normal.world", "d"), Route::Pending);
+        r.reset();
+        assert!(r.pending().is_empty());
+        assert_eq!(r.feed_in("normal.world", "q"), Route::None);
+    }
+
+    #[test]
+    fn with_modes_never_maps_to_client_actions() {
+        let b = vec![bind("normal", &["h"], "nav.collapse")];
+        let mut r = Router::with_modes(&b, &HashSet::new(), &|m| vec![m.to_string()]);
+        assert_eq!(
+            r.feed_in("normal", "h"),
+            Route::Unsupported("nav.collapse".into())
+        );
+        // and `new`/`feed` (nkg) keep mapping them
+        let mut old = Router::new(&b, &HashSet::new());
+        assert_eq!(old.feed("h"), Route::Client(Client::Left));
     }
 
     #[test]

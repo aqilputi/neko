@@ -1,0 +1,13 @@
+# P5: the reception's door shut. From the door's stand inside the room, the leaf across the
+# gap; the rooms beyond leave the culling set.
+wait 100
+inject objects {"Command":{"name":"world.goto_object","args":{"name":"porta"}}}
+wait 600
+inject objects {"Door":{"id":0,"toggle":true}}
+wait json /ext/objects/doors/0/passable false 1000
+wait json /ext/objects/visible_rooms [0] 1000
+expect json /ext/objects/visible_rooms [0]
+wait 200
+shot ${OUT}/shot-obj-door.png
+dump ${OUT}/dump-obj-door.json
+quit

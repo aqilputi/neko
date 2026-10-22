@@ -1,0 +1,10 @@
+# COMANDOS (P3): `:` opens the palette, "world.room" filters it.
+key colon
+wait 200
+expect mode COMANDOS
+text "world.room"
+wait 200
+expect json /ext/overlay/palette/top "world.room_next"
+shot ${OUT}/shot-ui-palette.png
+dump ${OUT}/dump-ui-palette.json
+quit

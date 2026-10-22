@@ -1,0 +1,12 @@
+# A dialog on its mother's desk (P2): the testclient maps a mother, then a 360x220 dialog
+# with set_parent; it floats 5 cm in front of the mother, centred, on the same desk.
+key J
+expect json /station/desk/room 1
+spawn ${TESTCLIENT} --parent-of alpha --app-id alpha.dialog --size 360x220 --color cc6633 --no-frame-wait
+wait json /screens/1/parent 1 3000
+wait json /screens/1/size [360.0,220.0] 3000
+wait 600
+expect mode NAV
+shot ${OUT}/shot-wm-dialog.png
+dump ${OUT}/dump-wm-dialog.json
+quit

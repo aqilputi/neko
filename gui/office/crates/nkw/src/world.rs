@@ -18,6 +18,14 @@ use serde::Serialize;
 
 use crate::router::sym;
 
+#[path = "wm/world_ops.rs"]
+mod ops;
+use nkw_core::persist::RoomKind;
+pub use ops::{
+    ATTENTION_S, COMMANDS, CmdInfo, DIALOG_DEFAULT, DIALOG_FRONT, Hold, LAYOUT_NOTE_S, RoomRef,
+    ScreenState, ShortName, info as command_info, width_label,
+};
+
 /// The geometry lives in `nkw_core::layout`; its constants are re-exported
 /// here for the hub and the plugins.
 pub use nkw_core::layout::{
@@ -68,6 +76,57 @@ pub enum Cmd {
     Neighbour(Dir),
     /// `world.band {band}`: the time-of-day band (0..8)
     Band(u8),
+    // --- the window manager (P2) ---
+    /// `world.back`: leaves FOCO (and every overlay); a step back in ANDAR
+    BackOrStep,
+    /// `world.room_N` (1-based)
+    Room(u8),
+    /// `gg` / `G`
+    First,
+    Last,
+    /// `t`: the station's cat
+    Talk,
+    TalkNext,
+    TalkReply,
+    /// `f` in CONVERSA
+    TalkSit,
+    /// `f` / `F`
+    Hint {
+        focus: bool,
+    },
+    /// `:`
+    Palette,
+    /// `H` / `L` (Left/Right)
+    Shift(Dir),
+    /// `,`
+    Consume,
+    /// `.`
+    Expel,
+    /// `-` / `=`
+    Narrower,
+    Wider,
+    Maximize,
+    Fullscreen,
+    /// `p`
+    Pin,
+    /// `M {room}`
+    SendRoom(RoomRef),
+    /// `Q` / `world+q`
+    Close,
+    /// `world.room_new {name}` (`go`: and go there; `context`: a context's)
+    RoomNew {
+        name: ShortName,
+        context: bool,
+        go: bool,
+    },
+    /// `world.goto_room {room}`, `world.goto_room:<id>`
+    GotoRoom(RoomRef),
+    /// `world.goto_screen:<id>` (the palette's "ir para" items)
+    GotoScreen(ScreenId),
+    /// `world.forward` … (held until the key's release)
+    Hold(Hold),
+    /// `c` in ANDAR
+    Recenter,
 }
 
 impl Cmd {
@@ -82,14 +141,70 @@ impl Cmd {
             "world.room_next" => Cmd::RoomNext,
             "world.room_prev" => Cmd::RoomPrev,
             "world.focus" => Cmd::Focus,
-            "world.back" | "world.walk_exit" => Cmd::Back,
+            "world.walk_exit" | "world.talk_end" | "world.hint_cancel" | "world.palette_cancel" => {
+                Cmd::Back
+            }
+            "world.back" => Cmd::BackOrStep,
             "world.walk" => Cmd::Walk,
             "world.focus_left" => Cmd::Neighbour(Dir::Left),
             "world.focus_right" => Cmd::Neighbour(Dir::Right),
             "world.focus_up" => Cmd::Neighbour(Dir::Up),
             "world.focus_down" => Cmd::Neighbour(Dir::Down),
             "world.band" => Cmd::Band(args.get("band")?.parse().ok().filter(|b| *b <= 8)?),
-            _ => return None,
+            "world.first" => Cmd::First,
+            "world.last" => Cmd::Last,
+            "world.talk" => Cmd::Talk,
+            "world.talk_next" => Cmd::TalkNext,
+            "world.talk_reply" => Cmd::TalkReply,
+            "world.talk_sit" => Cmd::TalkSit,
+            "world.hint" => Cmd::Hint { focus: false },
+            "world.hint_focus" => Cmd::Hint { focus: true },
+            "world.palette" => Cmd::Palette,
+            "world.move_left" => Cmd::Shift(Dir::Left),
+            "world.move_right" => Cmd::Shift(Dir::Right),
+            "world.consume" => Cmd::Consume,
+            "world.expel" => Cmd::Expel,
+            "world.narrower" => Cmd::Narrower,
+            "world.wider" => Cmd::Wider,
+            "world.maximize" => Cmd::Maximize,
+            "world.fullscreen" => Cmd::Fullscreen,
+            "world.pin" => Cmd::Pin,
+            "world.send_room" => Cmd::SendRoom(RoomRef::parse(args.get("room")?)?),
+            "world.close" => Cmd::Close,
+            "world.room_new" => {
+                let name = args.get("name")?.trim();
+                if name.is_empty() {
+                    return None;
+                }
+                Cmd::RoomNew {
+                    name: ShortName::new(name),
+                    context: false,
+                    go: true,
+                }
+            }
+            "world.goto_room" => Cmd::GotoRoom(RoomRef::parse(args.get("room")?)?),
+            "world.forward" => Cmd::Hold(Hold::Forward),
+            "world.strafe_left" => Cmd::Hold(Hold::StrafeLeft),
+            "world.strafe_right" => Cmd::Hold(Hold::StrafeRight),
+            "world.turn_left" => Cmd::Hold(Hold::TurnLeft),
+            "world.turn_right" => Cmd::Hold(Hold::TurnRight),
+            "world.look_up" => Cmd::Hold(Hold::LookUp),
+            "world.look_down" => Cmd::Hold(Hold::LookDown),
+            "world.recenter" => Cmd::Recenter,
+            GOTO_SCREEN => Cmd::GotoScreen(ScreenId(args.get("screen")?.parse().ok()?)),
+            n => {
+                if let Some(k) = n.strip_prefix("world.room_") {
+                    let k: u8 = k.parse().ok().filter(|k| (1..=9).contains(k))?;
+                    return Some(Cmd::Room(k));
+                }
+                if let Some(id) = n.strip_prefix("world.goto_room:") {
+                    return Some(Cmd::GotoRoom(RoomRef::Id(RoomId(id.parse().ok()?))));
+                }
+                if let Some(id) = n.strip_prefix("world.goto_screen:") {
+                    return Some(Cmd::GotoScreen(ScreenId(id.parse().ok()?)));
+                }
+                return None;
+            }
         })
     }
 
@@ -104,7 +219,9 @@ impl Cmd {
             Cmd::RoomNext => "world.room_next",
             Cmd::RoomPrev => "world.room_prev",
             Cmd::Focus => "world.focus",
-            Cmd::Back => "world.back",
+            // (esc and ctrl+] alike: leave whatever mode is on)
+            Cmd::Back => "world.walk_exit",
+            Cmd::BackOrStep => "world.back",
             Cmd::Walk => "world.walk",
             Cmd::Neighbour(Dir::Left) => "world.focus_left",
             Cmd::Neighbour(Dir::Right) => "world.focus_right",
@@ -116,10 +233,89 @@ impl Cmd {
                     BTreeMap::from([("band".to_string(), b.to_string())]),
                 );
             }
+            Cmd::Room(k) => {
+                return (ROOM_N[((*k).clamp(1, 9) - 1) as usize], BTreeMap::new());
+            }
+            Cmd::First => "world.first",
+            Cmd::Last => "world.last",
+            Cmd::Talk => "world.talk",
+            Cmd::TalkNext => "world.talk_next",
+            Cmd::TalkReply => "world.talk_reply",
+            Cmd::TalkSit => "world.talk_sit",
+            Cmd::Hint { focus: false } => "world.hint",
+            Cmd::Hint { focus: true } => "world.hint_focus",
+            Cmd::Palette => "world.palette",
+            Cmd::Shift(Dir::Left | Dir::Up) => "world.move_left",
+            Cmd::Shift(Dir::Right | Dir::Down) => "world.move_right",
+            Cmd::Consume => "world.consume",
+            Cmd::Expel => "world.expel",
+            Cmd::Narrower => "world.narrower",
+            Cmd::Wider => "world.wider",
+            Cmd::Maximize => "world.maximize",
+            Cmd::Fullscreen => "world.fullscreen",
+            Cmd::Pin => "world.pin",
+            Cmd::Close => "world.close",
+            Cmd::SendRoom(r) => {
+                return (
+                    "world.send_room",
+                    BTreeMap::from([("room".to_string(), r.arg())]),
+                );
+            }
+            Cmd::GotoRoom(r) => {
+                return (
+                    "world.goto_room",
+                    BTreeMap::from([("room".to_string(), r.arg())]),
+                );
+            }
+            Cmd::RoomNew { name, .. } => {
+                return (
+                    "world.room_new",
+                    BTreeMap::from([("name".to_string(), name.as_str().to_string())]),
+                );
+            }
+            Cmd::GotoScreen(s) => {
+                return (
+                    GOTO_SCREEN,
+                    BTreeMap::from([("screen".to_string(), s.0.to_string())]),
+                );
+            }
+            Cmd::Hold(h) => match h {
+                Hold::Forward => "world.forward",
+                Hold::Back => "world.back",
+                Hold::StrafeLeft => "world.strafe_left",
+                Hold::StrafeRight => "world.strafe_right",
+                Hold::TurnLeft => "world.turn_left",
+                Hold::TurnRight => "world.turn_right",
+                Hold::LookUp => "world.look_up",
+                Hold::LookDown => "world.look_down",
+            },
+            Cmd::Recenter => "world.recenter",
         };
         (n, BTreeMap::new())
     }
 }
+
+/// The `(name, title)` of every `world.*` command of S9 that the World
+/// runs (`Cmd::from_name` takes each one, with its args).
+pub fn command_names() -> &'static [(&'static str, &'static str)] {
+    &ops::NAMES
+}
+
+/// `world.goto_screen {screen}` (the palette's "ir para" items use
+/// `world.goto_screen:<id>` and `world.goto_room:<id>`).
+pub const GOTO_SCREEN: &str = "world.goto_screen";
+
+const ROOM_N: [&str; 9] = [
+    "world.room_1",
+    "world.room_2",
+    "world.room_3",
+    "world.room_4",
+    "world.room_5",
+    "world.room_6",
+    "world.room_7",
+    "world.room_8",
+    "world.room_9",
+];
 
 /// What the compositor (and the plugins) must do after a command, an
 /// action or a tick.
@@ -227,6 +423,14 @@ pub struct World {
     /// the purpose of the CONVERSA the last action was about (routes its
     /// effects: cats for `Session`, objects for `VaultUnlock`)
     purpose: TalkPurpose,
+    /// the WM's per-screen state (dialogs, air, fullscreen …)
+    wm: BTreeMap<ScreenId, ScreenState>,
+    /// room kinds that do not follow from the name (free, library …)
+    kinds: BTreeMap<RoomId, RoomKind>,
+    /// the layout badge: when and what
+    note: Option<(Time, String)>,
+    /// counts layout changes (persistence)
+    layout_gen: u64,
 }
 
 impl World {
@@ -262,6 +466,10 @@ impl World {
             next_room: 0,
             obstacles: BTreeMap::new(),
             purpose: TalkPurpose::Session,
+            wm: BTreeMap::new(),
+            kinds: BTreeMap::new(),
+            note: None,
+            layout_gen: 0,
         };
         w.next_room = w.rooms.iter().map(|r| r.id.0 + 1).max().unwrap_or(0);
         w.station = match w.rooms.first().map(|r| r.desks.is_empty()) {
@@ -299,6 +507,10 @@ impl World {
     pub fn current_room(&self) -> usize {
         match self.station {
             Station::Desk { room, .. } | Station::Door(room) => self.room_index(room).unwrap_or(0),
+            Station::Air(s) => match self.locate(s) {
+                Some((r, _, _)) => r,
+                None => self.room_at(self.camera.pos).unwrap_or(0),
+            },
             _ => self.room_at(self.camera.pos).unwrap_or(0),
         }
     }
@@ -353,13 +565,11 @@ impl World {
     }
 
     /// Where screen `slot` of a desk hangs (`layout::screen_place`: the
-    /// stack centred at the eye, on the desk's monitor).
+    /// stack centred at the eye, on the desk's monitor; stacks over three
+    /// pile behind; dialogs in front of their mother; pinned screens in the
+    /// air).
     pub fn screen_place(&self, room: usize, desk: usize, slot: usize) -> ScreenPlace {
-        let s = self.slots()[room];
-        let x = self.desk_local_xs(room)[desk];
-        let n = self.rooms[room].desks[desk].screens.len();
-        let size = self.screen_logical(room, desk, slot) * onetoone::M_PER_PX;
-        layout::screen_place(&s, x, n, slot, size)
+        self.place_at(room, desk, slot)
     }
 
     /// The local x (metres) of a desk's centre in its room.
@@ -371,12 +581,16 @@ impl World {
     /// the configured one before the first buffer.
     pub fn screen_logical(&self, room: usize, desk: usize, slot: usize) -> Vec2 {
         let d = &self.rooms[room].desks[desk];
+        if let Some(v) = d.screens.get(slot).and_then(|id| self.loose_logical(*id)) {
+            return v;
+        }
+        let stack = self.stack_len(room, desk);
         d.screens
             .get(slot)
             .and_then(|id| self.screens.get(id))
             .map(|s| s.size)
             .filter(|s| s.x > 0.0 && s.y > 0.0)
-            .unwrap_or_else(|| self.configure_size(d.width, d.screens.len()))
+            .unwrap_or_else(|| self.configure_size(d.width, stack))
     }
 
     /// Where a screen is: (room, desk, slot).
@@ -402,6 +616,8 @@ impl World {
             }
             Station::Free(p) => Some(p),
             Station::Door(room) => Some(self.room_entry_pose(self.room_index(room)?)),
+            // a screen in the air: its 1:1 pose, aligned to its normal
+            Station::Air(s) => self.one_to_one(s).map(|o| o.pose),
             _ => None,
         }
     }
@@ -419,7 +635,7 @@ impl World {
                 Some(Spot {
                     station,
                     pose: self.station_pose(&station)?,
-                    stack: self.rooms[room].desks[d].screens.len().max(1),
+                    stack: self.stack_len(room, d).max(1),
                 })
             })
             .collect()
@@ -430,9 +646,10 @@ impl World {
         match self.station {
             Station::Desk { room, desk, slot } => {
                 let r = self.room_index(room)?;
-                self.rooms[r].desks.get(desk)?.screens.get(slot).copied()
+                self.rooms[r].desks.get(desk)?;
+                (slot < self.stack_len(r, desk)).then(|| self.rooms[r].desks[desk].screens[slot])
             }
-            Station::Air(s) => Some(s),
+            Station::Air(s) => self.screens.contains_key(&s).then_some(s),
             _ => None,
         }
     }
@@ -513,6 +730,10 @@ impl World {
         let room = self.current_room();
         let at = match self.station {
             Station::Desk { desk, .. } => (desk + 1).min(self.rooms[room].desks.len()),
+            Station::Air(s) => match self.locate(s) {
+                Some((r, d, _)) if r == room => d + 1,
+                _ => self.rooms[room].desks.len(),
+            },
             _ => self.rooms[room].desks.len(),
         };
         let desk = Desk {
@@ -542,11 +763,13 @@ impl World {
                 now,
                 false,
             );
-        } else if let Station::Desk { desk, .. } = &mut self.station
+        } else if let Station::Desk { desk, room: r, .. } = &mut self.station
+            && *r == rid
             && *desk >= at
         {
             *desk += 1;
         }
+        self.layout_gen += 1;
         self.pending.push(Wish::world(Want::Once));
         (id, size)
     }
@@ -565,14 +788,34 @@ impl World {
         {
             s.size = size;
             self.pending.push(Wish::world(Want::Once));
+            if self.focus_2d == Some(Target::Screen(id))
+                && let Some(o) = self.one_to_one(id)
+            {
+                self.camera = o.pose;
+            }
         }
     }
 
     /// A window went away.
     pub fn remove_screen(&mut self, id: ScreenId, now: Time) -> Vec<Out> {
         let mut out = Vec::new();
-        if self.focus_target() == Some(id) {
+        let st = self.wm.remove(&id).unwrap_or_default();
+        // a dialog in FOCO: back to its mother, still in FOCO
+        let mother = st
+            .parent
+            .filter(|m| self.screens.contains_key(m) && self.focus_target() == Some(id));
+        if self.focus_target() == Some(id) && mother.is_none() {
             out = self.action(Action::WindowClosed, now);
+        }
+        if let Station::Air(s) = self.station
+            && s == id
+            && let Some((r, d, _)) = self.locate(id)
+        {
+            self.station = Station::Desk {
+                room: self.rooms[r].id,
+                desk: d,
+                slot: 0,
+            };
         }
         self.focus_2d = self.focus_2d.filter(|s| *s != Target::Screen(id));
         self.arrive = self.arrive.filter(|s| *s != Target::Screen(id));
@@ -600,7 +843,7 @@ impl World {
                     desk
                 }
                 .min(n - 1);
-                let stack = self.rooms[r].desks[desk].screens.len().max(1);
+                let stack = self.stack_len(r, desk).max(1);
                 Station::Desk {
                     room,
                     desk,
@@ -613,6 +856,11 @@ impl World {
                 self.station = st;
             }
         }
+        if let Some(m) = mother {
+            let t = self.modal_child(m).unwrap_or(m);
+            out.extend(self.action(Action::Neighbour(Target::Screen(t)), now));
+        }
+        self.layout_gen += 1;
         self.pending.push(Wish::world(Want::Once));
         out
     }
@@ -621,6 +869,7 @@ impl World {
     /// World handles itself (camera, focus swap, walking …); the others come
     /// back as `Out::Effect` / `Out::Object` for the hub to route.
     pub fn action(&mut self, a: Action, now: Time) -> Vec<Out> {
+        self.layout_gen += 1;
         let before = self.mode().clone();
         let fx = self.machine.apply(a, self.camera);
         self.purpose = self
@@ -638,10 +887,18 @@ impl World {
 
     /// Run a world command at `now`.
     pub fn command(&mut self, cmd: Cmd, now: Time) -> Vec<Out> {
+        self.layout_gen += 1;
         match cmd {
             Cmd::Move(dir) => {
                 let room = self.current_room();
-                if let Some(st) = strip::neighbour(&self.spots(room), &self.station, dir) {
+                // from the air: like a free spot at its pose
+                let cur = match self.station {
+                    Station::Air(_) => {
+                        Station::Free(self.station_pose(&self.station).unwrap_or(self.camera))
+                    }
+                    st => st,
+                };
+                if let Some(st) = strip::neighbour(&self.spots(room), &cur, dir) {
                     let lateral = matches!(dir, Dir::Left | Dir::Right);
                     self.go_to(st, now, lateral);
                     self.pending.push(Wish::world(Want::Once));
@@ -653,23 +910,21 @@ impl World {
                 let step = if cmd == Cmd::RoomNext { 1 } else { -1 };
                 let r = self.current_room() as isize + step;
                 if (0..n).contains(&r) {
-                    let r = r as usize;
-                    let st = if self.rooms[r].desks.is_empty() {
-                        Station::Door(self.rooms[r].id)
-                    } else {
-                        Station::Desk {
-                            room: self.rooms[r].id,
-                            desk: 0,
-                            slot: 0,
-                        }
-                    };
-                    self.go_to(st, now, false);
+                    self.go_room(r as usize, now);
                 }
                 Vec::new()
             }
+            // a modal dialog takes the keyboard from its mother; a cat's desk
+            // without a screen: its terminal
             Cmd::Focus => match self.selected() {
-                Some(s) => self.action(Action::Focus(Target::Screen(s)), now),
-                None => Vec::new(),
+                Some(s) => {
+                    let t = self.modal_child(s).unwrap_or(s);
+                    self.action(Action::Focus(Target::Screen(t)), now)
+                }
+                None => match self.station_cat() {
+                    Some(c) => self.action(Action::Focus(Target::CatTerm(c)), now),
+                    None => Vec::new(),
+                },
             },
             Cmd::Back => self.action(Action::Back, now),
             Cmd::Walk => self.action(Action::Walk, now),
@@ -697,10 +952,14 @@ impl World {
                 };
                 self.station = st;
                 match self.selected() {
-                    Some(s) => self.action(Action::Neighbour(Target::Screen(s)), now),
+                    Some(s) => {
+                        let t = self.modal_child(s).unwrap_or(s);
+                        self.action(Action::Neighbour(Target::Screen(t)), now)
+                    }
                     None => Vec::new(),
                 }
             }
+            other => self.wm_command(other, now),
         }
     }
 
@@ -759,17 +1018,8 @@ impl World {
                 }
                 Effect::GoToStand(p) => self.glide_free(p, now),
                 Effect::Select(s) => {
-                    if let Some((r, d, k)) = self.locate(s) {
-                        let room = self.rooms[r].id;
-                        self.go_to(
-                            Station::Desk {
-                                room,
-                                desk: d,
-                                slot: k,
-                            },
-                            now,
-                            false,
-                        );
+                    if let Some(st) = self.station_of(s) {
+                        self.go_to(st, now, false);
                     }
                 }
                 Effect::Object(id, a) => out.push(Out::Object(id, a)),
@@ -917,13 +1167,22 @@ impl World {
             self.tween = None;
             if let Some(s) = self.arrive.take() {
                 self.focus_2d = Some(s);
-                // one last world pass: the dimmed surroundings under the 2D window
-                self.arrival_pass = true;
+                // one last world pass: the dimmed surroundings under the 2D
+                // window (none when it covers the whole output)
+                self.arrival_pass = !self.covers_output(s);
                 return true;
             }
             self.pending.push(Wish::world(Want::Once));
         }
         false
+    }
+
+    /// A fullscreen window in FOCO covers the output: no world to see.
+    pub fn covers_output(&self, t: Target) -> bool {
+        match t {
+            Target::Screen(s) => self.screen_state(s).fullscreen,
+            Target::CatTerm(_) => false,
+        }
     }
 
     /// The fade of a cut at `now` (0: none).
@@ -990,12 +1249,18 @@ impl World {
             seen.push(name);
             let mut r = take(name).unwrap_or_else(|| self.new_room(name));
             r.desks = strip::reconcile(&r.desks, cats);
+            self.kinds.insert(r.id, RoomKind::Context(name.clone()));
             rooms.push(r);
         }
         let mine = take(MY_ROOM);
         for mut r in old {
             r.desks = strip::reconcile(&r.desks, &[]);
-            if !r.desks.is_empty() {
+            // the user's own rooms stay; a context's only for its screens
+            let own = matches!(
+                self.kinds.get(&r.id),
+                Some(RoomKind::Free | RoomKind::Library)
+            );
+            if !r.desks.is_empty() || own {
                 rooms.push(r);
             }
         }
@@ -1031,6 +1296,7 @@ impl World {
                 w.grid = grid;
             }
         }
+        self.layout_gen += 1;
         self.pending.push(Wish::world(Want::Once));
         out
     }
@@ -1187,6 +1453,7 @@ impl World {
             .map(|(r, s)| DumpRoom {
                 id: r.id.0,
                 name: r.name.clone(),
+                kind: self.room_kind(r.id).label(),
                 side: if s.side == Side::North {
                     "north"
                 } else {
@@ -1211,11 +1478,17 @@ impl World {
                         continue;
                     };
                     let place = self.screen_place(ri, di, k);
+                    let st = self.screen_state(*sid);
                     screens.push(DumpScreen {
                         id: s.id.0,
                         app_id: s.app_id.clone(),
                         title: s.title.clone(),
                         size: [s.size.x, s.size.y],
+                        parent: st.parent.map(|p| p.0),
+                        modal: st.modal,
+                        fullscreen: st.fullscreen,
+                        maximized: st.maximized,
+                        air: st.air.is_some(),
                         placement: DumpPlacement {
                             room: r.id.0,
                             desk: di,
@@ -1312,6 +1585,7 @@ struct DumpCamera {
 struct DumpRoom {
     id: u32,
     name: String,
+    kind: &'static str,
     side: &'static str,
     x0: f32,
     len: f32,
@@ -1331,6 +1605,11 @@ struct DumpScreen {
     app_id: String,
     title: String,
     size: [f32; 2],
+    parent: Option<u32>,
+    modal: bool,
+    fullscreen: bool,
+    maximized: bool,
+    air: bool,
     placement: DumpPlacement,
 }
 
@@ -1569,15 +1848,22 @@ mod tests {
     }
 
     #[test]
-    fn focus_on_an_empty_desk_does_nothing() {
+    fn focus_on_a_desk_without_screens_is_its_cats_terminal_or_nothing() {
         let rooms = vec![Room {
             id: RoomId(0),
             name: "acme".into(),
-            desks: vec![desk(&[], Some(1))],
+            desks: vec![desk(&[], None), desk(&[], Some(1))],
         }];
         let mut w = World::with_rooms(OUT, OPTS, rooms);
-        assert!(w.command(Cmd::Focus, 0.0).is_empty());
+        assert!(w.command(Cmd::Focus, 0.0).is_empty(), "no screen, no cat");
         assert_eq!(w.mode().label(), "NAVEGAR");
+        w.command(Cmd::Move(Dir::Right), 0.0);
+        let out = w.command(Cmd::Focus, 0.0);
+        assert!(
+            out.contains(&Out::Effect(Effect::OpenPane(CatId(1)))),
+            "{out:?}"
+        );
+        assert_eq!(w.mode().label(), "FOCO");
     }
 
     #[test]
@@ -2106,7 +2392,11 @@ mod tests {
             Cmd::from_name("world.walk_exit", &BTreeMap::new()),
             Some(Cmd::Back)
         );
-        assert_eq!(Cmd::from_name("world.talk", &BTreeMap::new()), None);
+        assert_eq!(
+            Cmd::from_name("world.summon", &BTreeMap::new()),
+            None,
+            "the cats'"
+        );
     }
 
     fn names(w: &World) -> Vec<String> {

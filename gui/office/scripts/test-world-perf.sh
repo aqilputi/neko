@@ -101,7 +101,7 @@ exp=$(expand_script "$TMP/x.nks" /r 250 /bin/tc)
 check "expansão de \${RUN}/#@every" test "$exp" = "$(printf '%s\n' 'spawn /bin/tc --log /r/c.json' 'key l' 'wait 100' 'key h' 'wait 100' 'key l' 'wait 100')"
 
 # ---- end to end against the fake ----
-perf
+perf --scenario S1,S2,S4
 check "fake padrão passa (rc=$RC)" test "$RC" = 0
 check "--json: forma" jqe '.version == 1 and .mode == "winit" and .seconds == 1 and .status == "pass"
 	and (.scenarios | keys == ["S1","S2","S4","bin"])
@@ -111,6 +111,13 @@ check "--json: forma" jqe '.version == 1 and .mode == "winit" and .seconds == 1 
 	and (.scenarios.S4.checks[] | select(.row == "frame_cpu_p95") | .value == 1.2 and .status == "ok")
 	and (.scenarios.bin.metrics.binary_mb < 1)' <<<"$OUT"
 check "tabela: uma linha por cenário" test "$(grep -cE '^(S1|S2|S4|bin) +pass' "$TMP/table")" = 4
+check "campos novos do resumo (S12)" jqe '.scenarios.S1.metrics.ext_tick_p95_ms == 0.04 and .scenarios.S1.metrics.rate_wishes_max == 1' <<<"$OUT"
+
+perf
+check "padrão: S1 a S5 e S3r (rc=$RC)" jqe '.scenarios | keys == ["S1","S2","S3","S3r","S4","S5","bin"]' <<<"$OUT"
+
+FAKE_NKW_RATES=5 perf --scenario S1
+check "mais de 4 vontades Rate falham" jqe '.scenarios.S1.checks[] | select(.row == "rate_wishes") | .status == "fail"' <<<"$OUT"
 
 perf --scenario S1 --record
 check "--record grava quando passa" jqe '.version == 1 and (.runs.winit.S1.cpu_pct | type == "number") and (.runs.winit.bin.binary_mb | type == "number")' "$TMP/last.json"
