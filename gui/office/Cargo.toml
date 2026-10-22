@@ -18,3 +18,10 @@ opt-level = 3
 # the installed binary: no debug symbols (they are most of its size)
 [profile.release]
 strip = true
+
+# release/CI/perf only; the dev loop stays on `dev` (thin-LTO costs 54 s per incremental link)
+[profile.world]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+strip = true
