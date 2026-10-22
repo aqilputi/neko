@@ -21,6 +21,7 @@ mod pane;
 mod proto;
 mod sse;
 mod term;
+mod wake;
 
 pub use crate::core::{Core, StartOpts};
 pub use crate::http::{ApiError, error_code};

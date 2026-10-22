@@ -7,6 +7,7 @@
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -79,6 +80,29 @@ impl Conn {
         match self {
             Conn::Tcp(s) => s.set_read_timeout(d),
             Conn::Unix(s) => s.set_read_timeout(d),
+        }
+    }
+
+    pub fn set_write_timeout(&self, d: Option<Duration>) -> io::Result<()> {
+        match self {
+            Conn::Tcp(s) => s.set_write_timeout(d),
+            Conn::Unix(s) => s.set_write_timeout(d),
+        }
+    }
+
+    pub fn set_nonblocking(&self, on: bool) -> io::Result<()> {
+        match self {
+            Conn::Tcp(s) => s.set_nonblocking(on),
+            Conn::Unix(s) => s.set_nonblocking(on),
+        }
+    }
+}
+
+impl AsRawFd for Conn {
+    fn as_raw_fd(&self) -> RawFd {
+        match self {
+            Conn::Tcp(s) => s.as_raw_fd(),
+            Conn::Unix(s) => s.as_raw_fd(),
         }
     }
 }

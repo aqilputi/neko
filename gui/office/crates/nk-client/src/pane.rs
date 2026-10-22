@@ -1,7 +1,13 @@
 //! A pane's WebSocket (`WS /v1/panes/{id}/ws`) on its own thread: binary
 //! frames are raw PTY bytes both ways, text frames are JSON controls.
+//!
+//! The thread sleeps in `poll(2)` on the (non-blocking) socket and a
+//! [`Bell`] the `PaneConn` rings on every write/resize/close: an idle pane
+//! costs no wakeups, and a keystroke goes out at once.
 
 use std::io;
+use std::os::fd::AsRawFd;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -14,6 +20,7 @@ use tungstenite::{Message, WebSocket};
 
 use crate::http::{Conn, Endpoint, encode};
 use crate::proto::Control;
+use crate::wake::{Bell, poll};
 
 /// What a pane sends.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,10 +41,9 @@ enum Out {
     Close,
 }
 
-/// How long a read waits before the thread looks at what to send: the
-/// worst-case added latency of a keystroke.
-const POLL: Duration = Duration::from_millis(8);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long the goodbye (close frame) may take to go out.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Reconnections after a close 1013 (the server asks to come back).
 const RETRIES: u32 = 5;
 
@@ -46,6 +52,7 @@ pub struct PaneConn {
     id: String,
     reused: bool,
     tx: Sender<Out>,
+    bell: Arc<Bell>,
     rx: Receiver<PaneMsg>,
     ep: Endpoint,
 }
@@ -53,14 +60,21 @@ pub struct PaneConn {
 impl PaneConn {
     pub(crate) fn attach(ep: &Endpoint, id: &str, reused: bool) -> Result<PaneConn> {
         let ws = connect(ep, id)?;
+        let bell = Arc::new(Bell::new().context("eventfd do painel")?);
         let (tx, out_rx) = unbounded();
         let (in_tx, rx) = unbounded();
-        let (ep2, id2) = (ep.clone(), id.to_string());
+        let (ep2, id2, bell2) = (ep.clone(), id.to_string(), bell.clone());
         thread::Builder::new()
             .name(format!("nk-pane-{id}"))
-            .spawn(move || run(ws, &ep2, &id2, out_rx, in_tx))
+            .spawn(move || run(ws, &ep2, &id2, &out_rx, &in_tx, &bell2))
             .context("thread do painel")?;
-        Ok(PaneConn { id: id.to_string(), reused, tx, rx, ep: ep.clone() })
+        Ok(PaneConn { id: id.to_string(), reused, tx, bell, rx, ep: ep.clone() })
+    }
+
+    fn send(&self, o: Out) {
+        if self.tx.send(o).is_ok() {
+            self.bell.ring();
+        }
     }
 
     /// The pane id (`pane_id` of `POST /v1/panes`).
@@ -76,14 +90,14 @@ impl PaneConn {
     /// Keyboard/paste bytes for the PTY.
     pub fn write(&self, bytes: &[u8]) {
         if !bytes.is_empty() {
-            let _ = self.tx.send(Out::Data(bytes.to_vec()));
+            self.send(Out::Data(bytes.to_vec()));
         }
     }
 
     /// Resizes the PTY (last writer wins among viewers).
     pub fn resize(&self, cols: u16, rows: u16) {
         if cols > 0 && rows > 0 {
-            let _ = self.tx.send(Out::Resize(cols, rows));
+            self.send(Out::Resize(cols, rows));
         }
     }
 
@@ -95,7 +109,7 @@ impl PaneConn {
     /// Detaches; with `kill`, also closes the pane on the core (SIGHUP to
     /// the program).
     pub fn close(&self, kill: bool) {
-        let _ = self.tx.send(Out::Close);
+        self.send(Out::Close);
         if kill {
             let path = format!("/v1/panes/{}", encode(&self.id));
             let _ = self.ep.call::<(), serde_json::Value>("DELETE", &path, None);
@@ -105,7 +119,7 @@ impl PaneConn {
 
 impl Drop for PaneConn {
     fn drop(&mut self) {
-        let _ = self.tx.send(Out::Close);
+        self.send(Out::Close);
     }
 }
 
@@ -126,15 +140,20 @@ fn connect(ep: &Endpoint, id: &str) -> Result<WebSocket<Conn>> {
         }
         Err(e) => bail!("painel {id}: {e}"),
     };
-    ws.get_ref().set_read_timeout(Some(POLL))?;
+    ws.get_ref().set_read_timeout(None)?;
+    ws.get_ref().set_nonblocking(true)?;
     Ok(ws)
 }
 
-fn run(mut ws: WebSocket<Conn>, ep: &Endpoint, id: &str, out: Receiver<Out>, tx: Sender<PaneMsg>) {
+fn run(mut ws: WebSocket<Conn>, ep: &Endpoint, id: &str, out: &Receiver<Out>, tx: &Sender<PaneMsg>, bell: &Bell) {
     let mut retries = 0;
     loop {
-        match pump(&mut ws, &out, &tx) {
+        match pump(&mut ws, out, tx, bell) {
             End::Detach => {
+                // say goodbye with a bounded blocking write
+                let s = ws.get_ref();
+                let _ = s.set_nonblocking(false);
+                let _ = s.set_write_timeout(Some(CLOSE_TIMEOUT));
                 let _ = ws.close(None);
                 let _ = ws.flush();
                 let _ = tx.send(PaneMsg::Closed);
@@ -168,7 +187,19 @@ enum End {
     Closed,
 }
 
-fn pump(ws: &mut WebSocket<Conn>, out: &Receiver<Out>, tx: &Sender<PaneMsg>) -> End {
+fn would_block(e: &tungstenite::Error) -> bool {
+    matches!(e, tungstenite::Error::Io(e) if e.kind() == io::ErrorKind::WouldBlock)
+}
+
+fn interrupted(e: &tungstenite::Error) -> bool {
+    matches!(e, tungstenite::Error::Io(e) if e.kind() == io::ErrorKind::Interrupted)
+}
+
+/// Moves bytes both ways until the pane ends: queue what the `PaneConn`
+/// sent, read every frame there is (tungstenite may hold whole frames in its
+/// buffer, so read until the socket would block, never poll with data
+/// pending), flush, then sleep until the socket or the bell has something.
+fn pump(ws: &mut WebSocket<Conn>, out: &Receiver<Out>, tx: &Sender<PaneMsg>, bell: &Bell) -> End {
     loop {
         loop {
             let msg = match out.try_recv() {
@@ -181,34 +212,179 @@ fn pump(ws: &mut WebSocket<Conn>, out: &Receiver<Out>, tx: &Sender<PaneMsg>) -> 
                 Ok(Out::Close) | Err(TryRecvError::Disconnected) => return End::Detach,
                 Err(TryRecvError::Empty) => break,
             };
-            if ws.send(msg).is_err() {
-                return End::Closed;
+            // WouldBlock here means "queued, the socket is full": flushed below
+            match ws.write(msg) {
+                Ok(()) => {}
+                Err(e) if would_block(&e) => {}
+                Err(_) => return End::Closed,
             }
         }
-        let sent = match ws.read() {
-            Ok(Message::Binary(b)) => tx.send(PaneMsg::Data(b.to_vec())),
-            Ok(Message::Text(t)) => match serde_json::from_str::<Control>(t.as_str()) {
-                Ok(c) if c.kind == "title" => tx.send(PaneMsg::Title(c.text)),
-                Ok(c) if c.kind == "exit" => tx.send(PaneMsg::Exit((!c.err.is_empty()).then_some(c.err))),
-                _ => Ok(()),
-            },
-            Ok(Message::Close(frame)) => {
-                let again = matches!(frame, Some(CloseFrame { code: CloseCode::Again, .. }));
-                // let tungstenite answer the close, then stop
-                let _ = ws.flush();
-                return if again { End::Again } else { End::Closed };
+        loop {
+            let sent = match ws.read() {
+                Ok(Message::Binary(b)) => tx.send(PaneMsg::Data(b.to_vec())),
+                Ok(Message::Text(t)) => match serde_json::from_str::<Control>(t.as_str()) {
+                    Ok(c) if c.kind == "title" => tx.send(PaneMsg::Title(c.text)),
+                    Ok(c) if c.kind == "exit" => tx.send(PaneMsg::Exit((!c.err.is_empty()).then_some(c.err))),
+                    _ => Ok(()),
+                },
+                Ok(Message::Close(frame)) => {
+                    let again = matches!(frame, Some(CloseFrame { code: CloseCode::Again, .. }));
+                    // let tungstenite answer the close, then stop
+                    let _ = ws.get_ref().set_nonblocking(false);
+                    let _ = ws.get_ref().set_write_timeout(Some(CLOSE_TIMEOUT));
+                    let _ = ws.flush();
+                    return if again { End::Again } else { End::Closed };
+                }
+                Ok(_) => Ok(()), // ping/pong/raw frames (a pong reply is flushed below)
+                Err(e) if would_block(&e) => break,
+                Err(e) if interrupted(&e) => Ok(()),
+                Err(_) => return End::Closed,
+            };
+            if sent.is_err() {
+                return End::Detach;
             }
-            Ok(_) => Ok(()), // ping/pong/raw frames
-            Err(tungstenite::Error::Io(e))
-                if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
-            {
-                let _ = ws.flush(); // a queued pong or close reply
-                Ok(())
-            }
+        }
+        let pending = match ws.flush() {
+            Ok(()) => false,
+            Err(e) if would_block(&e) => true,
             Err(_) => return End::Closed,
         };
-        if sent.is_err() {
-            return End::Detach;
+        let sock = (ws.get_ref().as_raw_fd(), libc::POLLIN | if pending { libc::POLLOUT } else { 0 });
+        match poll(&[sock, (bell.fd(), libc::POLLIN)], None) {
+            Ok(r) if r[1] != 0 => bell.clear(),
+            Ok(_) => {}
+            Err(_) => return End::Closed,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::Addr;
+    use crossbeam_channel::RecvTimeoutError;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::Instant;
+
+    type Srv = WebSocket<TcpStream>;
+
+    /// A fake core for one pane: accepts one WebSocket, hands it to `serve`
+    /// on its own thread. Returns the endpoint to attach to.
+    fn fake(serve: impl FnOnce(Srv) + Send + 'static) -> Endpoint {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        thread::spawn(move || {
+            let (s, _) = l.accept().unwrap();
+            s.set_nodelay(true).unwrap();
+            serve(tungstenite::accept(s).unwrap());
+        });
+        Endpoint { addr: Addr::Tcp(addr.to_string()), token: None }
+    }
+
+    /// Server that reports each message it reads, with when it read it.
+    fn recorder() -> (Endpoint, Receiver<(Instant, Message)>) {
+        let (tx, rx) = unbounded();
+        let ep = fake(move |mut ws| {
+            while let Ok(m) = ws.read() {
+                if tx.send((Instant::now(), m)).is_err() {
+                    return;
+                }
+            }
+        });
+        (ep, rx)
+    }
+
+    #[test]
+    fn idle_pane_thread_does_not_wake() {
+        let (ep, _seen) = recorder();
+        let pane = PaneConn::attach(&ep, "idlepane", false).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let name = "nk-pane-idlepan"; // /proc truncates names to 15 bytes
+        let before = crate::wake::ctx_switches(name);
+        assert!(before > 0, "thread {name} not found");
+        thread::sleep(Duration::from_secs(1));
+        let woke = crate::wake::ctx_switches(name) - before;
+        assert!(woke <= 1, "idle pane thread woke {woke} times in 1 s");
+        drop(pane);
+    }
+
+    #[test]
+    fn writes_reach_the_server_at_once() {
+        let (ep, seen) = recorder();
+        let pane = PaneConn::attach(&ep, "latency", false).unwrap();
+        let mut worst = Duration::ZERO;
+        for i in 0..10u8 {
+            thread::sleep(Duration::from_millis(30)); // the pane thread is idle again
+            let t0 = Instant::now();
+            pane.write(&[b'a' + i]);
+            let (at, m) = seen.recv_timeout(Duration::from_secs(2)).expect("the write never arrived");
+            assert_eq!(m, Message::Binary(vec![b'a' + i].into()));
+            worst = worst.max(at - t0);
+        }
+        assert!(worst < Duration::from_millis(5), "a write took {worst:?} to reach the server");
+        pane.resize(100, 30);
+        let (_, m) = seen.recv_timeout(Duration::from_secs(2)).unwrap();
+        let Message::Text(t) = m else { panic!("{m:?}") };
+        let c: Control = serde_json::from_str(t.as_str()).unwrap();
+        assert_eq!((c.kind.as_str(), c.cols, c.rows), ("resize", 100, 30));
+    }
+
+    #[test]
+    fn a_burst_of_frames_is_delivered_whole() {
+        // several frames land in one read: tungstenite buffers the rest,
+        // which must come out without waiting for more socket traffic
+        let (hold_tx, hold_rx) = unbounded::<()>();
+        let ep = fake(move |mut ws| {
+            for b in [&b"one"[..], b"two", b"three"] {
+                ws.write(Message::Binary(b.to_vec().into())).unwrap();
+            }
+            ws.write(Message::Text(r#"{"type":"title","text":"hi"}"#.into())).unwrap();
+            ws.flush().unwrap();
+            let _ = hold_rx.recv(); // keep the socket open and silent
+        });
+        let pane = PaneConn::attach(&ep, "burst", false).unwrap();
+        let mut got = Vec::new();
+        while got.len() < 4 {
+            match pane.rx().recv_timeout(Duration::from_secs(1)) {
+                Ok(m) => got.push(m),
+                Err(e) => panic!("{e:?} after {got:?}"),
+            }
+        }
+        assert_eq!(
+            got,
+            vec![
+                PaneMsg::Data(b"one".to_vec()),
+                PaneMsg::Data(b"two".to_vec()),
+                PaneMsg::Data(b"three".to_vec()),
+                PaneMsg::Title("hi".into()),
+            ]
+        );
+        drop(hold_tx);
+    }
+
+    #[test]
+    fn server_close_and_detach_are_prompt() {
+        // the server going away ends the pane with Closed
+        let ep = fake(|mut ws| {
+            ws.write(Message::Binary(b"bye".to_vec().into())).unwrap();
+            ws.close(None).unwrap();
+            while ws.read().is_ok() {}
+        });
+        let pane = PaneConn::attach(&ep, "srvclose", false).unwrap();
+        assert_eq!(pane.rx().recv_timeout(Duration::from_secs(1)), Ok(PaneMsg::Data(b"bye".to_vec())));
+        assert_eq!(pane.rx().recv_timeout(Duration::from_secs(1)), Ok(PaneMsg::Closed));
+
+        // dropping the PaneConn closes the socket at once
+        let (ep, seen) = recorder();
+        let pane = PaneConn::attach(&ep, "detach", false).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let t0 = Instant::now();
+        drop(pane);
+        match seen.recv_timeout(Duration::from_secs(1)) {
+            Ok((at, Message::Close(_))) => assert!(at - t0 < Duration::from_millis(50), "{:?}", at - t0),
+            Ok((_, m)) => panic!("{m:?}"),
+            Err(RecvTimeoutError::Timeout) => panic!("no close frame"),
+            Err(RecvTimeoutError::Disconnected) => {} // reader ended: socket closed
         }
     }
 }

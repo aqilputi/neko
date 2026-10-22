@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, BufReader, Read};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -12,13 +13,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail};
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, bounded, unbounded};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use serde::Serialize;
 
 use crate::http::{Addr, Endpoint, encode};
 use crate::pane::PaneConn;
 use crate::proto::*;
 use crate::sse::{ConnStatus, Event, SseParser, decode_frame};
+use crate::wake::{Bell, poll};
 
 /// How to reach the core.
 #[derive(Debug, Clone, Default)]
@@ -39,11 +41,13 @@ pub struct StartOpts {
 /// A spawned `nk serve`. The child belongs to a keeper thread that lives as
 /// long as this value: PR_SET_PDEATHSIG fires when the thread that forked
 /// exits, so the core dies with the keeper (on drop: SIGTERM, then SIGKILL)
-/// or with the whole process if it crashes, and never earlier.
+/// or with the whole process if it crashes, and never earlier. The keeper
+/// sleeps in `poll(2)` on the child's pidfd and a quit bell: no wakeups
+/// until the child exits or we drop.
 struct Spawned {
     pid: u32,
     exit: Arc<Mutex<Option<String>>>,
-    quit: Option<Sender<()>>,
+    quit: Arc<Bell>,
     keeper: Option<thread::JoinHandle<()>>,
 }
 
@@ -55,7 +59,7 @@ impl Spawned {
 
 impl Drop for Spawned {
     fn drop(&mut self) {
-        drop(self.quit.take());
+        self.quit.ring();
         if let Some(h) = self.keeper.take() {
             let _ = h.join();
         }
@@ -64,9 +68,15 @@ impl Drop for Spawned {
 
 type Pipes = (u32, ChildStdout, ChildStderr);
 
+/// Without a pidfd (kernel < 5.3) the keeper checks the child this often.
+const KEEPER_FALLBACK_POLL: Duration = Duration::from_millis(50);
+/// How long the core gets between SIGTERM and SIGKILL.
+const TERM_GRACE: Duration = Duration::from_secs(2);
+
 fn spawn_core(mut cmd: Command, runtime: PathBuf) -> std::io::Result<(Spawned, ChildStdout, ChildStderr)> {
     let (ready_tx, ready_rx) = bounded::<std::io::Result<Pipes>>(1);
-    let (quit_tx, quit_rx) = bounded::<()>(0);
+    let quit = Arc::new(Bell::new()?);
+    let quit2 = quit.clone();
     let exit = Arc::new(Mutex::new(None));
     let exit2 = exit.clone();
     let keeper = thread::Builder::new().name("nk-core-keeper".into()).spawn(move || {
@@ -87,20 +97,49 @@ fn spawn_core(mut cmd: Command, runtime: PathBuf) -> std::io::Result<(Spawned, C
         };
         let (out, err) = (child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
         let _ = ready_tx.send(Ok((child.id(), out, err)));
-        while let Err(RecvTimeoutError::Timeout) = quit_rx.recv_timeout(Duration::from_millis(50)) {
-            if let Ok(Some(st)) = child.try_wait() {
+        let pidfd = crate::wake::pidfd(child.id()).ok();
+        let mut reaped = false;
+        loop {
+            // once reaped, only the quit bell matters (the pidfd stays readable)
+            let mut fds = vec![(quit2.fd(), libc::POLLIN)];
+            if let (Some(p), false) = (&pidfd, reaped) {
+                fds.push((p.as_raw_fd(), libc::POLLIN));
+            }
+            let timeout = (pidfd.is_none() && !reaped).then_some(KEEPER_FALLBACK_POLL);
+            let quit_rang = match poll(&fds, timeout) {
+                Ok(r) => r[0] != 0,
+                Err(_) => {
+                    thread::sleep(KEEPER_FALLBACK_POLL);
+                    false
+                }
+            };
+            if quit_rang {
+                break;
+            }
+            if !reaped && let Ok(Some(st)) = child.try_wait() {
                 *exit2.lock().unwrap_or_else(|p| p.into_inner()) = Some(st.to_string());
+                reaped = true;
             }
         }
-        // SAFETY: kill(2) on our own child's pid (not yet reaped: wait comes below).
-        unsafe {
-            libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+        if !reaped {
+            // SAFETY: kill(2) on our own child's pid, not reaped yet (only
+            // this thread waits on it), so the pid cannot have been reused.
+            unsafe {
+                libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+            }
+            match &pidfd {
+                Some(p) => {
+                    let _ = poll(&[(p.as_raw_fd(), libc::POLLIN)], Some(TERM_GRACE));
+                }
+                None => {
+                    let deadline = Instant::now() + TERM_GRACE;
+                    while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                }
+            }
+            let _ = child.kill();
         }
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
-            thread::sleep(Duration::from_millis(10));
-        }
-        let _ = child.kill();
         let _ = child.wait();
         let _ = std::fs::remove_dir_all(&runtime);
     })?;
@@ -108,7 +147,7 @@ fn spawn_core(mut cmd: Command, runtime: PathBuf) -> std::io::Result<(Spawned, C
         Ok(r) => r?,
         Err(_) => return Err(std::io::Error::other("o keeper do core morreu")),
     };
-    Ok((Spawned { pid, exit, quit: Some(quit_tx), keeper: Some(keeper) }, out, err))
+    Ok((Spawned { pid, exit, quit, keeper: Some(keeper) }, out, err))
 }
 
 /// A connection to the core. Cheap calls are blocking HTTP requests (one
@@ -533,6 +572,55 @@ mod tests {
         assert!(format!("{e:#}").contains("/nonexistent/nk"));
         let e = Core::start(StartOpts { nk_bin: Some("/bin/false".into()), ..StartOpts::default() }).err().unwrap();
         assert!(format!("{e:#}").contains("saiu"), "{e:#}");
+    }
+
+    fn sh(script: &str) -> (Spawned, PathBuf) {
+        let runtime = private_runtime_dir().unwrap();
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg(script).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let (s, _out, _err) = spawn_core(cmd, runtime.clone()).unwrap();
+        (s, runtime)
+    }
+
+    fn alive(pid: u32) -> bool {
+        // a zombie still answers kill(0): look at its state instead
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map(|s| !s.rsplit_once(')').is_some_and(|(_, rest)| rest.trim_start().starts_with('Z')))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn keeper_sees_the_child_exit_at_once() {
+        let (s, _rt) = sh("sleep 0.2; exit 3");
+        let t0 = Instant::now();
+        while s.exited().is_none() && t0.elapsed() < Duration::from_secs(3) {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let st = s.exited().expect("exit never seen");
+        assert!(st.contains('3'), "{st}");
+        assert!(t0.elapsed() < Duration::from_millis(400), "{:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn dropping_the_keeper_kills_the_child_promptly() {
+        let (s, rt) = sh("sleep 30");
+        let pid = s.pid;
+        assert!(alive(pid));
+        let t0 = Instant::now();
+        drop(s);
+        assert!(t0.elapsed() < Duration::from_millis(300), "{:?}", t0.elapsed());
+        assert!(!alive(pid), "child {pid} survived");
+        assert!(!rt.exists(), "runtime dir left behind");
+
+        // a child that ignores SIGTERM gets SIGKILL after the grace period
+        let (s, _rt) = sh("trap '' TERM; while :; do sleep 0.05; done");
+        let pid = s.pid;
+        thread::sleep(Duration::from_millis(100)); // the trap is set
+        let t0 = Instant::now();
+        drop(s);
+        let took = t0.elapsed();
+        assert!(took >= Duration::from_millis(1500) && took < Duration::from_secs(3), "{took:?}");
+        assert!(!alive(pid), "child {pid} survived");
     }
 
     #[test]
