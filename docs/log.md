@@ -26,7 +26,7 @@ e as entradas antigas mantêm o nome da época.
   S1 0 % de CPU e 0,13 wakeups/s; S2 0,17 % e tecla com p95 de 0,25 ms; S3 0,37 % (quadro p50 0,94 ms, p95
   4,3 ms, acima dos 2 ms); S3r 0,03 %; S4 p50 1,19 ms, p95 1,9 ms, 0 quadros perdidos; S5 0 perdidos; RSS de
   95 a 107 MB.
-- **pendências:** S3 p95 e S4 p50 acima do alvo; tick ocioso com p95 de 1,9 ms; S4 p50 ainda acima de 1 ms; aplicar o patch
+- **pendências:** S3 p95 e S4 p50 acima do alvo; tick ocioso com p95 de 1,9 ms; aplicar o patch
   de movimento relativo (mouse-look); "N" espelhado no ON AIR; a sala não tem teto; gatos andando usam o rig
   sentado; overrides de tecla do Lua ainda não chegam ao `/v1/keymap`.
 
