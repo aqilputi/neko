@@ -284,11 +284,16 @@ pub fn build(id: MeshId) -> Mesh {
             empty().with(rb(v(1.0, 1.0, 0.075), 0.03, 1, CREAM), v(0.0, 0.0, -0.0425))
         }
         MeshId::Chair => {
+            // a cushioned seat and a low back pad on two posts: the villager's
+            // back, tail and ears stay in view from the station (wave 2)
             let mut m = empty()
-                .with(rb(v(0.44, 0.06, 0.42), 0.02, 1, LILAC), v(0.0, 0.45, 0.0))
-                .with(rb(v(0.44, 0.45, 0.05), 0.02, 1, WOOD), v(0.0, 0.725, 0.185));
+                .with(rb(v(0.44, 0.07, 0.42), 0.025, 1, LILAC), v(0.0, 0.435, 0.0))
+                .with(rb(v(0.32, 0.13, 0.05), 0.02, 1, WOOD), v(0.0, 0.7, 0.19));
+            for x in [-0.12, 0.12] {
+                m = m.with(cuboid(v(0.025, 0.2, 0.025), WOOD_DARK), v(x, 0.57, 0.19));
+            }
             for (x, z) in [(-0.18, -0.17), (0.18, -0.17), (-0.18, 0.17), (0.18, 0.17)] {
-                m = m.with(cylinder(0.022, 0.42, 10, WOOD_DARK), v(x, 0.21, z));
+                m = m.with(cylinder(0.022, 0.4, 10, WOOD_DARK), v(x, 0.2, z));
             }
             m
         }
@@ -326,12 +331,13 @@ pub fn build(id: MeshId) -> Mesh {
             ),
         MeshId::CatEar => rb(v(0.07, 0.08, 0.03), 0.012, 1, SNOW),
         MeshId::CatTail => empty().with(rb(v(0.05, 0.05, 0.32), 0.022, 1, SNOW), v(0.0, 0.0, 0.16)),
+        other => crate::kit::build(other).expect("every wave-2 mesh has a builder"),
     }
 }
 
 /// Triangles of the kit mesh for `id` (computed once).
 pub fn triangle_count(id: MeshId) -> u32 {
-    static COUNTS: std::sync::OnceLock<[u32; 15]> = std::sync::OnceLock::new();
+    static COUNTS: std::sync::OnceLock<[u32; MeshId::COUNT]> = std::sync::OnceLock::new();
     COUNTS.get_or_init(|| MeshId::ALL.map(|id| build(id).triangles()))[id.index()]
 }
 
@@ -443,7 +449,7 @@ mod tests {
             Plane => (v(-0.5, 0.0, -0.5), v(0.5, 0.0, 0.5)),
             Desk => (v(-0.8, 0.0, -0.4), v(0.8, 0.75, 0.4)),
             MonitorFrame => (v(-0.5, -0.5, -0.08), v(0.5, 0.5, -0.005)),
-            Chair => (v(-0.22, 0.0, -0.21), v(0.22, 0.95, 0.21)),
+            Chair => (v(-0.22, 0.0, -0.21), v(0.22, 0.765, 0.215)),
             Shelf => (v(-0.45, 0.0, -0.16), v(0.45, 1.6, 0.16)),
             Book => (v(-0.0175, 0.0, -0.08), v(0.0175, 0.22, 0.08)),
             DoorFrame => (v(-0.6, 0.0, -0.08), v(0.6, 2.2, 0.08)),
@@ -452,6 +458,8 @@ mod tests {
             CatHead => (v(-0.12, -0.105, -0.13), v(0.12, 0.105, 0.105)),
             CatEar => (v(-0.035, -0.04, -0.015), v(0.035, 0.04, 0.015)),
             CatTail => (v(-0.025, -0.025, 0.0), v(0.025, 0.025, 0.32)),
+            // wave 2: inside the stated box and filling ≥ 80 % of it on every axis
+            other => crate::kit::stated_bounds(other).expect("every wave-2 mesh states its box"),
         }
     }
 
@@ -461,10 +469,19 @@ mod tests {
             let m = build(id);
             let (lo, hi) = m.bounds();
             let (elo, ehi) = expected_bounds(id);
-            assert!(
-                near(lo, elo, 2e-3) && near(hi, ehi, 2e-3),
-                "{id:?}: {lo} {hi}, want {elo} {ehi}"
-            );
+            if id.index() < 15 {
+                assert!(
+                    near(lo, elo, 2e-3) && near(hi, ehi, 2e-3),
+                    "{id:?}: {lo} {hi}, want {elo} {ehi}"
+                );
+            } else {
+                let inside = lo.cmpge(elo - 1e-3).all() && hi.cmple(ehi + 1e-3).all();
+                let fill = (hi - lo) / (ehi - elo);
+                assert!(
+                    inside && fill.min_element() >= 0.8,
+                    "{id:?}: {lo} {hi} in {elo} {ehi}, fill {fill}"
+                );
+            }
             assert!(
                 m.triangles() > 0 && m.triangles() <= MAX_TRIANGLES,
                 "{id:?}: {} tris",

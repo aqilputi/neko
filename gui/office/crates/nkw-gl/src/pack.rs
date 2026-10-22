@@ -4,7 +4,7 @@
 use glam::Vec3;
 
 use crate::RenderOpts;
-use crate::draw::{Blob, Instance, ScreenQuad};
+use crate::draw::{Blob, Instance, MeshId, ScreenQuad};
 
 /// One kit instance as the shader reads it (80 bytes, attributes 3..8).
 #[repr(C)]
@@ -33,9 +33,9 @@ pub(crate) type Run = (u32, u32);
 pub(crate) fn pack_instances(
     instances: &[Instance],
     out: &mut Vec<InstanceData>,
-    runs: &mut [Run; 15],
+    runs: &mut [Run; MeshId::COUNT],
 ) {
-    let mut counts = [0u32; 15];
+    let mut counts = [0u32; MeshId::COUNT];
     for i in instances {
         counts[i.mesh.index()] += 1;
     }
@@ -108,7 +108,7 @@ pub(crate) fn is_opaque(s: &ScreenQuad) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::draw::{ClientTex, MeshId};
+    use crate::draw::ClientTex;
     use glam::Mat4;
 
     #[test]
@@ -141,7 +141,7 @@ mod tests {
             inst(MeshId::CatTail, 4.0),
         ];
         let mut out = vec![InstanceData::default(); 9];
-        let mut runs = [(7, 7); 15];
+        let mut runs = [(7, 7); MeshId::COUNT];
         pack_instances(&list, &mut out, &mut runs);
         assert_eq!(out.len(), 4);
         let xs: Vec<f32> = out.iter().map(|d| d.model[12]).collect();

@@ -12,8 +12,10 @@
 pub use glow;
 
 pub mod draw;
+pub mod kit;
 pub mod mesh;
 mod pack;
+pub mod rig;
 
 use glow::HasContext;
 
@@ -193,7 +195,7 @@ pub struct WorldRenderer {
     // per-frame scratch, kept to avoid allocating
     instances: Vec<InstanceData>,
     blobs: Vec<BlobData>,
-    runs: [Run; 15],
+    runs: [Run; MeshId::COUNT],
     order: Vec<u32>,
 }
 
@@ -354,7 +356,7 @@ impl WorldRenderer {
                 gpu_ns: None,
                 instances: Vec::new(),
                 blobs: Vec::new(),
-                runs: [(0, 0); 15],
+                runs: [(0, 0); MeshId::COUNT],
                 order: Vec::new(),
             };
             r.apply_anisotropy(gl);

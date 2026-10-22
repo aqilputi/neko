@@ -3,6 +3,7 @@
 //! the PNGs in tests/golden/. Fixture content only: boxes, cats, a checker.
 
 mod egl;
+mod scenes;
 
 use egl::{Ctx, compare, context};
 use glam::{Mat4, Quat, Vec3};
@@ -831,4 +832,115 @@ fn preview() {
             ..opts()
         },
     );
+}
+
+// ---- wave 2 (P6): villagers, kittens, furniture, doors, the composition reference
+
+const ASPECT: f32 = SIZE[0] as f32 / SIZE[1] as f32;
+
+#[test]
+fn cats_coats() {
+    let Some(ctx) = context() else { return };
+    let list = scenes::cats_coats(ASPECT, false);
+    let r = render(&ctx, &list, opts());
+    assert!(r.stats.draws <= 80, "{} draws", r.stats.draws);
+    compare("cats_coats", &r.px, SIZE);
+}
+
+#[test]
+fn kittens() {
+    let Some(ctx) = context() else { return };
+    compare(
+        "kittens",
+        &render(&ctx, &scenes::kittens(ASPECT), opts()).px,
+        SIZE,
+    );
+}
+
+#[test]
+fn room_reception() {
+    let Some(ctx) = context() else { return };
+    let list = scenes::reception(ASPECT);
+    let r = render(&ctx, &list, opts());
+    eprintln!(
+        "room_reception: {} draws, {} tris, {} instances",
+        r.stats.draws, r.stats.triangles, r.stats.instances
+    );
+    assert!(r.stats.draws <= 80, "{} draws", r.stats.draws);
+    assert!(list.triangle_estimate() <= 100_000);
+    assert_eq!(r.stats.triangles, list.triangle_estimate());
+    compare("room_reception", &r.px, SIZE);
+}
+
+#[test]
+fn door_swing() {
+    let Some(ctx) = context() else { return };
+    compare(
+        "door_swing",
+        &render(&ctx, &scenes::door_swing(ASPECT), opts()).px,
+        SIZE,
+    );
+}
+
+#[test]
+fn desk_monitor_cat() {
+    let Some(ctx) = context() else { return };
+    let list = scenes::desk_monitor_cat(ASPECT);
+    let r = render(&ctx, &list, opts());
+    assert!(r.stats.draws <= 80, "{} draws", r.stats.draws);
+    compare("desk_monitor_cat", &r.px, SIZE);
+}
+
+/// Not a golden: `NKW_PREVIEW=<dir> cargo test -p nkw-gl --test golden preview_p6 -- --ignored`
+/// renders the wave-2 villagers and furniture at 1280×720 (`p6-*.png`).
+#[test]
+#[ignore]
+fn preview_p6() {
+    let Some(dir) = std::env::var_os("NKW_PREVIEW") else {
+        return;
+    };
+    let Some(ctx) = context() else { return };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    const BIG: [u32; 2] = [1280, 720];
+    let a = 16.0 / 9.0;
+    let shoot = |name: &str, list: &DrawList| {
+        let gl = &ctx.gl;
+        let target = ctx.fbo(BIG);
+        unsafe {
+            let mut w = WorldRenderer::new(gl, opts()).expect("renderer");
+            let st = w
+                .draw(
+                    gl,
+                    list,
+                    Target::Fbo {
+                        fbo: target.id(),
+                        size: BIG,
+                    },
+                )
+                .expect("draw");
+            let px = ctx.read(Some(target.fbo), BIG);
+            w.destroy(gl);
+            egl::write_png(&dir.join(format!("{name}.png")), &px, BIG);
+            eprintln!(
+                "{name}: {} draws, {} tris, {} instances",
+                st.draws, st.triangles, st.instances
+            );
+        }
+    };
+    use scenes::*;
+    shoot("p6-cat-back", &cat_closeup(a, false, &[11, 23, 37, 41]));
+    shoot("p6-cat-front", &cat_closeup(a, true, &[11, 23, 37, 41]));
+    shoot("p6-coats", &cats_coats(a, false));
+    shoot("p6-coats-front", &cats_coats(a, true));
+    shoot("p6-kittens", &kittens(a));
+    shoot("p6-furniture", &reception(a));
+    let mut near = reception(a);
+    near.camera = scenes::camera(glam::Vec3::new(-1.7, 1.2, 0.6), -0.25, -0.3, a);
+    shoot("p6-furniture-left", &near);
+    near.camera = scenes::camera(glam::Vec3::new(2.2, 1.25, 0.9), 0.2, -0.3, a);
+    shoot("p6-furniture-right", &near);
+    shoot("p6-doors", &door_swing(a));
+    shoot("p6-room", &office(a, &[11, 23, 37], 1, None));
+    shoot("p6-room-talk", &office(a, &[11, 23, 37], 1, Some(1)));
 }
