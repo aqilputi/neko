@@ -320,8 +320,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
-/// ms epoch → `YYYY-MM-DDTHH:MM:SSZ` (for the stub and tests).
-#[cfg(any(test, not(feature = "client")))]
+/// ms epoch → `YYYY-MM-DDTHH:MM:SSZ` (for nkg's stub and tests).
 pub fn format_rfc3339(ms: i64) -> String {
     let secs = ms.div_euclid(1000);
     let days = secs.div_euclid(86400);

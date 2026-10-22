@@ -15,6 +15,7 @@ pub struct StartOpts {
     pub demo: bool,
     pub connect: Option<String>,
     pub nk_bin: Option<std::path::PathBuf>,
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, Default)]

@@ -17,6 +17,7 @@ default = ["client"]
 client = ["dep:nk-client"]
 
 [dependencies]
+nk-cats = { path = "../nk-cats" }
 nk-client = { path = "../nk-client", optional = true }
 anyhow = "1"
 crossbeam-channel = "0.5"

@@ -1,0 +1,10 @@
+[package]
+name = "nk-cats"
+version = "0.1.0"
+description = "nekuroddo's engine-agnostic office core: session model, cat poses, inbox walkers, monitor feed, text raster, key routing"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fontdue = "0.9"

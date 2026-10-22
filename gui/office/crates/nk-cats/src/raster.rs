@@ -204,6 +204,7 @@ pub struct TCell {
 
 /// Draws a terminal grid (row-major cells) at cell size; cursor as a block
 /// outline in `cursor` colour (filled when `focused`).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_grid(
     canvas: &mut Canvas,
     face: &mut Face,

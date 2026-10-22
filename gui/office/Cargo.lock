@@ -3249,6 +3249,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "nk-cats"
+version = "0.1.0"
+dependencies = [
+ "fontdue",
+]
+
+[[package]]
 name = "nk-client"
 version = "0.1.0"
 dependencies = [
@@ -3271,6 +3278,7 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "fontdue",
+ "nk-cats",
  "nk-client",
  "serde_json",
 ]

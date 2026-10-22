@@ -5,15 +5,12 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 mod app;
-mod catpose;
+// The pure, engine-agnostic modules live in nk-cats (shared with nkw);
+// re-exported here so `crate::model::…` paths keep working.
+use nk_cats::{catpose, inbox, keys, model, monitor, raster};
 mod cli;
 mod core_io;
-mod inbox;
-mod keys;
-mod model;
-mod monitor;
 mod nav;
-mod raster;
 mod scene;
 mod strip;
 #[cfg(not(feature = "client"))]
