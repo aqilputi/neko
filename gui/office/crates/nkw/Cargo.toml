@@ -1,0 +1,28 @@
+[package]
+name = "nkw"
+version = "0.1.0"
+description = "nkw, the world: a nested Smithay compositor with windows as screens in a cozy 3D office"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nkw-core = { path = "../nkw-core" }
+nkw-gl = { path = "../nkw-gl" }
+calloop = "0.14.5"
+glam = "0.33"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+png = "0.17"
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dependencies.smithay]
+git = "https://github.com/Smithay/smithay.git"
+rev = "24647fc8d00131eb7f388efed26e35ea316b0018" # re-pin by its own PR only
+default-features = false
+features = ["backend_winit", "renderer_glow", "wayland_frontend", "desktop"]
+
+[dev-dependencies]
+tempfile = "3"

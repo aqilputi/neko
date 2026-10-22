@@ -1,0 +1,323 @@
+//! `--script`: synthetic input and checks, one command per line, `#`
+//! comments (contract S2). Keys are xkb keysym names (or a single
+//! character), with modifiers `ctrl+ shift+ alt+ world+`.
+
+use std::path::PathBuf;
+
+/// Modifiers of a chord. `world` resolves to `ctrl+alt` nested.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub world: bool,
+}
+
+/// A key with its modifiers, e.g. `ctrl+bracketright`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Chord {
+    pub mods: Mods,
+    /// keysym name (`h`, `Return`, `bracketright`) or one character
+    pub key: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Cmd {
+    Key(Chord),
+    Down(Chord),
+    Up(Chord),
+    Text(String),
+    Wait(u64),
+    Spawn(Vec<String>),
+    Shot(PathBuf),
+    Dump(PathBuf),
+    ExpectMode(String),
+    ExpectFocus(String),
+    Quit,
+}
+
+/// A command and the line it came from (1-based), for error messages.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Line {
+    pub no: usize,
+    pub cmd: Cmd,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScriptError {
+    pub line: usize,
+    pub msg: String,
+}
+
+impl std::fmt::Display for ScriptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "script line {}: {}", self.line, self.msg)
+    }
+}
+
+/// The mode names `expect mode` accepts.
+pub const MODES: &[&str] = &["NAV", "ANDAR", "FOCO", "CONVERSA", "SALTO", "COMANDOS"];
+
+/// `expect mode` name for a `Mode::label()` (the HUD says NAVEGAR).
+pub fn mode_name(label: &str) -> &str {
+    if label == "NAVEGAR" { "NAV" } else { label }
+}
+
+pub fn parse_chord(s: &str) -> Result<Chord, String> {
+    let mut mods = Mods::default();
+    let mut rest = s;
+    // a trailing "+" is the key itself (`ctrl++` is ctrl and plus)
+    while let Some((m, tail)) = rest.split_once('+') {
+        if tail.is_empty() {
+            break;
+        }
+        match m {
+            "ctrl" => mods.ctrl = true,
+            "shift" => mods.shift = true,
+            "alt" => mods.alt = true,
+            "world" => mods.world = true,
+            _ => return Err(format!("unknown modifier {m:?} in {s:?}")),
+        }
+        rest = tail;
+    }
+    if rest.is_empty() {
+        return Err(format!("empty key in {s:?}"));
+    }
+    Ok(Chord {
+        mods,
+        key: rest.to_string(),
+    })
+}
+
+/// Split a line into words; double quotes group, `\"` `\\` `\n` `\t`
+/// escape inside them.
+fn words(s: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        None => return Err("unterminated quote".into()),
+                        Some('"') => break,
+                        Some('\\') => match chars.next() {
+                            Some('n') => cur.push('\n'),
+                            Some('t') => cur.push('\t'),
+                            Some(e @ ('"' | '\\')) => cur.push(e),
+                            Some(e) => return Err(format!("bad escape \\{e}")),
+                            None => return Err("unterminated quote".into()),
+                        },
+                        Some(c) => cur.push(c),
+                    }
+                }
+            }
+            c if c.is_whitespace() => {
+                if in_word {
+                    out.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            c => {
+                in_word = true;
+                cur.push(c);
+            }
+        }
+    }
+    if in_word {
+        out.push(cur);
+    }
+    Ok(out)
+}
+
+fn one<'a>(args: &'a [String], what: &str) -> Result<&'a str, String> {
+    match args {
+        [a] => Ok(a),
+        _ => Err(format!("{what} takes exactly one argument")),
+    }
+}
+
+fn parse_line(line: &str) -> Result<Option<Cmd>, String> {
+    let t = line.trim();
+    if t.is_empty() || t.starts_with('#') {
+        return Ok(None);
+    }
+    let (head, tail) = t.split_once(char::is_whitespace).unwrap_or((t, ""));
+    let args = words(tail)?;
+    let cmd = match head {
+        "key" => Cmd::Key(parse_chord(one(&args, "key")?)?),
+        "down" => Cmd::Down(parse_chord(one(&args, "down")?)?),
+        "up" => Cmd::Up(parse_chord(one(&args, "up")?)?),
+        "text" => {
+            if !tail.trim_start().starts_with('"') {
+                return Err("text needs a quoted string".into());
+            }
+            Cmd::Text(one(&args, "text")?.to_string())
+        }
+        "wait" => {
+            let v = one(&args, "wait")?;
+            Cmd::Wait(v.parse().map_err(|_| format!("bad wait {v:?} (ms)"))?)
+        }
+        "spawn" => {
+            if args.is_empty() {
+                return Err("spawn needs a command".into());
+            }
+            Cmd::Spawn(args)
+        }
+        "shot" => Cmd::Shot(one(&args, "shot")?.into()),
+        "dump" => Cmd::Dump(one(&args, "dump")?.into()),
+        "expect" => match args.as_slice() {
+            [what, v] if what == "mode" => {
+                if !MODES.contains(&v.as_str()) {
+                    return Err(format!("unknown mode {v:?}"));
+                }
+                Cmd::ExpectMode(v.clone())
+            }
+            [what, v] if what == "focus" => Cmd::ExpectFocus(v.clone()),
+            _ => return Err("expect mode <M> | expect focus <app_id>".into()),
+        },
+        "quit" => {
+            if !args.is_empty() {
+                return Err("quit takes no arguments".into());
+            }
+            Cmd::Quit
+        }
+        other => return Err(format!("unknown command {other:?}")),
+    };
+    Ok(Some(cmd))
+}
+
+pub fn parse(src: &str) -> Result<Vec<Line>, ScriptError> {
+    let mut out = Vec::new();
+    for (i, line) in src.lines().enumerate() {
+        match parse_line(line) {
+            Ok(Some(cmd)) => out.push(Line { no: i + 1, cmd }),
+            Ok(None) => {}
+            Err(msg) => return Err(ScriptError { line: i + 1, msg }),
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chord(mods: Mods, key: &str) -> Chord {
+        Chord {
+            mods,
+            key: key.into(),
+        }
+    }
+
+    const NONE: Mods = Mods {
+        ctrl: false,
+        shift: false,
+        alt: false,
+        world: false,
+    };
+    const CTRL: Mods = Mods { ctrl: true, ..NONE };
+
+    #[test]
+    fn every_command() {
+        let src = r#"
+# a comment
+key h
+key ctrl+bracketright
+down shift+a
+up shift+a
+text "olá \"mundo\"\n"
+wait 250
+spawn testclient --checker --log "/tmp/a b.json"
+shot out.png
+dump world.json
+expect mode FOCO
+expect focus acme.demo
+   quit
+"#;
+        let got: Vec<Cmd> = parse(src).unwrap().into_iter().map(|l| l.cmd).collect();
+        let shift = Mods {
+            shift: true,
+            ..NONE
+        };
+        assert_eq!(
+            got,
+            vec![
+                Cmd::Key(chord(NONE, "h")),
+                Cmd::Key(chord(CTRL, "bracketright")),
+                Cmd::Down(chord(shift, "a")),
+                Cmd::Up(chord(shift, "a")),
+                Cmd::Text("olá \"mundo\"\n".into()),
+                Cmd::Wait(250),
+                Cmd::Spawn(vec![
+                    "testclient".into(),
+                    "--checker".into(),
+                    "--log".into(),
+                    "/tmp/a b.json".into()
+                ]),
+                Cmd::Shot("out.png".into()),
+                Cmd::Dump("world.json".into()),
+                Cmd::ExpectMode("FOCO".into()),
+                Cmd::ExpectFocus("acme.demo".into()),
+                Cmd::Quit,
+            ]
+        );
+    }
+
+    #[test]
+    fn line_numbers_are_kept() {
+        let l = parse("\n# x\nkey h\n\nwait 1\n").unwrap();
+        assert_eq!(l.iter().map(|l| l.no).collect::<Vec<_>>(), [3, 5]);
+    }
+
+    #[test]
+    fn chords() {
+        let all = Mods {
+            ctrl: true,
+            shift: true,
+            alt: true,
+            world: true,
+        };
+        assert_eq!(
+            parse_chord("ctrl+shift+alt+world+x").unwrap(),
+            chord(all, "x")
+        );
+        assert_eq!(parse_chord("ctrl++").unwrap(), chord(CTRL, "+"));
+        assert_eq!(parse_chord("+").unwrap(), chord(NONE, "+"));
+        assert_eq!(parse_chord("Return").unwrap(), chord(NONE, "Return"));
+        assert!(parse_chord("hyper+x").is_err());
+    }
+
+    #[test]
+    fn errors_carry_line_numbers() {
+        let cases = [
+            ("key", 1, "exactly one"),
+            ("\nkey a b", 2, "exactly one"),
+            ("\n\nbogus", 3, "unknown command"),
+            ("wait soon", 1, "bad wait"),
+            ("text hello", 1, "quoted"),
+            ("text \"open", 1, "unterminated"),
+            ("text \"a\\q\"", 1, "bad escape"),
+            ("spawn", 1, "needs a command"),
+            ("expect mode WALK", 1, "unknown mode"),
+            ("expect color red", 1, "expect mode"),
+            ("quit now", 1, "no arguments"),
+            ("key hyper+x", 1, "unknown modifier"),
+        ];
+        for (src, line, want) in cases {
+            let e = parse(src).unwrap_err();
+            assert_eq!(e.line, line, "{src:?}");
+            assert!(e.msg.contains(want), "{src:?} → {e}");
+            assert!(e.to_string().starts_with(&format!("script line {line}:")));
+        }
+    }
+
+    #[test]
+    fn mode_names_follow_the_hud() {
+        assert_eq!(mode_name("NAVEGAR"), "NAV");
+        assert_eq!(mode_name("FOCO"), "FOCO");
+    }
+}

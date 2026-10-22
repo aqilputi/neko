@@ -3,6 +3,27 @@
 Histórico de decisões e progresso. Entradas mais recentes no topo. Até a v0.1.0 o projeto se chamava `neko`,
 e as entradas antigas mantêm o nome da época.
 
+## 2026-10-22
+
+- **progresso:** fase 0 do mundo (`nkw`, [plano-mundo.md](plano-mundo.md)) fechada. Medida aninhada no niri
+  (Iris Xe), `world-perf.sh` com janelas de 60 s, binário `--profile world`:
+  1. foot, um app GTK4 e o mpv (dmabuf) aparecem nos quads e digitam no FOCO, com tecla morta ✓;
+  2. FOCO pixel-exato, 0 px diferentes (headless e aninhado) ✓;
+  3. S1 ocioso: 0 % de CPU, 0 wakeups/s ✓;
+  4. S4: p95 de 1,87 ms por quadro (p50 1,14), 0 quadros perdidos, 12 draws, GPU 2,1 ms ✓;
+  5. S2: 0,18 % de CPU a 15 teclas/s, tecla no cliente com p95 de 0,25 ms ✓;
+  6. 2D sobre o passe 3D conferido por shot, sem `glGetError` com `--gl-debug` ✓;
+  7. binário de 7,4 MB, build a frio de 2 min 43 s ✓.
+
+  Decisão: seguir. Pendências: RSS de 75 MB na partida (orçamento 45 MB), mouse-look no ANDAR depende de
+  movimento relativo no backend winit, p50 acima de 1 ms por reenviar o buffer shm inteiro, escala
+  fracionária ainda não exata.
+- **progresso:** crates do mundo: `nkw-core` (cérebro puro), `nkw-gl` (renderizador), `nkw` (compositor
+  Smithay), `nkw-testclient`, `nkw-objects` (acústica, portas, cofre, objetos), `nkw-sys` (D-Bus, relógio,
+  PipeWire) e `nk-cats` (módulos puros dos gatos, extraídos do `nkg`). O `nk-client` não acorda mais quando
+  ocioso (painel e keeper de ~130 para 0 wakeups/s).
+- **decisão:** o GUI nativo deixa o navegador: `nkg` em Rust + Bevy ([gui.md](gui.md)); o web vira legado.
+
 ## 2026-10-16
 
 - **documentação:** [gui.md](gui.md) sai de "planejado/em construção" para **implementado** — a Fase 3 do GUI
