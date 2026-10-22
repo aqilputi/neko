@@ -32,10 +32,31 @@ func TestBuildKeymap(t *testing.T) {
 func TestParentMode(t *testing.T) {
 	for in, want := range map[string]string{
 		ModeNormalTodos: ModeNormal, ModeNormal: ModeAny, ModeInsert: ModeAny, ModeAny: "", "": "", "a.b.c": "a.b",
+		ModeNormalWorld: ModeNormal, ModeWorld: ModeAny,
 	} {
 		if got := ParentMode(in); got != want {
 			t.Errorf("ParentMode(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The world's modes (nkw) are the ones no other client shows.
+func TestIsWorldMode(t *testing.T) {
+	for _, m := range WorldModes {
+		if !IsWorldMode(m) {
+			t.Errorf("%s is not a world mode", m)
+		}
+	}
+	if len(WorldModes) != 8 {
+		t.Fatalf("WorldModes = %v", WorldModes)
+	}
+	for _, m := range []string{ModeNormal, ModeNormalTodos, ModeInsert, ModeAny, "", "worldly", "normal.worldx", "x.world"} {
+		if IsWorldMode(m) {
+			t.Errorf("%q is a world mode", m)
+		}
+	}
+	if !IsWorldMode("world.novo") {
+		t.Error("a new world.* sub-mode is a world mode too")
 	}
 }
 

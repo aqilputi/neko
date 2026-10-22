@@ -22,8 +22,9 @@ Lua, vale na próxima chamada), `List(ctx)` devolve os disponíveis para uma sel
 mostrarem a tecla; rodá-lo no núcleo (RPC, `nk run`, `nk.run`) dá `ErrClientCommand`.
 
 `App.RegisterBuiltins()` chama, nesta ordem, `RegisterSessionCommands`, `RegisterDispatch`, `RegisterPanes`,
-`RegisterGroupCommands`, `RegisterTodoJira` e `RegisterKeyCommands` — uma função por arquivo "dono"
-(`internal/app/sessions.go`, `dispatch.go`, `panes.go`, `groups.go`, `jira.go`, `commands.go`). As tabelas
+`RegisterGroupCommands`, `RegisterTodoJira`, `RegisterKeyCommands` e `RegisterWorldCommands` — uma função por
+arquivo "dono" (`internal/app/sessions.go`, `dispatch.go`, `panes.go`, `groups.go`, `jira.go`, `commands.go`,
+`world.go`). As tabelas
 abaixo seguem essa divisão; a coluna **args** lista `nome:tipo` (`required` com `*`), e **teclas** é o
 `Keys` do comando no modo indicado (`normal.todos` é um sub-modo de `normal`: suas teclas têm prioridade na
 aba Todos, e o resto cai em `normal` — ver [teclas.md](teclas.md)). Essa não é a lista **inteira** de um
@@ -124,6 +125,78 @@ tem `Runner` nem `confirm`. São resolvidos por cada cliente (a TUI hoje; o GUI,
 
 \* mesma regra condicional de `session.new` (usa o mesmo `App.Dispatch`).
 
+## Mundo — `world.go`
+
+Os comandos do mundo (o compositor `nkw`, [plano-mundo.md](plano-mundo.md) §3.12): todos `scope: client`, sem
+`Runner`, nos modos do mundo (`core.WorldModes`). O núcleo só os lista — em `GET /v1/commands` para a paleta
+do `nkw` e em `GET /v1/keymap` para as teclas dele; quem executa é o `nkw`. A TUI e o GUI nunca os mostram
+(`core.IsWorldMode`: nem na paleta, nem na ajuda, nem na barra de status). Teclas e modos em
+[teclas.md](teclas.md#mundo-nkw).
+
+Um comando com teclas em dois modos (`world.hint` no NAV e no ANDAR, `world.back`, as `world.line_*` na linha e
+na paleta) é **um** comando no registro (o primeiro modo, com as teclas dele) e uma ligação a mais por modo no
+keymap (`App.Keymap()` junta as de `world.go` enquanto o comando estiver registrado). `Registry.SetKeys` muda
+só a ligação principal; a do outro modo fica.
+
+| modo | teclas | comando | título |
+|---|---|---|---|
+| `normal.world` | `h` `left` · `l` `right` | `world.left` · `world.right` | estação anterior · próxima estação |
+| `normal.world` | `j` `down` · `k` `up` | `world.down` · `world.up` | tela de baixo · tela de cima |
+| `normal.world` | `J` `world+shift+j` · `K` `world+shift+k` | `world.room_next` · `world.room_prev` | próxima sala · sala anterior |
+| `normal.world` | `1`…`9` | `world.room_1` … `world.room_9` | sala N |
+| `normal.world` | `gg` · `G` | `world.first` · `world.last` | primeira mesa · última mesa |
+| `normal.world` | `enter` `i` | `world.focus` | FOCO na tela (ou no terminal do gato) |
+| `normal.world` | `t` | `world.talk` | conversa com o gato |
+| `normal.world` | `w` `world+w` | `world.walk` | ANDAR (e volta) |
+| `normal.world` | `f` `world+f` · `F` | `world.hint` · `world.hint_focus` | SALTO · SALTO direto para o FOCO |
+| `normal.world` | `o` `world+o` | `world.overview` | mapa |
+| `normal.world` | `b` | `world.library` | biblioteca (fase 4: toast) |
+| `normal.world` | `H` · `L` | `world.move_left` · `world.move_right` | tela para a mesa à esquerda/direita |
+| `normal.world` | `,` · `.` | `world.consume` · `world.expel` | junta na pilha à esquerda · tira para uma mesa só dela |
+| `normal.world` | `-` · `=` | `world.narrower` · `world.wider` | mesa mais estreita · mais larga |
+| `normal.world` | `p` | `world.pin` | prende a tela no ar |
+| `normal.world` | `M` | `world.send_room` (`room:room*`) | manda a tela para outra sala |
+| `normal.world` | `T` `world+enter` | `world.terminal` | terminal novo |
+| `normal.world` | `Q` `world+q` | `world.close` | fecha a janela |
+| `normal.world` | `shift+space` `world+space` | `world.summon` | chama o gato mais urgente |
+| `normal.world` | `:` `ctrl+p` `world+p` | `world.palette` | COMANDOS |
+| `normal.world` | — | `world.fullscreen` · `world.maximize` | tela cheia (TV) · maximiza (largura 1) |
+| `normal.world` | — | `world.room_new` (`name:string*`) · `world.goto_room` (`room:room*`) · `world.goto_object` (`name:string*`) | sala nova · ir para a sala · ir até o objeto |
+| `world` | `world+h` `world+l` `world+k` `world+j` | `world.focus_left` / `_right` / `_up` / `_down` | FOCO na vizinha |
+| `world` | `world+d` | `world.launcher` | apps |
+| `world` | `world+shift+e` | `world.quit` (confirma) | sair do mundo (confirma) |
+| `world` | `XF86AudioPlay` · `XF86AudioNext` · `XF86AudioPrev` | `media.play_pause` · `media.next` · `media.prev` | tocar/pausar · faixa |
+| `world` | `XF86AudioRaiseVolume` · `XF86AudioLowerVolume` · `XF86AudioMute` | `volume.up` · `volume.down` · `volume.mute` | volume |
+| `world` | — | `brightness.up` · `brightness.down` | brilho |
+| `world.walk` | `w` `s` `a` `d` (segurar) | `world.forward` / `back` / `strafe_left` / `strafe_right` | andar |
+| `world.walk` | `q` `left` · `e` `right` | `world.turn_left` · `world.turn_right` | girar |
+| `world.walk` | `up` · `down` | `world.look_up` · `world.look_down` | olhar |
+| `world.walk` | `c` | `world.recenter` | horizonte |
+| `world.walk` | `enter` `space` | `world.interact` | usar o que está na mira |
+| `world.walk` | `g` | `world.grab` | pegar/soltar a tela (fase 3: toast) |
+| `world.walk` | `[` · `]` | `world.nearer` · `world.farther` | tela na mão (fase 3: toast) |
+| `world.walk` | `j` · `k` | `world.adjust_down` · `world.adjust_up` | ajustar o objeto na mira |
+| `world.walk` | `h` · `l` | `world.prev` · `world.next` | anterior/próximo no objeto na mira |
+| `world.walk` | `f` | `world.hint` | SALTO |
+| `world.walk` | `esc` | `world.walk_exit` | volta ao NAV |
+| `world.focus` | `ctrl+]` | `world.back` | sai do FOCO (`keys.focus_escape`) |
+| `world.talk` | `space` `enter` | `world.talk_next` | avança |
+| `world.talk` | `i` `r` | `world.talk_reply` | responder (linha) |
+| `world.talk` | `f` | `world.talk_sit` | FOCO no terminal do gato |
+| `world.talk` | `esc` `q` | `world.talk_end` | encerra |
+| `world.talk` | `j` · `k` · `1`…`9` | `world.choice_down` · `world.choice_up` · `world.choice_1` … `_9` | escolha |
+| `world.hint` | `esc` · `backspace` | `world.hint_cancel` · `world.hint_backspace` | cancela · apaga |
+| `world.palette` | `esc` · `enter` · `tab` | `world.palette_cancel` · `_run` · `_complete` | paleta |
+| `world.palette` | `up` `ctrl+p` · `down` `ctrl+n` | `world.palette_prev` · `world.palette_next` | paleta |
+| `world.line`, `world.palette` | `ctrl+a` · `ctrl+e` · `ctrl+w` · `ctrl+u` | `world.line_home` · `_end` · `_delete_word` · `_clear` | edição |
+| `world.line` | `esc` · `enter` · `shift+enter` | `world.line_cancel` · `world.line_send` · `world.line_newline` | linha |
+
+O tipo de argumento `room` (`core.ArgRoom`) é novo: o `nkw` completa com as salas dele. Nos comandos agrupados
+(mesmo título), o `hint` diz qual é qual ("à esquerda", "próxima"…). `world.back` aparece duas vezes: no ANDAR
+(`s`, andar para trás — o título do comando é "andar") e no FOCO (`ctrl+]`, a ligação extra com "sai do FOCO");
+o `nkw` decide pelo modo. O `nkw` nunca liga `app.quit`; os comandos `core` que o NAV herda de `normal`
+(`r x n m X dd c a A ctrl+k ? z`) agem sobre o gato da estação.
+
 ## Confirmação: metadado vs. comportamento
 
 `Confirm: true` em `core.Command` é só um **aviso** ("este comando pode pedir uma confirmação") para quem
@@ -152,4 +225,6 @@ Um cliente que quer saber de antemão se *vai* perguntar não tem como, pela met
 | `nk run` | `nk run <nome> [arg=valor…] [--session <id>] [--yes] [--addr <endereço>]` — sem `<nome>`, lista `GET /v1/commands` (marca `-` = indisponível para a seleção); um `pending` vira um `[y/N]` no terminal, a menos que `--yes` |
 
 Um comando `scope: client` (a tabela de navegação acima) não roda em nenhuma dessas quatro formas no núcleo —
-só a TUI (e, mais tarde, o GUI) sabe executá-lo sobre o seu próprio estado de tela.
+só a TUI (e, mais tarde, o GUI) sabe executá-lo sobre o seu próprio estado de tela; os do mundo, só o `nkw`.
+De um script, `nk.ui.scene(nome, args)` pede ao `nkw` conectado que rode um comando do mundo
+([lua.md](lua.md)).

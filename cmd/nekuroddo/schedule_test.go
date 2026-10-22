@@ -168,4 +168,15 @@ func TestServeDemo(t *testing.T) {
 			t.Fatalf("a demo session without an id: %+v", x)
 		}
 	}
+	// the world (nkw) reads its keys and palette from here too
+	km, err := c.Keymap(ctxT(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := km.Resolve("normal.world", "world+w"); got != "world.walk" {
+		t.Fatalf("demo keymap: normal.world world+w = %q", got)
+	}
+	if got, _ := km.Resolve("world.walk", "f"); got != "world.hint" {
+		t.Fatalf("demo keymap: world.walk f = %q", got)
+	}
 }

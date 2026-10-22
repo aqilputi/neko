@@ -335,7 +335,8 @@ var paletteHints = map[string]func(m *Model) string{
 // sequences (gg, dd: their keys are quicker), and the group commands (the
 // palette offers them typed, with their argument).
 func (m *Model) commandItem(c core.Command) (paletteItem, bool) {
-	if c.Name == "palette.open" || strings.HasPrefix(c.Name, "group.") {
+	// the world's commands (nkw) are its own: the TUI cannot run them
+	if c.Name == "palette.open" || strings.HasPrefix(c.Name, "group.") || core.IsWorldMode(c.Mode) {
 		return paletteItem{}, false
 	}
 	for _, k := range c.Keys {

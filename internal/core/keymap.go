@@ -11,6 +11,31 @@ import (
 // not bind falls back to the parent's (then to "*").
 const ModeNormalTodos = "normal.todos"
 
+// The world's modes (the nkw compositor, plan-mundo §3.12). Only the nkw
+// resolves them, in its own order (world first; normal.world falls back to
+// normal and "*"; world.focus has no fallback); every other client ignores
+// them. A key with "world+" is a global chord whatever mode binds it.
+const (
+	ModeWorld        = "world"
+	ModeNormalWorld  = "normal.world"
+	ModeWorldWalk    = "world.walk"
+	ModeWorldFocus   = "world.focus"
+	ModeWorldTalk    = "world.talk"
+	ModeWorldHint    = "world.hint"
+	ModeWorldPalette = "world.palette"
+	ModeWorldLine    = "world.line"
+)
+
+// WorldModes lists the world's modes.
+var WorldModes = []string{ModeWorld, ModeNormalWorld, ModeWorldWalk, ModeWorldFocus, ModeWorldTalk,
+	ModeWorldHint, ModeWorldPalette, ModeWorldLine}
+
+// IsWorldMode reports whether mode is one of the world's ("world",
+// "world.*", "normal.world"): bindings the TUI and the GUI never show.
+func IsWorldMode(mode string) bool {
+	return mode == ModeWorld || mode == ModeNormalWorld || strings.HasPrefix(mode, ModeWorld+".")
+}
+
 // BuildKeymap makes the keymap every client resolves keys with (plan §2.7)
 // from the commands, in their order: one Binding per command with keys. A
 // command with no mode binds in NORMAL; its help text is its title.

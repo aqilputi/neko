@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/aqilputi/nekuroddo/internal/app"
+	"github.com/aqilputi/nekuroddo/internal/core"
 	"github.com/aqilputi/nekuroddo/internal/rpc/proto"
 	"github.com/aqilputi/nekuroddo/internal/store"
 )
@@ -254,6 +255,8 @@ func (s *Server) openPane(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, proto.CodeNotFound, "sessão desconhecida: "+req.SessionID)
 		return
 	}
+	// "2" answers the second option, as session.reply does in every client
+	req.Reply = core.ResolveOption(sess.Questions, req.Reply)
 	s.panes.openMu.Lock()
 	defer s.panes.openMu.Unlock()
 	pm := s.a.Panes()

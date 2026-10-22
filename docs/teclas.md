@@ -101,3 +101,62 @@ Com sessões selecionadas, a barra de status mostra `:group agrupa N · esc limp
 - No renderizador clássico (sem mouse), a roda e `shift+pgup/pgdown` rolam o scrollback.
 
 Veja [painel-embutido.md](painel-embutido.md) para entender como o painel trata as teclas.
+
+## Mundo (`nkw`)
+
+O compositor do mundo (`nkw`, [plano-mundo.md](plano-mundo.md) §3) usa o mesmo keymap do core, em modos só
+dele. Os comandos estão em [comandos.md](comandos.md#mundo--worldgo) (`internal/app/world.go`); a TUI e o GUI
+nunca mostram esses modos nem esses comandos (`core.IsWorldMode`).
+
+**A tecla `world`.** `world` é um modificador abstrato nos nomes de tecla (`world+w`): vira `ctrl+alt` quando o
+`nkw` roda aninhado (`--world-mod`, `keys.world_mod` no `world.toml`) e `super` numa sessão própria (fase 7). Toda
+tecla com `world+` é um **acorde global**, valha em que modo estiver registrada: funciona em todo modo do mundo,
+inclusive no FOCO, e nenhum acorde pertence a dois comandos. Assim um comando carrega a tecla simples e o acorde
+(`w` e `world+w` para ANDAR). As teclas de mídia (`XF86Audio…`) também são globais.
+
+| modo | quando | ordem de resolução (feita pelo `nkw`) |
+|---|---|---|
+| `world` | acordes globais, em todo modo do mundo | sempre primeiro |
+| `normal.world` | NAV | `world` → `normal.world` → `normal` → `*` |
+| `world.walk` | ANDAR | `world` → `world.walk` → `*` |
+| `world.focus` | FOCO | `world` → `world.focus`; **sem fallback**, o resto vai para a janela |
+| `world.talk` | CONVERSA | `world` → `world.talk` → `normal` (só comandos `scope: core`, com o gato como contexto) |
+| `world.hint`, `world.palette`, `world.line` | SALTO, COMANDOS, linhas de texto | só o próprio modo; teclas imprimíveis são texto |
+
+`normal.world` é um sub-modo de `normal`, como o `normal.todos` (`core.ParentMode`): as teclas dele sombreiam as
+de `normal` e o resto cai em `normal` — os comandos do core que o NAV herda (`r x n m X dd c a A ctrl+k ? z`)
+agem sobre o gato da estação. O `nkw` nunca liga `app.quit`.
+
+| tecla | NAV (`normal.world`) |
+|---|---|
+| `h` `l` / `j` `k` (e setas) | estação anterior/próxima · tela de baixo/de cima |
+| `J` `K` · `1`…`9` · `gg` `G` | sala próxima/anterior · sala N · primeira/última mesa |
+| `enter` `i` · `t` · `w` | FOCO · CONVERSA com o gato · ANDAR |
+| `f` · `F` · `o` · `b` | SALTO · SALTO direto para o FOCO · mapa · biblioteca |
+| `H` `L` · `,` `.` · `-` `=` · `p` · `M` | tela para a mesa ao lado · junta/tira da pilha · mesa mais estreita/larga · prende no ar · manda para outra sala |
+| `T` · `Q` · `shift+space` · `:` `ctrl+p` | terminal novo · fecha a janela · chama o gato mais urgente · COMANDOS |
+
+| acorde (`world`) | comando |
+|---|---|
+| `world+w` | `world.walk` |
+| `world+h` `world+l` `world+k` `world+j` | `world.focus_left` / `_right` / `_up` / `_down` |
+| `world+shift+j` `world+shift+k` | `world.room_next` / `world.room_prev` |
+| `world+space` | `world.summon` |
+| `world+f` · `world+p` · `world+o` | `world.hint` · `world.palette` · `world.overview` |
+| `world+enter` · `world+q` · `world+d` | `world.terminal` · `world.close` · `world.launcher` |
+| `world+shift+e` | `world.quit` (confirma) |
+
+No ANDAR (`world.walk`): `w` `s` `a` `d` andam (segurar), `q` `e` (e `left` `right`) giram, `up` `down` olham, `c`
+volta ao horizonte, `enter` `space` usam o que está na mira, `j` `k` ajustam o objeto, `h` `l` passam
+anterior/próximo nele, `g` `[` `]` pegam a tela (fase 3), `f` é SALTO e `esc` volta ao NAV. No FOCO só `ctrl+]`
+(`keys.focus_escape`) e os acordes são do mundo. Na CONVERSA: `space`/`enter` avançam, `i`/`r` respondem,
+`f` senta no terminal do gato, `j` `k` `1`…`9` escolhem, `esc`/`q` encerram. No SALTO, `esc` cancela e
+`backspace` apaga; na paleta e nas linhas, `ctrl+a` `ctrl+e` `ctrl+w` `ctrl+u` editam e `esc`/`enter`
+cancelam/confirmam (`tab` completa na paleta, `shift+enter` quebra a linha).
+
+Do Lua, `nk.keymap.set` vale nesses modos como em qualquer outro ([lua.md](lua.md)):
+
+```lua
+nk.keymap.set("world.walk", "j", "world.turn_left")      -- girar com j/l em vez de q/e
+nk.keymap.set("normal.world", "s", "world.walk")         -- s entra no ANDAR
+```

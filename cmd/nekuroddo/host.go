@@ -29,11 +29,11 @@ type host struct {
 
 // The UI capabilities each host gives Lua (nk.ui.has). The TUI draws all of
 // them but the GUI's scene; nk serve has no screen of its own, so only what
-// reaches a remote client through the bus (toast, confirm.requested) and
-// the desktop notification it sends itself.
+// reaches a remote client through the bus (toast, confirm.requested,
+// ui.scene for the world, nkw) and the desktop notification it sends itself.
 var (
 	tuiCaps   = []string{lua.CapToast, lua.CapConfirm, lua.CapCat, lua.CapPalette, lua.CapNotify}
-	serveCaps = []string{lua.CapToast, lua.CapConfirm, lua.CapNotify}
+	serveCaps = []string{lua.CapToast, lua.CapConfirm, lua.CapNotify, lua.CapScene}
 )
 
 // autoReloadEvery is how often [lua] auto_reload looks at the files (tests

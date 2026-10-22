@@ -81,6 +81,9 @@ func TestBuiltinsRegisterEveryPlanName(t *testing.T) {
 			t.Errorf("%s runs in the core: %v", n, err)
 		}
 	}
+	for _, n := range worldNames() { // world_test.go: client-scope too
+		client[n] = true
+	}
 	for n, c := range all {
 		if !client[n] && c.Scope != core.ScopeCore {
 			t.Errorf("%s: scope %q", n, c.Scope)

@@ -168,7 +168,7 @@ func TestRegisterBuiltins(t *testing.T) {
 		t.Fatal(err)
 	}
 	inPlan := map[string]bool{}
-	for _, n := range planNames {
+	for _, n := range append(planNames, worldNames()...) { // the world's: plan-mundo §3.12 (S9)
 		inPlan[n] = true
 	}
 	seen := map[string]bool{}

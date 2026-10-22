@@ -181,5 +181,8 @@ func (r *Registry) SetKeys(name, mode string, keys []string) error {
 }
 
 // Keymap is the keymap every client resolves keys with (plan §2.7): one
-// binding per registered command with keys, whatever the selection.
-func (a *App) Keymap() core.Keymap { return core.BuildKeymap(a.reg.All()) }
+// binding per registered command with keys, whatever the selection, then
+// the world commands' bindings in their other modes (world.go).
+func (a *App) Keymap() core.Keymap {
+	return append(core.BuildKeymap(a.reg.All()), a.worldExtraBindings()...)
+}

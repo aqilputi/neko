@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -581,6 +582,88 @@ func TestUIWithoutCaps(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	if len(rec.named(EvUIPaletteOpen))+len(rec.named(EvUICatMeow)) != 0 || len(e.f.Notify.Notes()) != 0 {
 		t.Fatal("capability-less calls had effects")
+	}
+}
+
+// nk.ui.scene(command[, args]) asks the world (nkw) to run a client command:
+// ui.scene {command, args} on the bus, args always an object of scalars.
+func TestUIScene(t *testing.T) {
+	e := newEnv(t, Options{Caps: []string{CapScene}})
+	rec := e.record()
+	if got := e.eval(`nk.ui.has("scene")`); got != "true" {
+		t.Fatalf("has scene = %s", got)
+	}
+	if got := e.eval(`nk.ui.scene("world.goto_room", { room = "acme", n = 2, fast = true })`); got != "true" {
+		t.Fatalf("scene = %s", got)
+	}
+	if got := e.eval(`nk.ui.scene("world.terminal")`); got != "true" {
+		t.Fatalf("scene without args = %s", got)
+	}
+	eventually(t, "ui.scene", func() bool { return len(rec.named(EvUIScene)) == 2 })
+	evs := rec.named(EvUIScene)
+	d := evs[0].Data.(SceneData)
+	if d.Command != "world.goto_room" || d.Args["room"] != "acme" || d.Args["n"] != float64(2) || d.Args["fast"] != true || len(d.Args) != 3 {
+		t.Fatalf("scene data = %+v", d)
+	}
+	b, err := json.Marshal(evs[1].Data)
+	if err != nil || string(b) != `{"command":"world.terminal","args":{}}` {
+		t.Fatalf("scene json = %s, %v", b, err)
+	}
+	for code, want := range map[string]string{
+		`nk.ui.scene("")`:                          "comando",
+		`nk.ui.scene("world.x", { t = {} })`:       "args.t",
+		`nk.ui.scene("world.x", { "posicional" })`: "texto",
+	} {
+		if _, err := e.rt.Eval(code); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", code, err, want)
+		}
+	}
+}
+
+// nk.keymap.set works in the world's modes like in any other: the override
+// resolves before the core's keymap, with the command's title as help.
+func TestKeymapSetWorldModes(t *testing.T) {
+	e := newEnv(t, Options{})
+	if err := e.app.RegisterWorldCommands(); err != nil {
+		t.Fatal(err)
+	}
+	e.eval(`nk.keymap.set("normal.world", "n", "world.right")
+		nk.keymap.set("world.walk", "j", "world.turn_left")
+		nk.keymap.set("world", "world+a", function() nk.ui.scene("world.goto_room", { room = "acme" }) end)`)
+	over, base := e.rt.Keymap(), e.app.Keymap()
+	resolve := func(mode, key string) string {
+		if c, ok := over.Resolve(mode, key); ok {
+			return c
+		}
+		c, _ := base.Resolve(mode, key)
+		return c
+	}
+	for _, c := range []struct{ mode, key, want string }{
+		{"normal.world", "n", "world.right"},
+		{"normal.world", "l", "world.right"},
+		{"world.walk", "j", "world.turn_left"},
+		{"world.walk", "q", "world.turn_left"},
+		{"world", "world+a", "lua.key:world:world+a"},
+	} {
+		if got := resolve(c.mode, c.key); got != c.want {
+			t.Errorf("%s %q = %q, want %s", c.mode, c.key, got, c.want)
+		}
+	}
+	if b, _ := over.Find("world.right"); b.Help.Desc != "próxima estação" {
+		t.Fatalf("help = %+v", b.Help)
+	}
+}
+
+func TestUISceneWithoutCap(t *testing.T) {
+	e := newEnv(t, Options{Caps: []string{CapToast}})
+	rec := e.record()
+	if got := e.eval(`nk.ui.scene("world.terminal")`); got != "false" {
+		t.Fatalf("scene without cap = %s", got)
+	}
+	e.eval(`nk.ui.toast("depois")`)
+	eventually(t, "toast", func() bool { return len(rec.named(app.EvToast)) == 1 })
+	if n := len(rec.named(EvUIScene)); n != 0 {
+		t.Fatalf("%d ui.scene without the cap", n)
 	}
 }
 

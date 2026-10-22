@@ -210,8 +210,12 @@ de pé, para um cliente que conectou depois de o diálogo abrir.
 [{"command":"session.archive","keys":["X"],"mode":"normal","help":{"key":"X","desc":"arquiva/restaura (no contexto: todas)"}}]
 ```
 
-É `core.BuildKeymap(Registry.All())` — a mesma tabela que a TUI resolve teclas com, então um `nk.keymap.set` do
-Lua aparece aqui também (quando o host embutir Lua; ver [lua.md](lua.md)).
+É `App.Keymap()`: `core.BuildKeymap(Registry.All())` — a mesma tabela que a TUI resolve teclas com, então um
+`Registry.SetKeys` aparece aqui na hora — mais as ligações em segundo modo dos comandos do mundo (`world.hint`
+no NAV e no ANDAR…, ver [comandos.md](comandos.md#mundo--worldgo)). Um comando pode ter, então, mais de uma
+ligação (uma por modo); `GET /v1/commands` o lista uma vez só. Os modos do mundo (`normal.world`, `world`,
+`world.*`) só o `nkw` resolve; os outros clientes os ignoram. As sobreposições de `nk.keymap.set` do Lua
+(`Runtime.Keymap()`) ainda não entram aqui — só a TUI do mesmo processo as aplica (ver [lua.md](lua.md)).
 
 ## Eventos — `GET /v1/events` (SSE)
 
@@ -263,6 +267,18 @@ devolve). O primeiro refresh do core só registra (um cliente lê os rabos que m
 que aparece depois disso conta todas as suas linhas como novas, e um contador que volta (transcript reescrito)
 recomeça. A comparação usa `store.Session.TailSeq` (`tail_seq` no snapshot), que conta as linhas lidas até agora.
 
+**`ui.scene`** (`lua.EvUIScene`, dado `lua.SceneData`):
+
+```
+event: ui.scene
+data: {"seq":88,"at":"2026-10-22T10:00:00Z","name":"ui.scene","data":{"command":"world.goto_room","args":{"room":"acme"}}}
+```
+
+Sai quando um script chama `nk.ui.scene(command, args)` num host com a capacidade de Lua `scene` (o `nk serve`
+tem; a TUI não). É um pedido ao mundo (`nkw`): rodar o comando de cliente `command` (um `world.*`, ver
+[comandos.md](comandos.md#mundo--worldgo)) com `args` — sempre um objeto, `{}` quando o script não passou nada,
+só com valores texto, número ou booleano. Sem mundo conectado, ninguém faz nada; os outros clientes o ignoram.
+
 ## Painéis — PTYs remotos
 
 O **core** decide *como* mostrar uma sessão (reusar painel aberto, anexar a uma rodando em background, ou
@@ -292,6 +308,11 @@ demora demais para reconectar e pegar o status de saída, o servidor fecha com *
 depois de `exitWait` (2 s) — reconecte. Tamanho máximo de um lado é 2000 colunas/linhas; frames (binário ou
 texto) são limitados a 1 MiB. Sem checagem de `Origin`: o unix socket só é alcançável pelo dono do processo, e
 o TCP exige o token (uma página de outro site não o conhece).
+
+O `reply` passa por `core.ResolveOption` com as perguntas pendentes da sessão (`questions` do snapshot) antes de
+o core decidir o painel — a mesma regra do `session.reply`: um número sozinho (`"2"`) vira o rótulo da opção
+de mesma posição, contando as opções de todas as perguntas em ordem; texto, `"02"` ou um número fora do
+alcance são digitados como vieram. Assim "2" responde igual na TUI, no GUI e no `nkw`.
 
 Um host que já roda o PTY no mesmo processo (a própria TUI, um `nkg` embutido) pode publicá-lo no servidor com
 `Server.AttachPane(pane, sessionID, cols, rows)` em vez de deixar o `POST /v1/panes` abrir outro — hoje só os

@@ -110,8 +110,23 @@ levantam erro antes de rodar, nos dois caminhos.
 nk.keymap.set(mode, key, cmd)   -- cmd: nome de comando registrado OU uma função (atalho anônimo, fora da paleta)
 nk.keymap.del(mode, key)        -- tecla não faz mais nada (mesmo uma padrão)
 ```
-As sobreposições de um arquivo valem por cima do `core.Keymap` vindo do registro; `GET /v1/keymap` e
-`keymap.changed` (evento) refletem a mudança assim que ela é aplicada.
+As sobreposições de um arquivo valem por cima do `core.Keymap` vindo do registro; `keymap.changed` (evento)
+sai assim que a mudança é aplicada. Elas ficam em `Runtime.Keymap()`, que a TUI aplica antes do keymap do
+núcleo; `GET /v1/keymap` hoje serve só o keymap do registro (`App.Keymap()`), então um cliente remoto ainda não
+vê as sobreposições do Lua.
+
+Os modos do mundo (`normal.world`, `world`, `world.walk`, `world.focus`, `world.talk`, `world.hint`,
+`world.palette`, `world.line` — [teclas.md](teclas.md#mundo-nkw)) valem como qualquer outro:
+
+```lua
+nk.keymap.set("normal.world", "n", "world.right")       -- n vai para a próxima estação
+nk.keymap.set("world.walk", "j", "world.turn_left")     -- girar com j/l em vez de q/e
+nk.keymap.set("world", "world+a", function()             -- acorde próprio: vai à sala "acme"
+  nk.ui.scene("world.goto_room", { room = "acme" })
+end)
+```
+
+A TUI não mostra essas teclas na ajuda (são do `nkw`).
 
 ### Eventos
 
@@ -165,9 +180,20 @@ nk.ui.confirm(question, fn) -> token   -- qualquer cliente pode responder; "yes"
 nk.ui.palette_open(prefill)
 nk.ui.cat.meow(text)
 nk.ui.notify(body, title)              -- notificação de desktop (fora da VM, goroutine própria); precisa do port Notify também
+nk.ui.scene(command, args) -> bool     -- pede ao mundo (nkw) que rode um comando dele; precisa de "scene"
 ```
-`"scene"` está na lista de capacidades mas nenhuma função de hoje a consulta — é reservada para o GUI (fase
-3). `nk.ui.toast` (é `app.Toast`: o evento `toast` chega a todo cliente) e `nk.ui.confirm` (é `app.Ask`:
+`nk.ui.scene(command[, args])` publica `ui.scene {command, args}` no barramento; o `nkw` conectado roda o
+comando de cliente (`world.goto_room`, `world.terminal`… — [comandos.md](comandos.md#mundo--worldgo)) e, sem
+mundo conectado, nada acontece. `args` é uma tabela de chaves texto com valores texto, número ou booleano (vai
+como objeto JSON, `{}` quando falta); outra coisa é erro, como `command` vazio. Sem a capacidade `"scene"`
+volta `false` e não publica nada, como `palette_open`.
+
+```lua
+nk.ui.scene("world.goto_room", { room = "acme" })
+nk.ui.scene("world.terminal")
+```
+
+`nk.ui.toast` (é `app.Toast`: o evento `toast` chega a todo cliente) e `nk.ui.confirm` (é `app.Ask`:
 `confirm.requested`) sempre funcionam — não consultam capacidade; os hosts as declaram mesmo assim para que
 `nk.ui.has("toast")`/`("confirm")` digam a verdade.
 
@@ -210,6 +236,7 @@ do JSON do protocolo.
 | `keymap.changed` | `lua/loader.go` | `nil` — só avisa que `GET /v1/keymap` mudou |
 | `ui.palette_open` | `lua/bridge.go` | `{prefill}` — só sai se o host tiver a capacidade `"palette"` |
 | `ui.cat.meow` | `lua/bridge.go` | `{text}` — só sai com a capacidade `"cat"` |
+| `ui.scene` | `lua/bridge.go` | `{command, args}` — só sai com a capacidade `"scene"`; quem executa é o `nkw` |
 
 `nk.on` só assina eventos que algum handler pediu (`r.wanted`), então o `pump` não acorda a VM à toa.
 
@@ -259,7 +286,7 @@ um sucesso zera a contagem. Falhas de `Eval` (`:lua`) nunca contam para a desati
 
 `Options.Caps` é a lista que o host declara ao criar o runtime (constantes `lua.CapToast`, `CapConfirm`,
 `CapCat`, `CapPalette`, `CapScene`, `CapNotify`). `nk.ui.has(cap)` só olha essa lista; as funções que dependem
-de capacidade (`nk.ui.palette_open`, `.cat.meow`, `.notify`) voltam `false` sem fazer nada quando ela falta,
+de capacidade (`nk.ui.palette_open`, `.cat.meow`, `.notify`, `.scene`) voltam `false` sem fazer nada quando ela falta,
 em vez de erro — então um script pode checar `nk.ui.has("notify")` e cair para `nk.ui.toast` (é o que o
 exemplo 2 abaixo faz). Uma VM só por processo: as capacidades são as do processo, não de cada cliente RPC
 conectado nele.
@@ -267,13 +294,15 @@ conectado nele.
 | processo | capacidades | por quê |
 |---|---|---|
 | `nk` (TUI; também com `--listen`) | `toast`, `confirm`, `cat`, `palette`, `notify` | a TUI desenha tudo menos a cena do GUI |
-| `nk serve` (e `--demo`) | `toast`, `confirm`, `notify` | sem tela: só o que chega a um cliente remoto pelo barramento (`toast`, `confirm.requested`) e a notificação de desktop, que o próprio processo manda |
+| `nk serve` (e `--demo`) | `toast`, `confirm`, `notify`, `scene` | sem tela: só o que chega a um cliente remoto pelo barramento (`toast`, `confirm.requested`, `ui.scene` para o `nkw`) e a notificação de desktop, que o próprio processo manda |
 
-`nk.ui.cat.meow` e `nk.ui.palette_open` **publicam eventos** (`ui.cat.meow {text}`, `ui.palette_open
-{prefill}`) no barramento — o SSE os leva a clientes remotos também. A TUI os desenha pelo handler
+`nk.ui.cat.meow`, `nk.ui.palette_open` e `nk.ui.scene` **publicam eventos** (`ui.cat.meow {text}`,
+`ui.palette_open {prefill}`, `ui.scene {command, args}`) no barramento — o SSE os leva a clientes remotos também. A TUI os desenha pelo handler
 `onLuaUIEvent` (`internal/tui/lua.go`): o miado vai para o gato da barra de status (cortado em 50 colunas) e
 `palette_open` abre a paleta com o texto já digitado (uma paleta aberta só troca o texto). O handler é chamado
-pelo ouvinte do barramento da TUI para os eventos em que `isLuaUIEvent(nome)` é verdadeiro.
+pelo ouvinte do barramento da TUI para os eventos em que `isLuaUIEvent(nome)` é verdadeiro. O `ui.scene` não é
+um deles: a TUI não tem mundo (nem a capacidade) e o ignora; o `nkw`, conectado a um `nk serve`, o recebe pelo
+SSE e roda o comando.
 
 ## Ajuda (`?`)
 

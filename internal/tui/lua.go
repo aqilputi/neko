@@ -164,6 +164,9 @@ func (m *Model) luaBindings() []key.Binding {
 	}
 	var col []key.Binding
 	for _, b := range m.lua.Keymap() {
+		if core.IsWorldMode(b.Mode) { // the world's keys (nkw), never typed here
+			continue
+		}
 		keys := make([]string, len(b.Keys))
 		for i, k := range b.Keys {
 			if core.IsSequence(k) {

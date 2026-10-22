@@ -43,6 +43,7 @@ const (
 	EvKeymapChanged  = "keymap.changed"
 	EvUIPaletteOpen  = "ui.palette_open"
 	EvUICatMeow      = "ui.cat.meow"
+	EvUIScene        = "ui.scene"
 	sourcePrefix     = "lua:"
 	evalFile         = "<eval>"
 	keyCommandPrefix = "lua.key:"

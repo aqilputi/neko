@@ -11,6 +11,7 @@ const (
 	ArgDir     = "dir"
 	ArgTag     = "tag"
 	ArgInt     = "int"
+	ArgRoom    = "room" // a room of the world (nkw completes it)
 )
 
 // Modes a binding is active in ("*" = any).
@@ -34,7 +35,7 @@ const SourceBuiltin = "builtin"
 // Arg is one argument a command takes.
 type Arg struct {
 	Name     string `json:"name"`
-	Type     string `json:"type"` // ArgString | ArgSession | ArgDir | ArgTag | ArgInt
+	Type     string `json:"type"` // ArgString | ArgSession | ArgDir | ArgTag | ArgInt | ArgRoom
 	Prompt   string `json:"prompt"`
 	Required bool   `json:"required"`
 }

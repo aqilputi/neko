@@ -13,6 +13,7 @@ import (
 
 	"github.com/aqilputi/nekuroddo/internal/app"
 	"github.com/aqilputi/nekuroddo/internal/app/apptest"
+	"github.com/aqilputi/nekuroddo/internal/claude"
 	"github.com/aqilputi/nekuroddo/internal/rpc/proto"
 	"github.com/aqilputi/nekuroddo/internal/store"
 	"github.com/aqilputi/nekuroddo/internal/term"
@@ -155,6 +156,32 @@ func TestOpenPaneTypesReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "second reply typed", func() bool { return strings.HasSuffix(fp.Written(), "não\x1b[201~\r") })
+}
+
+// The reply goes through core.ResolveOption, like session.reply: a number
+// alone picks that option of the session's questions; anything else (text,
+// out of range) is typed as given.
+func TestOpenPaneResolvesReplyOption(t *testing.T) {
+	asking := bgSession
+	asking.Questions = []claude.Question{{Question: "qual?", Options: []claude.Option{{Label: "alpha"}, {Label: "bravo"}}}}
+	e := newEnv(t, func(o *Options, f *fakesT) {
+		o.replyDelay = func(time.Duration) time.Duration { return time.Millisecond }
+		f.Sessions.SetSnapshot(store.Snapshot{At: apptest.Epoch, Sessions: []store.Session{asking, idleSession}})
+	})
+	op, err := e.c.OpenPane(ctxT(t), proto.PaneOpenRequest{SessionID: asking.SessionID, Reply: "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := e.f.Panes.Pane(op.PaneID)
+	eventually(t, "option typed", func() bool { return fp.Written() == "\x1b[200~bravo\x1b[201~\r" })
+	for _, reply := range []string{"3", "talvez", "02"} {
+		before := fp.Written()
+		if _, err := e.c.OpenPane(ctxT(t), proto.PaneOpenRequest{SessionID: asking.SessionID, Reply: reply}); err != nil {
+			t.Fatal(err)
+		}
+		want := before + "\x1b[200~" + reply + "\x1b[201~\r"
+		eventually(t, "reply "+reply+" as given", func() bool { return fp.Written() == want })
+	}
 }
 
 func TestPaneWebSocketEcho(t *testing.T) {

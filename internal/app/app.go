@@ -91,7 +91,7 @@ func New(cfg config.Config, p Ports) *App {
 func (a *App) RegisterBuiltins() error {
 	for _, register := range []func() error{
 		a.RegisterSessionCommands, a.RegisterDispatch, a.RegisterPanes,
-		a.RegisterGroupCommands, a.RegisterTodoJira, a.RegisterKeyCommands,
+		a.RegisterGroupCommands, a.RegisterTodoJira, a.RegisterKeyCommands, a.RegisterWorldCommands,
 	} {
 		if err := register(); err != nil {
 			return err

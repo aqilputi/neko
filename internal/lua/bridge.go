@@ -64,6 +64,7 @@ func (r *Runtime) installAPI() {
 		"confirm":      r.nkConfirm,
 		"palette_open": r.nkPaletteOpen,
 		"notify":       r.nkUINotify,
+		"scene":        r.nkScene,
 	})
 	ui.RawSetString("cat", L.SetFuncs(L.NewTable(), map[string]glua.LGFunction{"meow": r.nkMeow}))
 	nk.RawSetString("ui", ui)
@@ -566,6 +567,40 @@ func (r *Runtime) nkPaletteOpen(L *glua.LState) int {
 
 func (r *Runtime) nkMeow(L *glua.LState) int {
 	return r.publishIf(L, "cat", EvUICatMeow, map[string]string{"text": L.OptString(1, "")})
+}
+
+// SceneData is the ui.scene event: a client command for the world (nkw) to
+// run, with its arguments (string, number or bool values; never null).
+type SceneData struct {
+	Command string         `json:"command"`
+	Args    map[string]any `json:"args"`
+}
+
+// nk.ui.scene(command[, args]): publishes ui.scene for the world to run
+// command; false without the "scene" capability.
+func (r *Runtime) nkScene(L *glua.LState) int {
+	cmd := L.CheckString(1)
+	if cmd == "" {
+		L.ArgError(1, "comando vazio")
+	}
+	args := map[string]any{}
+	L.OptTable(2, L.NewTable()).ForEach(func(k, v glua.LValue) {
+		key, ok := k.(glua.LString)
+		if !ok {
+			L.RaiseError("ui.scene: as chaves de args são texto")
+		}
+		switch v := v.(type) {
+		case glua.LString:
+			args[string(key)] = string(v)
+		case glua.LNumber:
+			args[string(key)] = float64(v)
+		case glua.LBool:
+			args[string(key)] = bool(v)
+		default:
+			L.RaiseError("ui.scene: args.%s deve ser texto, número ou booleano", string(key))
+		}
+	})
+	return r.publishIf(L, CapScene, EvUIScene, SceneData{Command: cmd, Args: args})
 }
 
 // nk.ui.notify(body[, title]): a desktop notification, off the VM (it is a

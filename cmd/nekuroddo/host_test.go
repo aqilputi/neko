@@ -37,7 +37,8 @@ func evalHost(t *testing.T, h *host, code string) string {
 }
 
 // The TUI's host gives Lua every UI capability the TUI draws; nk serve's
-// only those a remote client gets through the bus (toast, confirm, notify).
+// only those a remote client gets through the bus (toast, confirm, notify,
+// scene: the world, nkw, runs ui.scene).
 func TestHostCapabilities(t *testing.T) {
 	isolate(t)
 	tuiHost := newHost(config.Default(), io.Discard, tuiCaps...)
@@ -49,7 +50,7 @@ func TestHostCapabilities(t *testing.T) {
 	}
 	serveHost := newHost(config.Default(), io.Discard) // no caps given: nk serve's
 	defer serveHost.Close()
-	for cap, want := range map[string]string{"toast": "true", "confirm": "true", "notify": "true", "cat": "false", "palette": "false"} {
+	for cap, want := range map[string]string{"toast": "true", "confirm": "true", "notify": "true", "scene": "true", "cat": "false", "palette": "false"} {
 		if got := evalHost(t, serveHost, `nk.ui.has("`+cap+`")`); got != want {
 			t.Errorf("serve host has(%s) = %s", cap, got)
 		}
