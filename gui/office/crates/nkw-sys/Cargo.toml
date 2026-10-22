@@ -1,0 +1,26 @@
+[package]
+name = "nkw-sys"
+version = "0.1.0"
+description = "nkw's system adapters: D-Bus (MPRIS, UPower, NetworkManager), minute clock, PSI and PipeWire, behind traits"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Dependency rule (docs/plano-mundo.md §2.11), checked by tests/deps.rs:
+# zbus async-io crossbeam-channel libc (pipewire); never smithay/calloop/tokio/libdbus/libpulse.
+[dependencies]
+zbus = "5"                      # NOT 6: 6 drops async-io and the blocking module
+async-io = "2.6"
+futures-util = { version = "0.3", default-features = false }
+crossbeam-channel = "0.5"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+pipewire = { version = "0.10", optional = true, features = ["v0_3_33"] }
+
+[features]
+default = ["pipewire"]
+pipewire = ["dep:pipewire"]
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
