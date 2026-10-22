@@ -782,3 +782,53 @@ fn perf_smoke() {
         w.destroy(gl);
     }
 }
+
+/// Not a golden: `NKW_PREVIEW=<dir> cargo test -p nkw-gl --test golden preview -- --ignored`
+/// renders the fixture scenes at 1280×720 so a human can look at the style.
+#[test]
+#[ignore]
+fn preview() {
+    let Some(dir) = std::env::var_os("NKW_PREVIEW") else {
+        return;
+    };
+    let Some(ctx) = context() else { return };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    const BIG: [u32; 2] = [1280, 720];
+    let shoot = |name: &str, list: &DrawList, o: RenderOpts| {
+        let gl = &ctx.gl;
+        let target = ctx.fbo(BIG);
+        unsafe {
+            let mut w = WorldRenderer::new(gl, o).expect("renderer");
+            w.draw(
+                gl,
+                list,
+                Target::Fbo {
+                    fbo: target.id(),
+                    size: BIG,
+                },
+            )
+            .expect("draw");
+            let px = ctx.read(Some(target.fbo), BIG);
+            w.destroy(gl);
+            egl::write_png(&dir.join(format!("{name}.png")), &px, BIG);
+        }
+    };
+    let day = room();
+    shoot("sala-dia", &day, opts());
+    let mut evening = room();
+    evening.sky = sky_for_band(6);
+    shoot("sala-fim-de-tarde", &evening, opts());
+    let mut close = room();
+    close.camera = camera(Vec3::new(-1.6, 1.5, 0.9), 0.35, -0.12);
+    shoot("sala-perto", &close, opts());
+    shoot("corredor-nevoa", &fog_hall(), opts());
+    shoot(
+        "sala-preset64",
+        &day,
+        RenderOpts {
+            preset64: true,
+            ..opts()
+        },
+    );
+}

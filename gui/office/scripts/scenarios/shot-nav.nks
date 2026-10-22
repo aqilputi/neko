@@ -1,0 +1,7 @@
+# Screenshot da NAV: o mundo demo com duas telas do testclient.
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait
+spawn ${TESTCLIENT} --app-id demo --checker --no-frame-wait
+wait 1500
+expect mode NAV
+shot ${OUT}/shot-nav.png
+quit

@@ -122,3 +122,32 @@ install-gui: office-build
 	install -m 0644 assets/logo-256.png $(PREFIX)/share/icons/hicolor/256x256/apps/nekuroddo.png
 	sed 's#^Exec=nkg#Exec=$(PREFIX)/bin/nkg#' packaging/nekuroddo.desktop > $(PREFIX)/share/applications/nekuroddo.desktop
 	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null
+
+# ---- nkw, the world (gui/office: Smithay + glow) ----
+# docs/plano-mundo.md §9. world-perf needs a GPU session (or --headless by hand) and jq;
+# world-cover needs cargo-llvm-cov. Crates of the list that do not exist yet are skipped.
+.PHONY: world-build world-test world-lint world-cover run-world world-shot world-perf
+WORLD_ALL    := nk-cats nkw-core nkw-objects nkw-sys nkw-gl nkw nkw-testclient
+WORLD_CRATES := $(foreach c,$(WORLD_ALL),$(if $(wildcard $(OFFICE)/crates/$(c)/Cargo.toml),-p $(c)))
+
+world-build:
+	cd $(OFFICE) && $(CARGO) build --profile world -p nkw -p nkw-testclient
+
+world-test:
+	cd $(OFFICE) && $(CARGO) test $(WORLD_CRATES)
+	$(OFFICE)/scripts/test-world-perf.sh
+
+world-lint:
+	cd $(OFFICE) && $(CARGO) fmt $(WORLD_CRATES) --check && $(CARGO) clippy $(WORLD_CRATES) --all-targets -- -D warnings
+
+world-cover:
+	cd $(OFFICE) && $(CARGO) llvm-cov $(WORLD_CRATES) --fail-under-lines 90
+
+run-world:
+	cd $(OFFICE) && $(CARGO) run -p nkw -- --demo
+
+world-shot:
+	$(OFFICE)/scripts/world-shot.sh
+
+world-perf: world-build
+	$(OFFICE)/scripts/world-perf.sh --record

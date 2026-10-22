@@ -1,0 +1,11 @@
+# Screenshot do FOCO 1:1 sobre o xadrez do testclient (recorte == buffer, 0 pixels diferentes),
+# com o dump ao lado para achar o retângulo do FOCO.
+spawn ${TESTCLIENT} --app-id demo --checker --no-frame-wait
+wait 1500
+key Return
+wait 500
+expect mode FOCO
+expect focus demo
+shot ${OUT}/shot-focus.png
+dump ${OUT}/shot-focus.json
+quit
