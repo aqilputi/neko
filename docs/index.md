@@ -31,6 +31,7 @@ O `index.md` e o `log.md` são arquivos reservados da spec.
 | [protocolo.md](protocolo.md) | Reference | O protocolo v1 do `internal/rpc`: rotas HTTP, SSE, WebSocket de painel, erros e `nk serve`/`--listen`/`run` |
 | [lua.md](lua.md) | Reference | A API `nk.*` do `internal/lua`, eventos, orçamentos, sandbox e o que ainda falta (capacidades de UI) |
 | [plano-arquitetura.md](plano-arquitetura.md) | Plan | Arquitetura alvo (core headless, GUI 3D de gatinhos low-poly, Lua) e os pacotes de trabalho por fase — planejado, fase 1 em andamento |
+| [plano-mundo.md](plano-mundo.md) | Plan | O mundo (`nkw`): WM 3D aconchegante em primeira pessoa no estilo Animal Crossing, com os agentes como gatos — modos NAV/ANDAR/FOCO/CONVERSA, Smithay + GLES, fases e orçamentos |
 | [gui.md](gui.md) | Guide | Guia do GUI nativo (`nkg`, Rust + Bevy): o escritório, o zoom no terminal, a inbox, teclado e desempenho |
 | [gui-web.md](gui-web.md) | Guide | O GUI anterior, em navegador (legado) |
 | [fontes-de-dados.md](fontes-de-dados.md) | Reference | O que o nekuroddo lê de `~/.claude` e como calcula custo |
