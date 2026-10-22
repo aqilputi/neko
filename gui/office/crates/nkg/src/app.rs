@@ -2022,7 +2022,12 @@ fn overlay(
     cam: Single<(&Camera, &GlobalTransform), With<CamMarker>>,
     mut labels: Query<(&CtxLabel, &mut Node, &mut Visibility), Without<TermOverlay>>,
     term: Single<
-        (&mut ImageNode, &mut Node, &mut BackgroundColor, &mut Visibility),
+        (
+            &mut ImageNode,
+            &mut Node,
+            &mut BackgroundColor,
+            &mut Visibility,
+        ),
         With<TermOverlay>,
     >,
 ) {
