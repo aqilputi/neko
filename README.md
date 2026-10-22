@@ -212,7 +212,8 @@ A pasta [`docs/`](docs/index.md) é um bundle [OKF 0.2](https://okf.md/spec/):
 [instalação](docs/instalacao.md) · [teclas](docs/teclas.md) · [configuração](docs/configuracao.md) ·
 [grupos](docs/grupos.md) · [hooks](docs/hooks.md) · [arquitetura](docs/arquitetura.md) ·
 [fontes de dados](docs/fontes-de-dados.md) · [painel embutido](docs/painel-embutido.md) ·
-[Jira](docs/jira.md) · [requisitos](docs/requisitos.md) · [log](docs/log.md).
+[Jira](docs/jira.md) · [GUI](docs/gui.md) · [mundo](docs/mundo.md) · [requisitos](docs/requisitos.md) ·
+[log](docs/log.md).
 
 Duas notas de projeto que valem a leitura:
 
@@ -272,6 +273,14 @@ monitor, zoom num terminal de verdade e gatos da inbox andando pelo corredor; fa
 mesmo Lua da TUI. Guia em [docs/gui.md](docs/gui.md). A TUI e todos os atalhos continuam funcionando do mesmo
 jeito. Plano completo em
 [docs/plano-arquitetura.md](docs/plano-arquitetura.md).
+
+**O mundo (`nkw`)**, em construção: um compositor Wayland 3D aconchegante (Smithay + GLES), aninhado na sua
+sessão, onde suas janelas ficam em mesas e salas e os agentes são gatos aldeões com quem você conversa. Já
+funcionam o gerenciador de janelas (NAV, FOCO 1:1, salas, mesas, pilhas, telas no ar, SALTO, COMANDOS, mapa),
+os gatos (conversa, inbox, filhotes, recepção) e os objetos da recepção; estão chegando o ANDAR com mouse e
+telas carregadas na mão, a biblioteca de arquivos e o cofre; depois vêm o passe de arte, XWayland e a sessão
+própria. `make install-world` instala o `nkw` e o atalho "nekuroddo — mundo". Guia em
+[docs/mundo.md](docs/mundo.md), plano em [docs/plano-mundo.md](docs/plano-mundo.md).
 
 ## Contribuindo
 

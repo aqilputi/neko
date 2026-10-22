@@ -46,7 +46,7 @@ const (
 	EvUIScene        = "ui.scene"
 	sourcePrefix     = "lua:"
 	evalFile         = "<eval>"
-	keyCommandPrefix = "lua.key:"
+	keyCommandPrefix = core.LuaKeyPrefix
 )
 
 // UI capabilities a host declares in Options.Caps (nk.ui.has).

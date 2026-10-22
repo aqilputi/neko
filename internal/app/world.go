@@ -1,9 +1,10 @@
 package app
 
 // The world's commands (the nkw compositor, plan-mundo §3.12 and §6.9; the
-// S9 table): client-scope, so the core only lists them, in GET
-// /v1/commands for the nkw's palette and in GET /v1/keymap in the world's
-// modes. The TUI and the GUI never show them (core.IsWorldMode).
+// S9 table, plus S19's library mode): client-scope, so the core only
+// lists them, in GET /v1/commands for the nkw's palette and in GET
+// /v1/keymap in the world's modes. The TUI and the GUI never show them
+// (core.IsWorldMode).
 //
 // A command may have keys in more than one mode (world.hint in NAV and in
 // ANDAR): the registry holds the command once, with its first mode's keys;
@@ -54,7 +55,7 @@ func numbered(mode, name, title string) []worldRow {
 func worldRows() []worldRow {
 	const nav, glob, walk = core.ModeNormalWorld, core.ModeWorld, core.ModeWorldWalk
 	const focus, talk, hint = core.ModeWorldFocus, core.ModeWorldTalk, core.ModeWorldHint
-	const pal, line = core.ModeWorldPalette, core.ModeWorldLine
+	const pal, line, lib = core.ModeWorldPalette, core.ModeWorldLine, core.ModeWorldLibrary
 	rows := []worldRow{
 		row(nav, "estação anterior", wk("world.left", "", "h", "left")),
 		row(nav, "próxima estação", wk("world.right", "", "l", "right")),
@@ -73,13 +74,13 @@ func worldRows() []worldRow {
 		row(nav, "SALTO", wk("world.hint", "", "f", "world+f")),
 		row(nav, "SALTO direto para o FOCO", wk("world.hint_focus", "", "F")),
 		row(nav, "mapa", wk("world.overview", "", "o", "world+o")),
-		row(nav, "biblioteca (fase 4: toast)", wk("world.library", "", "b")),
+		row(nav, "biblioteca", wk("world.library", "", "b")),
 		row(nav, "tela para a mesa à esquerda", wk("world.move_left", "", "H")),
 		row(nav, "tela para a mesa à direita", wk("world.move_right", "", "L")),
 		row(nav, "junta na pilha à esquerda", wk("world.consume", "", ",")),
 		row(nav, "tira para uma mesa só dela", wk("world.expel", "", ".")),
-		row(nav, "mesa mais estreita", wk("world.narrower", "", "-")),
-		row(nav, "mesa mais larga", wk("world.wider", "", "=")),
+		row(nav+","+walk, "mesa mais estreita", wk("world.narrower", "", "-")), // ANDAR: the screen in hand
+		row(nav+","+walk, "mesa mais larga", wk("world.wider", "", "=")),
 		row(nav, "prende a tela no ar", wk("world.pin", "", "p")),
 		row(nav, "manda a tela para outra sala", wk("world.send_room", "", "M")),
 		row(nav, "terminal novo", wk("world.terminal", "", "T", "world+enter")),
@@ -91,6 +92,8 @@ func worldRows() []worldRow {
 		row(nav, "sala nova", wk("world.room_new", "")),
 		row(nav, "ir para a sala", wk("world.goto_room", "")),
 		row(nav, "ir até o objeto", wk("world.goto_object", "")),
+		row(nav, "abre um arquivo no mundo", wk("world.open", "")),
+		row(nav, "tranca o cofre", wk("world.vault_lock", "")),
 		row(glob, "FOCO na vizinha", wk("world.focus_left", "à esquerda", "world+h"),
 			wk("world.focus_right", "à direita", "world+l"), wk("world.focus_up", "de cima", "world+k"),
 			wk("world.focus_down", "de baixo", "world+j")),
@@ -107,8 +110,9 @@ func worldRows() []worldRow {
 		row(walk, "olhar", wk("world.look_up", "para cima", "up"), wk("world.look_down", "para baixo", "down")),
 		row(walk, "horizonte", wk("world.recenter", "", "c")),
 		row(walk, "usar o que está na mira", wk("world.interact", "", "enter", "space")),
-		row(walk, "pegar/soltar a tela (fase 3: toast)", wk("world.grab", "", "g")),
-		row(walk, "tela na mão (fase 3: toast)", wk("world.nearer", "mais perto", "["), wk("world.farther", "mais longe", "]")),
+		row(walk, "pegar/soltar a tela", wk("world.grab", "", "g")),
+		row(walk, "tela na mão: mais perto / mais longe", wk("world.nearer", "mais perto", "["),
+			wk("world.farther", "mais longe", "]")),
 		row(walk, "ajustar o objeto na mira", wk("world.adjust_down", "para baixo", "j"), wk("world.adjust_up", "para cima", "k")),
 		row(walk, "anterior/próximo no objeto na mira", wk("world.prev", "anterior", "h"), wk("world.next", "próximo", "l")),
 		row(walk, "SALTO", wk("world.hint", "", "f")),
@@ -131,15 +135,29 @@ func worldRows() []worldRow {
 			wk("world.line_delete_word", "apaga a palavra", "ctrl+w"), wk("world.line_clear", "apaga a linha", "ctrl+u")),
 		row(line, "linha", wk("world.line_cancel", "cancela", "esc"), wk("world.line_send", "envia", "enter"),
 			wk("world.line_newline", "quebra a linha", "shift+enter")),
+		// the library (plan-mundo §7): browsing a shelf; the rest is NAV's
+		row(lib, "livro anterior", wk("world.book_prev", "", "h", "left")),
+		row(lib, "próximo livro", wk("world.book_next", "", "l", "right")),
+		row(lib, "prateleira de baixo", wk("world.shelf_down", "", "j", "down")),
+		row(lib, "prateleira de cima", wk("world.shelf_up", "", "k", "up")),
+		row(lib, "abre o livro ou entra na pasta", wk("world.book_open", "", "enter")),
+		row(lib, "sobe um nível", wk("world.shelf_back", "", "backspace")),
+		row(lib, "busca na estante", wk("world.library_search", "", "/")),
+		row(lib, "abre no editor", wk("world.book_edit", "", "e")),
+		row(lib, "prévia no atril", wk("world.book_preview", "", "p")),
+		row(lib, "copia o caminho", wk("world.book_copy_path", "", "y")),
+		row(lib, "sai da estante", wk("world.library_leave", "", "esc")),
 	)
 }
 
 // worldArgs are the arguments the palette asks for; world.quit confirms.
 var worldArgs = map[string]core.Arg{
-	"world.send_room":   {Name: "room", Type: core.ArgRoom, Prompt: "sala › ", Required: true},
-	"world.goto_room":   {Name: "room", Type: core.ArgRoom, Prompt: "sala › ", Required: true},
-	"world.room_new":    {Name: "name", Type: core.ArgString, Prompt: "nome da sala › ", Required: true},
-	"world.goto_object": {Name: "name", Type: core.ArgString, Prompt: "objeto › ", Required: true},
+	"world.send_room":      {Name: "room", Type: core.ArgRoom, Prompt: "sala › ", Required: true},
+	"world.goto_room":      {Name: "room", Type: core.ArgRoom, Prompt: "sala › ", Required: true},
+	"world.room_new":       {Name: "name", Type: core.ArgString, Prompt: "nome da sala › ", Required: true},
+	"world.goto_object":    {Name: "name", Type: core.ArgString, Prompt: "objeto › ", Required: true},
+	"world.library_search": {Name: "q", Type: core.ArgString, Prompt: "busca › ", Required: true},
+	"world.open":           {Name: "path", Type: core.ArgString, Prompt: "arquivo › ", Required: true},
 }
 
 // worldCommands builds the commands from worldRows (each once, in its

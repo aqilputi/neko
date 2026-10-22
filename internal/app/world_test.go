@@ -86,6 +86,8 @@ var s9 = []struct {
 	{"world.walk", "world.next", []string{"l"}},
 	{"world.walk", "world.hint", []string{"f"}},
 	{"world.walk", "world.walk_exit", []string{"esc"}},
+	{"world.walk", "world.narrower", []string{"-"}},
+	{"world.walk", "world.wider", []string{"="}},
 	{"world.focus", "world.back", []string{"ctrl+]"}},
 	{"world.talk", "world.talk_next", []string{"space", "enter"}},
 	{"world.talk", "world.talk_reply", []string{"i", "r"}},
@@ -120,11 +122,44 @@ var s9 = []struct {
 	{"world.line", "world.line_cancel", []string{"esc"}},
 	{"world.line", "world.line_send", []string{"enter"}},
 	{"world.line", "world.line_newline", []string{"shift+enter"}},
+	{"world.library", "world.book_prev", []string{"h", "left"}},
+	{"world.library", "world.book_next", []string{"l", "right"}},
+	{"world.library", "world.shelf_down", []string{"j", "down"}},
+	{"world.library", "world.shelf_up", []string{"k", "up"}},
+	{"world.library", "world.book_open", []string{"enter"}},
+	{"world.library", "world.shelf_back", []string{"backspace"}},
+	{"world.library", "world.library_search", []string{"/"}},
+	{"world.library", "world.book_edit", []string{"e"}},
+	{"world.library", "world.book_preview", []string{"p"}},
+	{"world.library", "world.book_copy_path", []string{"y"}},
+	{"world.library", "world.library_leave", []string{"esc"}},
+}
+
+// s19Titles are S19's titles: the library mode's commands, the two
+// palette-only ones and the titles phases 3 and 4 changed.
+var s19Titles = map[string]string{
+	"world.book_prev":      "livro anterior",
+	"world.book_next":      "próximo livro",
+	"world.shelf_down":     "prateleira de baixo",
+	"world.shelf_up":       "prateleira de cima",
+	"world.book_open":      "abre o livro ou entra na pasta",
+	"world.shelf_back":     "sobe um nível",
+	"world.library_search": "busca na estante",
+	"world.book_edit":      "abre no editor",
+	"world.book_preview":   "prévia no atril",
+	"world.book_copy_path": "copia o caminho",
+	"world.library_leave":  "sai da estante",
+	"world.open":           "abre um arquivo no mundo",
+	"world.vault_lock":     "tranca o cofre",
+	"world.library":        "biblioteca",
+	"world.grab":           "pegar/soltar a tela",
+	"world.nearer":         "tela na mão: mais perto / mais longe",
+	"world.farther":        "tela na mão: mais perto / mais longe",
 }
 
 // s9PaletteOnly are S9's commands with no keys.
 var s9PaletteOnly = strings.Fields(`world.fullscreen world.maximize world.room_new world.goto_room
-	world.goto_object brightness.up brightness.down`)
+	world.goto_object brightness.up brightness.down world.open world.vault_lock`)
 
 // worldNames is every command name S9 has, keys or not.
 func worldNames() []string {
@@ -289,10 +324,12 @@ func TestWorldKeymapRules(t *testing.T) {
 		t.Error("world.quit does not confirm")
 	}
 	for name, arg := range map[string]core.Arg{
-		"world.send_room":   {Name: "room", Type: core.ArgRoom, Required: true},
-		"world.goto_room":   {Name: "room", Type: core.ArgRoom, Required: true},
-		"world.room_new":    {Name: "name", Type: core.ArgString, Required: true},
-		"world.goto_object": {Name: "name", Type: core.ArgString, Required: true},
+		"world.send_room":      {Name: "room", Type: core.ArgRoom, Required: true},
+		"world.goto_room":      {Name: "room", Type: core.ArgRoom, Required: true},
+		"world.room_new":       {Name: "name", Type: core.ArgString, Required: true},
+		"world.goto_object":    {Name: "name", Type: core.ArgString, Required: true},
+		"world.library_search": {Name: "q", Type: core.ArgString, Required: true},
+		"world.open":           {Name: "path", Type: core.ArgString, Required: true},
 	} {
 		c, _ := a.Registry().Lookup(name)
 		if len(c.Args) != 1 || c.Args[0].Name != arg.Name || c.Args[0].Type != arg.Type || !c.Args[0].Required || c.Args[0].Prompt == "" {
@@ -302,7 +339,8 @@ func TestWorldKeymapRules(t *testing.T) {
 	// no other world command takes arguments or confirms
 	for _, c := range a.Registry().All() {
 		switch c.Name {
-		case "world.send_room", "world.goto_room", "world.room_new", "world.goto_object", "world.quit":
+		case "world.send_room", "world.goto_room", "world.room_new", "world.goto_object", "world.quit",
+			"world.library_search", "world.open":
 			continue
 		}
 		if isWorldCommand(c.Name) && (len(c.Args) != 0 || c.Confirm) {
@@ -314,6 +352,43 @@ func TestWorldKeymapRules(t *testing.T) {
 		if b.Command == "app.quit" && core.IsWorldMode(b.Mode) {
 			t.Errorf("app.quit bound in %s", b.Mode)
 		}
+	}
+}
+
+// S19's titles, and no title still says which phase it waits for.
+func TestWorldTitlesS19(t *testing.T) {
+	a := worldApp(t)
+	for name, want := range s19Titles {
+		c, ok := a.Registry().Lookup(name)
+		if !ok || c.Title != want {
+			t.Errorf("%s title = %q, want %q", name, c.Title, want)
+		}
+	}
+	for _, c := range a.Registry().All() {
+		if isWorldCommand(c.Name) && strings.Contains(c.Title, "fase") {
+			t.Errorf("%s title %q names a phase", c.Name, c.Title)
+		}
+	}
+}
+
+// world.library is a sub-mode of NAV: the shelf keys shadow NAV's, the
+// rest is NAV's, then NORMAL's (the station's cat).
+func TestWorldLibraryFallsBackToNav(t *testing.T) {
+	a, _ := cmdApp(t)
+	km := a.Keymap()
+	if p := core.ParentMode(core.ModeWorldLibrary); p != core.ModeNormalWorld {
+		t.Fatalf("ParentMode(world.library) = %q", p)
+	}
+	for key, want := range map[string]string{
+		"h": "world.book_prev", "enter": "world.book_open", "p": "world.book_preview", "esc": "world.library_leave",
+		"t": "world.talk", "o": "world.overview", "r": "session.reply", "ctrl+k": "switcher.open",
+	} {
+		if got, _ := km.Resolve(core.ModeWorldLibrary, key); got != want {
+			t.Errorf("world.library %q = %q, want %s", key, got, want)
+		}
+	}
+	if got, _ := km.Resolve(core.ModeNormalWorld, "p"); got != "world.pin" {
+		t.Fatalf("NAV p = %q", got)
 	}
 }
 

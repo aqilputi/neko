@@ -186,6 +186,22 @@ Quando o servidor é ele mesmo quem abriu o painel da sessão (via `POST /v1/pan
 um `Refresh()` em segundo plano se `refresh` veio `true` — um cliente HTTP puro não precisa reimplementar essa
 lógica para o seu próprio painel, mas pode olhar `data` para refletir o mesmo (ex.: fechar a janela do GUI).
 
+**Teclas ligadas a uma função Lua.** Um `nk.keymap.set(modo, tecla, function() … end)` aparece em
+[`GET /v1/keymap`](#get-v1keymap) como uma ligação de nome `lua.key:<modo>:<tecla>` (`core.LuaKeyPrefix`). Esse
+nome não é um comando registrado — `GET /v1/commands` nunca o lista —, mas roda pela mesma rota:
+
+```
+$ curl -XPOST --unix-socket $SOCK http://nk/v1/commands/lua.key:normal.world:n -d '{}'
+{}
+```
+
+O servidor entrega o nome ao runtime Lua do host (`Runtime.RunBinding`), que roda a função no **orçamento de
+callback** (`[lua] callback_timeout_ms`, padrão 50 ms) com o `context` do corpo como seleção, e responde o
+`app.Result` dela (um `toast` publicado pela função chega pelo barramento, como qualquer outro). Sem runtime
+Lua no host, ou se a tecla não está ligada a uma função (foi ligada a um nome de comando, apagada, ou nunca
+existiu) → `404 unknown_command`; um erro dentro da função → `422 failed` com a mensagem dele. Os `args` do
+corpo são ignorados. É o caminho do `nkw` para as teclas Lua dos modos do mundo.
+
 ## `POST /v1/confirm/{token}`
 
 Responde a um `pending` de qualquer comando (ou de `nk.ui.confirm` do Lua). Com `{"yes":false}` cancela
@@ -214,8 +230,29 @@ de pé, para um cliente que conectou depois de o diálogo abrir.
 `Registry.SetKeys` aparece aqui na hora — mais as ligações em segundo modo dos comandos do mundo (`world.hint`
 no NAV e no ANDAR…, ver [comandos.md](comandos.md#mundo--worldgo)). Um comando pode ter, então, mais de uma
 ligação (uma por modo); `GET /v1/commands` o lista uma vez só. Os modos do mundo (`normal.world`, `world`,
-`world.*`) só o `nkw` resolve; os outros clientes os ignoram. As sobreposições de `nk.keymap.set` do Lua
-(`Runtime.Keymap()`) ainda não entram aqui — só a TUI do mesmo processo as aplica (ver [lua.md](lua.md)).
+`world.*`) só o `nkw` resolve; os outros clientes os ignoram.
+
+**Com as sobreposições do Lua.** Quando o host tem um runtime Lua (sempre, em `nk serve`, `nk --listen` e
+`nkg`), a tabela servida é `App.Keymap().Overlay(Runtime.Keymap())` — as teclas de `nk.keymap.set`/`del`
+deitadas por cima (`core.Keymap.Overlay`):
+
+- uma sobreposição **troca o mesmo `(modo, tecla)`** da tabela base, no lugar daquela ligação (o comando que
+  tinha a tecla fica com as outras; se não sobrar nenhuma, some);
+- uma sobreposição de `Command` vazio (`nk.keymap.del`) **tira a tecla** daquele modo; quem resolve cai então no
+  modo pai, como numa tecla que nunca foi ligada;
+- uma tecla ligada a uma função vem como `{"command":"lua.key:<modo>:<tecla>", …, "help":{"desc":"lua"}}` — roda
+  com [`POST /v1/commands/lua.key:…`](#post-v1commandsname);
+- as outras ligações aparecem no fim, na ordem dos arquivos Lua; nenhuma sobreposição cria colisão.
+
+```
+{"command":"lua.key:normal.world:n","keys":["n"],"mode":"normal.world","help":{"key":"n","desc":"lua"}}
+```
+
+Toda mudança publica `keymap.changed` (como antes), e o cliente busca a tabela de novo. A TUI do mesmo processo
+continua resolvendo pelo próprio `keyResolver` (sobreposições primeiro, depois o keymap do núcleo) e chega ao
+mesmo comando em todos os modos que ela resolve; nos modos do mundo, que só o `nkw` resolve, a tabela servida
+difere em dois casos de propósito: uma sobreposição num modo pai não toma uma tecla que o sub-modo liga
+sozinho (religar `j` no `normal` da TUI não mexe no `j` do NAV), e uma tecla apagada num sub-modo cai no pai.
 
 ## Eventos — `GET /v1/events` (SSE)
 

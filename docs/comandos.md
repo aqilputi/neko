@@ -127,7 +127,8 @@ tem `Runner` nem `confirm`. São resolvidos por cada cliente (a TUI hoje; o GUI,
 
 ## Mundo — `world.go`
 
-Os comandos do mundo (o compositor `nkw`, [plano-mundo.md](plano-mundo.md) §3.12): todos `scope: client`, sem
+Os comandos do mundo (o compositor `nkw`, [plano-mundo.md](plano-mundo.md) §3.12 e §7; guia de uso em
+[mundo.md](mundo.md)): todos `scope: client`, sem
 `Runner`, nos modos do mundo (`core.WorldModes`). O núcleo só os lista — em `GET /v1/commands` para a paleta
 do `nkw` e em `GET /v1/keymap` para as teclas dele; quem executa é o `nkw`. A TUI e o GUI nunca os mostram
 (`core.IsWorldMode`: nem na paleta, nem na ajuda, nem na barra de status). Teclas e modos em
@@ -150,10 +151,10 @@ só a ligação principal; a do outro modo fica.
 | `normal.world` | `w` `world+w` | `world.walk` | ANDAR (e volta) |
 | `normal.world` | `f` `world+f` · `F` | `world.hint` · `world.hint_focus` | SALTO · SALTO direto para o FOCO |
 | `normal.world` | `o` `world+o` | `world.overview` | mapa |
-| `normal.world` | `b` | `world.library` | biblioteca (fase 4: toast) |
+| `normal.world` | `b` | `world.library` | biblioteca |
 | `normal.world` | `H` · `L` | `world.move_left` · `world.move_right` | tela para a mesa à esquerda/direita |
 | `normal.world` | `,` · `.` | `world.consume` · `world.expel` | junta na pilha à esquerda · tira para uma mesa só dela |
-| `normal.world` | `-` · `=` | `world.narrower` · `world.wider` | mesa mais estreita · mais larga |
+| `normal.world`, `world.walk` | `-` · `=` | `world.narrower` · `world.wider` | mesa mais estreita · mais larga (no ANDAR: o tamanho da tela na mão) |
 | `normal.world` | `p` | `world.pin` | prende a tela no ar |
 | `normal.world` | `M` | `world.send_room` (`room:room*`) | manda a tela para outra sala |
 | `normal.world` | `T` `world+enter` | `world.terminal` | terminal novo |
@@ -162,6 +163,7 @@ só a ligação principal; a do outro modo fica.
 | `normal.world` | `:` `ctrl+p` `world+p` | `world.palette` | COMANDOS |
 | `normal.world` | — | `world.fullscreen` · `world.maximize` | tela cheia (TV) · maximiza (largura 1) |
 | `normal.world` | — | `world.room_new` (`name:string*`) · `world.goto_room` (`room:room*`) · `world.goto_object` (`name:string*`) | sala nova · ir para a sala · ir até o objeto |
+| `normal.world` | — | `world.open` (`path:string*`) · `world.vault_lock` | abre um arquivo no mundo · tranca o cofre |
 | `world` | `world+h` `world+l` `world+k` `world+j` | `world.focus_left` / `_right` / `_up` / `_down` | FOCO na vizinha |
 | `world` | `world+d` | `world.launcher` | apps |
 | `world` | `world+shift+e` | `world.quit` (confirma) | sair do mundo (confirma) |
@@ -173,8 +175,8 @@ só a ligação principal; a do outro modo fica.
 | `world.walk` | `up` · `down` | `world.look_up` · `world.look_down` | olhar |
 | `world.walk` | `c` | `world.recenter` | horizonte |
 | `world.walk` | `enter` `space` | `world.interact` | usar o que está na mira |
-| `world.walk` | `g` | `world.grab` | pegar/soltar a tela (fase 3: toast) |
-| `world.walk` | `[` · `]` | `world.nearer` · `world.farther` | tela na mão (fase 3: toast) |
+| `world.walk` | `g` | `world.grab` | pegar/soltar a tela |
+| `world.walk` | `[` · `]` | `world.nearer` · `world.farther` | tela na mão: mais perto / mais longe |
 | `world.walk` | `j` · `k` | `world.adjust_down` · `world.adjust_up` | ajustar o objeto na mira |
 | `world.walk` | `h` · `l` | `world.prev` · `world.next` | anterior/próximo no objeto na mira |
 | `world.walk` | `f` | `world.hint` | SALTO |
@@ -190,6 +192,23 @@ só a ligação principal; a do outro modo fica.
 | `world.palette` | `up` `ctrl+p` · `down` `ctrl+n` | `world.palette_prev` · `world.palette_next` | paleta |
 | `world.line`, `world.palette` | `ctrl+a` · `ctrl+e` · `ctrl+w` · `ctrl+u` | `world.line_home` · `_end` · `_delete_word` · `_clear` | edição |
 | `world.line` | `esc` · `enter` · `shift+enter` | `world.line_cancel` · `world.line_send` · `world.line_newline` | linha |
+| `world.library` | `h` `left` · `l` `right` | `world.book_prev` · `world.book_next` | livro anterior · próximo livro |
+| `world.library` | `j` `down` · `k` `up` | `world.shelf_down` · `world.shelf_up` | prateleira de baixo · prateleira de cima |
+| `world.library` | `enter` · `backspace` | `world.book_open` · `world.shelf_back` | abre o livro ou entra na pasta · sobe um nível |
+| `world.library` | `/` | `world.library_search` (`q:string*`) | busca na estante |
+| `world.library` | `e` · `p` · `y` | `world.book_edit` · `world.book_preview` · `world.book_copy_path` | abre no editor · prévia no atril · copia o caminho |
+| `world.library` | `esc` | `world.library_leave` | sai da estante |
+
+`world.library` é a estante da biblioteca (você está diante de uma prateleira, navegando pelos livros): é um
+sub-modo do **NAV**, não de `world` — `core.ParentMode("world.library") == "normal.world"`, a única exceção à
+regra do ponto —, então o que a estante não liga cai no NAV (`t`, `o`, `b`…) e dele em `normal`.
+`world.open` é o caminho da paleta e do Lua para abrir um arquivo pelo mundo (recusa o que fica no cofre);
+`world.vault_lock` tranca o cofre na hora.
+
+Alguns nomes que o `nkw` usa por dentro **não** são comandos do core e nunca aparecem em `GET /v1/commands`:
+`world.place_next`, `world.copy`, `world.band`, `world.goto_screen:<id>`, `world.launch:<id>`. Nem as teclas Lua
+`lua.key:<modo>:<tecla>` (ver [lua.md](lua.md#teclado)), que rodam por `POST /v1/commands/{name}` mas não são
+comandos registrados.
 
 O tipo de argumento `room` (`core.ArgRoom`) é novo: o `nkw` completa com as salas dele. Nos comandos agrupados
 (mesmo título), o `hint` diz qual é qual ("à esquerda", "próxima"…). `world.back` aparece duas vezes: no ANDAR

@@ -72,6 +72,15 @@ type LuaEvaluator interface {
 	Eval(code string) (string, error)
 }
 
+// LuaKeys is what a LuaEvaluator that also holds key overrides does
+// (internal/lua's Runtime): its nk.keymap.set/del overrides are laid over
+// GET /v1/keymap, and POST /v1/commands/lua.key:<mode>:<key> runs the
+// function bound to that key (under the runtime's callback budget).
+type LuaKeys interface {
+	Keymap() core.Keymap
+	RunBinding(ctx app.Context, command string) (app.Result, error)
+}
+
 // Server serves one App. Build it with New, then Serve as many listeners as
 // needed; Close ends them all.
 type Server struct {
@@ -393,7 +402,16 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	res, err := s.a.Run(toApp(req.Context), r.PathValue("name"), app.Args(req.Args))
+	name := r.PathValue("name")
+	var (
+		res app.Result
+		err error
+	)
+	if strings.HasPrefix(name, core.LuaKeyPrefix) {
+		res, err = s.runLuaKey(toApp(req.Context), name)
+	} else {
+		res, err = s.a.Run(toApp(req.Context), name, app.Args(req.Args))
+	}
 	if err != nil {
 		writeAppErr(w, err)
 		return
@@ -452,10 +470,24 @@ func (s *Server) effects(res app.Result) {
 	}
 }
 
-// keymap is GET /v1/keymap: the same table the TUI resolves keys with
-// (core.BuildKeymap over the registry, so Lua rebindings show up).
+// runLuaKey runs a key bound to a Lua function (a "lua.key:" name, never a
+// registered command): unknown without a runtime that holds keys.
+func (s *Server) runLuaKey(ctx app.Context, name string) (app.Result, error) {
+	lk, ok := s.o.Lua.(LuaKeys)
+	if !ok {
+		return app.Result{}, fmt.Errorf("%w: %s", app.ErrUnknownCommand, name)
+	}
+	return lk.RunBinding(ctx, name)
+}
+
+// keymap is GET /v1/keymap: the table the TUI resolves keys with — the
+// registry's (core.BuildKeymap) with the Lua runtime's nk.keymap.set/del
+// overrides laid over it (core.Keymap.Overlay).
 func (s *Server) keymap(w http.ResponseWriter, _ *http.Request) {
 	km := s.a.Keymap()
+	if lk, ok := s.o.Lua.(LuaKeys); ok {
+		km = km.Overlay(lk.Keymap())
+	}
 	if km == nil {
 		km = core.Keymap{}
 	}

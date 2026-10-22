@@ -112,11 +112,19 @@ nk.keymap.del(mode, key)        -- tecla não faz mais nada (mesmo uma padrão)
 ```
 As sobreposições de um arquivo valem por cima do `core.Keymap` vindo do registro; `keymap.changed` (evento)
 sai assim que a mudança é aplicada. Elas ficam em `Runtime.Keymap()`, que a TUI aplica antes do keymap do
-núcleo; `GET /v1/keymap` hoje serve só o keymap do registro (`App.Keymap()`), então um cliente remoto ainda não
-vê as sobreposições do Lua.
+núcleo. **Os clientes remotos também as veem:** `GET /v1/keymap` serve o keymap do registro com elas por cima
+(`core.Keymap.Overlay`, regras em [protocolo.md](protocolo.md#get-v1keymap)), e cada `keymap.changed` faz o
+cliente buscar de novo — assim uma tecla que você religa aqui vale na TUI, no `nkg` e no mundo (`nkw`).
+
+**Tecla ligada a uma função.** Uma função não tem nome de comando, então a tecla é servida com o nome
+`lua.key:<modo>:<tecla>` (ajuda `"lua"`), por exemplo `lua.key:normal.world:n`. Não é um comando da paleta
+(`GET /v1/commands` não o lista), mas um cliente remoto a roda com `POST /v1/commands/lua.key:<modo>:<tecla>`:
+o host chama a função no orçamento de callback e devolve o resultado dela (`404 unknown_command` se a tecla
+não está mais ligada a uma função). É o caminho do `nkw` para essas teclas no mundo (fase 3 do
+[plano](plano-mundo.md)).
 
 Os modos do mundo (`normal.world`, `world`, `world.walk`, `world.focus`, `world.talk`, `world.hint`,
-`world.palette`, `world.line` — [teclas.md](teclas.md#mundo-nkw)) valem como qualquer outro:
+`world.palette`, `world.line`, `world.library` — [teclas.md](teclas.md#mundo-nkw)) valem como qualquer outro:
 
 ```lua
 nk.keymap.set("normal.world", "n", "world.right")       -- n vai para a próxima estação
@@ -124,9 +132,12 @@ nk.keymap.set("world.walk", "j", "world.turn_left")     -- girar com j/l em vez 
 nk.keymap.set("world", "world+a", function()             -- acorde próprio: vai à sala "acme"
   nk.ui.scene("world.goto_room", { room = "acme" })
 end)
+nk.keymap.set("world.library", "o", "world.book_open")  -- na estante, o também abre o livro
 ```
 
-A TUI não mostra essas teclas na ajuda (são do `nkw`).
+A TUI não mostra essas teclas na ajuda (são do `nkw`). O `world+a` acima chega ao mundo como
+`lua.key:world:world+a`; o `nkw` o roda pelo core e a função pede, de volta, `world.goto_room` pelo
+`nk.ui.scene`. Veja [mundo.md](mundo.md#lua-no-mundo).
 
 ### Eventos
 

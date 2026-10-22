@@ -104,8 +104,8 @@ Veja [painel-embutido.md](painel-embutido.md) para entender como o painel trata 
 
 ## Mundo (`nkw`)
 
-O compositor do mundo (`nkw`, [plano-mundo.md](plano-mundo.md) §3) usa o mesmo keymap do core, em modos só
-dele. Os comandos estão em [comandos.md](comandos.md#mundo--worldgo) (`internal/app/world.go`); a TUI e o GUI
+O compositor do mundo (`nkw`, guia de uso em [mundo.md](mundo.md), plano em [plano-mundo.md](plano-mundo.md) §3)
+usa o mesmo keymap do core, em modos só dele. Os comandos estão em [comandos.md](comandos.md#mundo--worldgo) (`internal/app/world.go`); a TUI e o GUI
 nunca mostram esses modos nem esses comandos (`core.IsWorldMode`).
 
 **A tecla `world`.** `world` é um modificador abstrato nos nomes de tecla (`world+w`): vira `ctrl+alt` quando o
@@ -122,10 +122,12 @@ inclusive no FOCO, e nenhum acorde pertence a dois comandos. Assim um comando ca
 | `world.focus` | FOCO | `world` → `world.focus`; **sem fallback**, o resto vai para a janela |
 | `world.talk` | CONVERSA | `world` → `world.talk` → `normal` (só comandos `scope: core`, com o gato como contexto) |
 | `world.hint`, `world.palette`, `world.line` | SALTO, COMANDOS, linhas de texto | só o próprio modo; teclas imprimíveis são texto |
+| `world.library` | diante de uma estante da biblioteca | `world` → `world.library` → `normal.world` → `normal` → `*` |
 
 `normal.world` é um sub-modo de `normal`, como o `normal.todos` (`core.ParentMode`): as teclas dele sombreiam as
 de `normal` e o resto cai em `normal` — os comandos do core que o NAV herda (`r x n m X dd c a A ctrl+k ? z`)
-agem sobre o gato da estação. O `nkw` nunca liga `app.quit`.
+agem sobre o gato da estação. O `nkw` nunca liga `app.quit`. `world.library` é sub-modo do NAV (a única exceção
+à regra do ponto em `core.ParentMode`): a estante só liga as teclas dela e o resto é o NAV.
 
 | tecla | NAV (`normal.world`) |
 |---|---|
@@ -148,7 +150,23 @@ agem sobre o gato da estação. O `nkw` nunca liga `app.quit`.
 
 No ANDAR (`world.walk`): `w` `s` `a` `d` andam (segurar), `q` `e` (e `left` `right`) giram, `up` `down` olham, `c`
 volta ao horizonte, `enter` `space` usam o que está na mira, `j` `k` ajustam o objeto, `h` `l` passam
-anterior/próximo nele, `g` `[` `]` pegam a tela (fase 3), `f` é SALTO e `esc` volta ao NAV. No FOCO só `ctrl+]`
+anterior/próximo nele, `f` é SALTO e `esc` volta ao NAV. As teclas de andar e girar são **seguradas**: o `nkw`
+manda o comando ao apertar e de novo ao soltar (`pressed`), então religá-las no Lua funciona como qualquer outra.
+O mouse e o carregar abaixo são da fase 3, entrando agora (o estado de cada parte está em
+[mundo.md](mundo.md#o-que-já-funciona-e-o-que-ainda-vem)):
+
+- **Mouse no ANDAR** (`[walk] mouse_look = true`, ou `nkw --mouse-look on|off`): ao entrar, o ponteiro do host
+  fica travado e escondido e o movimento relativo gira a câmera (0,12° por contagem, sem aceleração); botão
+  esquerdo = `world.interact`, direito = `world.grab`. Ao sair do ANDAR, ou quando a janela do mundo perde o
+  foco, o ponteiro volta. Sem movimento relativo no host, olhar continua pelo teclado.
+- **Carregar uma tela**: `g` pega a tela na mira, que flutua 1,2 m à sua frente, sempre virada para você; `[` `]`
+  aproximam/afastam (0,8 a 3 m, passos de 0,2 m), `-` `=` mudam o tamanho; `g` de novo solta — numa mesa a até
+  0,6 m entra na pilha, numa parede a até 0,4 m (e até 15° de desvio) encosta nela, senão fica no ar.
+
+Na estante da biblioteca (`world.library`): `h` `l` (e `left` `right`) passam pelos livros, `j` `k` (e `down`
+`up`) trocam de prateleira, `enter` abre o livro ou entra na pasta, `backspace` sobe um nível, `/` busca na
+estante, `e` abre no editor, `p` mostra a prévia no atril, `y` copia o caminho e `esc` sai da estante. O resto
+(`t`, `o`, `b`, os acordes) é o NAV. No FOCO só `ctrl+]`
 (`keys.focus_escape`) e os acordes são do mundo. Na CONVERSA: `space`/`enter` avançam, `i`/`r` respondem,
 `f` senta no terminal do gato, `j` `k` `1`…`9` escolhem, `esc`/`q` encerram. No SALTO, `esc` cancela e
 `backspace` apaga; na paleta e nas linhas, `ctrl+a` `ctrl+e` `ctrl+w` `ctrl+u` editam e `esc`/`enter`
@@ -159,4 +177,10 @@ Do Lua, `nk.keymap.set` vale nesses modos como em qualquer outro ([lua.md](lua.m
 ```lua
 nk.keymap.set("world.walk", "j", "world.turn_left")      -- girar com j/l em vez de q/e
 nk.keymap.set("normal.world", "s", "world.walk")         -- s entra no ANDAR
+nk.keymap.set("normal.world", "n", function()            -- uma função: o nkw a roda pelo core
+  nk.ui.toast("olá do mundo")
+end)
 ```
+
+Essas sobreposições chegam ao `nkw` pelo `GET /v1/keymap` (uma função vira `lua.key:<modo>:<tecla>`, rodada
+com `POST /v1/commands/lua.key:…`; ver [lua.md](lua.md#teclado)).

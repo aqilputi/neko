@@ -24,11 +24,14 @@ const (
 	ModeWorldHint    = "world.hint"
 	ModeWorldPalette = "world.palette"
 	ModeWorldLine    = "world.line"
+	// ModeWorldLibrary is browsing a shelf of the library (plan-mundo §7):
+	// it falls back to NAV (normal.world), not to "world".
+	ModeWorldLibrary = "world.library"
 )
 
 // WorldModes lists the world's modes.
 var WorldModes = []string{ModeWorld, ModeNormalWorld, ModeWorldWalk, ModeWorldFocus, ModeWorldTalk,
-	ModeWorldHint, ModeWorldPalette, ModeWorldLine}
+	ModeWorldHint, ModeWorldPalette, ModeWorldLine, ModeWorldLibrary}
 
 // IsWorldMode reports whether mode is one of the world's ("world",
 // "world.*", "normal.world"): bindings the TUI and the GUI never show.
@@ -58,11 +61,14 @@ func BuildKeymap(cmds []Command) Keymap {
 func helpKey(keys []string) string { return strings.Join(keys, "/") }
 
 // ParentMode is the mode a mode falls back to: "normal.todos" → "normal" →
-// "*" → "".
+// "*" → "". The library's mode is the one exception: "world.library" →
+// "normal.world" (the shelf keys shadow NAV's, the rest is NAV).
 func ParentMode(mode string) string {
 	switch {
 	case mode == ModeAny || mode == "":
 		return ""
+	case mode == ModeWorldLibrary:
+		return ModeNormalWorld
 	case strings.Contains(mode, "."):
 		return mode[:strings.LastIndex(mode, ".")]
 	}
@@ -155,6 +161,92 @@ func (k Keymap) With(over Keymap) Keymap {
 			b.Help.Desc = o.Help.Desc
 		}
 		out[i] = b
+	}
+	return out
+}
+
+// LuaKeyPrefix names a key bound to a Lua function: "lua.key:<mode>:<key>"
+// (internal/lua's Runtime.RunBinding runs it; POST /v1/commands/<name>).
+const LuaKeyPrefix = "lua.key:"
+
+// Overlay lays over on k (the Lua runtime's nk.keymap.set/del on the
+// registry keymap, GET /v1/keymap): a binding of over replaces the same
+// (mode, key) of k, in that binding's place; one with an empty Command
+// removes that key; the rest are appended in over's order. Two overrides
+// of one key: the last wins. A "lua.key:" binding passes through with the
+// help text "lua"; another one with no help text takes its command's. An
+// override with no mode is NORMAL's. Neither input is changed and the
+// result shares no key slice with them.
+func (k Keymap) Overlay(over Keymap) Keymap {
+	type slot struct{ mode, key string }
+	// normalise over: one owner per slot, the last one
+	norm := make(Keymap, 0, len(over))
+	for _, o := range over {
+		if o.Mode == "" {
+			o.Mode = ModeNormal
+		}
+		o.Keys = append([]string(nil), o.Keys...)
+		norm = append(norm, o)
+	}
+	owner := map[slot]int{}
+	for i, o := range norm {
+		for _, key := range o.Keys {
+			owner[slot{o.Mode, key}] = i
+		}
+	}
+	for i := range norm {
+		var keys []string
+		for _, key := range norm[i].Keys {
+			if owner[slot{norm[i].Mode, key}] == i {
+				keys = append(keys, key)
+			}
+		}
+		norm[i].Keys = keys
+		norm[i].Help.Key = helpKey(keys)
+		switch {
+		case strings.HasPrefix(norm[i].Command, LuaKeyPrefix):
+			norm[i].Help.Desc = "lua"
+		case norm[i].Help.Desc == "":
+			if b, ok := k.Find(norm[i].Command); ok {
+				norm[i].Help.Desc = b.Help.Desc
+			}
+		}
+	}
+	placed := make([]bool, len(norm))
+	place := func(out Keymap, i int) Keymap {
+		if placed[i] {
+			return out
+		}
+		placed[i] = true
+		if norm[i].Command == "" || len(norm[i].Keys) == 0 {
+			return out
+		}
+		return append(out, norm[i])
+	}
+	out := make(Keymap, 0, len(k)+len(norm))
+	for _, b := range k {
+		var keep []string
+		var hit []int
+		for _, key := range b.Keys {
+			if i, ok := owner[slot{b.Mode, key}]; ok {
+				hit = append(hit, i)
+				continue
+			}
+			keep = append(keep, key)
+		}
+		if len(keep) > 0 {
+			b.Keys = keep
+			if len(hit) > 0 {
+				b.Help.Key = helpKey(keep)
+			}
+			out = append(out, b)
+		}
+		for _, i := range hit {
+			out = place(out, i)
+		}
+	}
+	for i := range norm {
+		out = place(out, i)
 	}
 	return out
 }

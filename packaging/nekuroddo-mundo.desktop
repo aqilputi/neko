@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=nekuroddo — mundo
+GenericName=Escritório 3D dos agentes
+Comment=O escritório dos gatos em 3D (aninhado na sua sessão)
+Exec=nkw
+Icon=nekuroddo
+Terminal=false
+Categories=Development;Utility;
+Keywords=claude;agents;compositor;wayland;cat;3d;
+StartupWMClass=nkw

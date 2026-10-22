@@ -17,7 +17,7 @@ import (
 
 // luaKeyPrefix names a key Lua bound to a function (lua.Runtime.RunBinding
 // runs it).
-const luaKeyPrefix = "lua.key:"
+const luaKeyPrefix = core.LuaKeyPrefix
 
 // keyResolver resolves keys in Lua's overrides (nk.keymap.set/del) first,
 // then in the core's keymap. A key Lua deleted resolves to "" (it does

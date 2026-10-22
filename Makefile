@@ -126,7 +126,7 @@ install-gui: office-build
 # ---- nkw, the world (gui/office: Smithay + glow) ----
 # docs/plano-mundo.md §9. world-perf needs a GPU session (or --headless by hand) and jq;
 # world-cover needs cargo-llvm-cov. Crates of the list that do not exist yet are skipped.
-.PHONY: world-build world-test world-lint world-cover run-world world-shot world-perf
+.PHONY: world-build world-test world-lint world-cover run-world world-shot world-perf install-world
 WORLD_ALL    := nk-cats nkw-core nkw-objects nkw-sys nkw-gl nkw nkw-testclient
 WORLD_CRATES := $(foreach c,$(WORLD_ALL),$(if $(wildcard $(OFFICE)/crates/$(c)/Cargo.toml),-p $(c)))
 
@@ -151,3 +151,13 @@ world-shot:
 
 world-perf: world-build
 	$(OFFICE)/scripts/world-perf.sh --record
+
+# nkw (profile world) + the launcher entry "nekuroddo — mundo" and the icon. nkw talks to
+# nk serve like nkg does, so nk must be installed too (make install); docs/mundo.md.
+install-world:
+	cd $(OFFICE) && $(CARGO) build --profile world -p nkw
+	install -d $(PREFIX)/bin $(PREFIX)/share/applications $(PREFIX)/share/icons/hicolor/256x256/apps
+	install -m 0755 $(OFFICE)/target/world/nkw $(PREFIX)/bin/nkw
+	install -m 0644 assets/logo-256.png $(PREFIX)/share/icons/hicolor/256x256/apps/nekuroddo.png
+	sed 's#^Exec=nkw#Exec=$(PREFIX)/bin/nkw#' packaging/nekuroddo-mundo.desktop > $(PREFIX)/share/applications/nekuroddo-mundo.desktop
+	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null

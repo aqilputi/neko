@@ -107,6 +107,26 @@ nkg --demo         # o mundo de demonstração; sem --demo, suas sessões reais
 O GUI anterior, em navegador, continua disponível como legado: `make install-gui-web` (instala `nkg-web`;
 veja [gui-web.md](gui-web.md)).
 
+## Mundo (`nkw`)
+
+O mundo é um compositor Wayland 3D (guia completo em [mundo.md](mundo.md)): suas janelas em mesas e salas, os
+agentes como gatos. Ele roda **aninhado**, como uma janela dentro da sua sessão Wayland (niri, sway, KDE,
+GNOME…). Para compilar: o Rust ([rustup](https://rustup.rs)), clang + lld e as bibliotecas de sistema
+`wayland`, `libxkbcommon`, Mesa com EGL/GLES 3 e `libpipewire` (o volume e o som por proximidade; o D-Bus é
+falado em Rust puro, sem `libdbus`). Ele precisa do core instalado (`make install`): sobe o próprio
+`nk serve`, como o `nkg`.
+
+```sh
+make install          # o core (nk)
+make install-world    # compila o nkw (perfil world: release + LTO) e instala ~/.local/bin/nkw
+                      # + o atalho "nekuroddo — mundo" no lançador
+nkw --demo            # o mundo de demonstração (nada é real)
+nkw                   # suas sessões de verdade, numa janela da sua sessão
+```
+
+`make install-world PREFIX=/usr/local` instala em outro prefixo (o atalho aponta para o binário instalado);
+`make -n install-world` mostra os passos sem rodar nada. `make run-world` roda o demo direto do código.
+
 ## Ferramenta de diagnóstico
 
 ```sh
