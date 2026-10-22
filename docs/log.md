@@ -22,7 +22,11 @@ e as entradas antigas mantêm o nome da época.
     de 60 linhas no backend winit do Smithay para movimento relativo, como proposta.
 - **decisão:** orçamento de RAM na partida de 45 para ~90 MB: o driver Mesa sozinho ocupa 48 MB
   (`NKW_MEM=1`); continua ≤ 110 MB com 8 janelas.
-- **pendências:** medir `make world-perf` com a máquina ociosa; S4 p50 ainda acima de 1 ms; aplicar o patch
+- **medida:** `world-perf.sh --headless --seconds 30` com a máquina ociosa (perfil `world`): binário 13,6 MB;
+  S1 0 % de CPU e 0,13 wakeups/s; S2 0,17 % e tecla com p95 de 0,25 ms; S3 0,37 % (quadro p50 0,94 ms, p95
+  4,3 ms, acima dos 2 ms); S3r 0,03 %; S4 p50 1,19 ms, p95 1,9 ms, 0 quadros perdidos; S5 0 perdidos; RSS de
+  95 a 107 MB.
+- **pendências:** S3 p95 e S4 p50 acima do alvo; tick ocioso com p95 de 1,9 ms; S4 p50 ainda acima de 1 ms; aplicar o patch
   de movimento relativo (mouse-look); "N" espelhado no ON AIR; a sala não tem teto; gatos andando usam o rig
   sentado; overrides de tecla do Lua ainda não chegam ao `/v1/keymap`.
 
