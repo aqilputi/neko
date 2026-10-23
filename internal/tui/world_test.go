@@ -12,6 +12,9 @@ import (
 func worldOnlyTitles(t *testing.T, m Model) []string {
 	t.Helper()
 	other := map[string]bool{}
+	for _, short := range barLabels { // the bar's own words ("abre", "fecha") are the TUI's
+		other[short] = true
+	}
 	world := map[string]bool{}
 	for _, c := range m.app.Registry().All() {
 		if core.IsWorldMode(c.Mode) {

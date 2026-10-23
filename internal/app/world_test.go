@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -133,6 +134,54 @@ var s9 = []struct {
 	{"world.library", "world.book_preview", []string{"p"}},
 	{"world.library", "world.book_copy_path", []string{"y"}},
 	{"world.library", "world.library_leave", []string{"esc"}},
+	// S26 (wave 4): the phone, the help and the HUD
+	{"normal.world", "world.phone", []string{"tab"}},
+	{"world.walk", "world.phone", []string{"tab"}},
+	{"world", "world.phone", []string{"world+n"}},
+	{"normal.world", "world.help", []string{"?"}},
+	{"normal.world", "world.hud", []string{"z"}},
+	{"world.phone", "world.phone_left", []string{"h", "left"}},
+	{"world.phone", "world.phone_right", []string{"l", "right"}},
+	{"world.phone", "world.phone_down", []string{"j", "down"}},
+	{"world.phone", "world.phone_up", []string{"k", "up"}},
+	{"world.phone", "world.phone_open", []string{"enter", "space"}},
+	{"world.phone", "world.phone_back", []string{"backspace"}},
+	{"world.phone", "world.phone_close", []string{"esc", "tab"}},
+	{"world.phone", "world.phone_search", []string{"/"}},
+	{"world.phone", "world.phone_app_1", []string{"1"}},
+	{"world.phone", "world.phone_app_2", []string{"2"}},
+	{"world.phone", "world.phone_app_3", []string{"3"}},
+	{"world.phone", "world.phone_app_4", []string{"4"}},
+	{"world.phone", "world.phone_app_5", []string{"5"}},
+	{"world.phone", "world.phone_app_6", []string{"6"}},
+	{"world.phone", "world.phone_app_7", []string{"7"}},
+	{"world.phone", "world.phone_app_8", []string{"8"}},
+	{"world.phone", "world.phone_app_9", []string{"9"}},
+}
+
+// s26Titles are S26's titles (the ones the contract names).
+var s26Titles = map[string]string{
+	"world.phone":        "telefone",
+	"world.help":         "ajuda",
+	"world.hud":          "esconde/mostra o HUD",
+	"world.phone_open":   "abre",
+	"world.phone_back":   "volta",
+	"world.phone_close":  "fecha",
+	"world.phone_search": "busca",
+	"world.phone_app_1":  "app 1",
+	"world.phone_app_9":  "app 9",
+	"world.tour":         "tour da recepcionista",
+}
+
+// s26Args are the arguments S26 adds (world.talk's is optional).
+var s26Args = map[string][]core.Arg{
+	"world.walk_set": {{Name: "key", Type: core.ArgString, Required: true},
+		{Name: "value", Type: core.ArgString, Required: true}},
+	"world.launch_isolated": {{Name: "id", Type: core.ArgString, Required: true}},
+	"world.xwayland":        {{Name: "on", Type: core.ArgString, Required: true}},
+	"world.goto_cat":        {{Name: "cat", Type: core.ArgString, Required: true}},
+	"world.focus_cat":       {{Name: "cat", Type: core.ArgString, Required: true}},
+	"world.talk":            {{Name: "cat", Type: core.ArgString, Required: false}},
 }
 
 // s19Titles are S19's titles: the library mode's commands, the two
@@ -159,7 +208,11 @@ var s19Titles = map[string]string{
 
 // s9PaletteOnly are S9's commands with no keys.
 var s9PaletteOnly = strings.Fields(`world.fullscreen world.maximize world.room_new world.goto_room
-	world.goto_object brightness.up brightness.down world.open world.vault_lock`)
+	world.goto_object brightness.up brightness.down world.open world.vault_lock
+	world.tour world.walk_set world.launch_isolated world.xwayland world.goto_cat world.focus_cat`)
+
+// s26NotCore are the nkw's internal names (S26): never core commands.
+var s26NotCore = strings.Fields(`world.tour_done phone.sub phone.app`)
 
 // worldNames is every command name S9 has, keys or not.
 func worldNames() []string {
@@ -271,6 +324,7 @@ func TestWorldCommandInTwoModes(t *testing.T) {
 		"world.hint":      {core.ModeNormalWorld, core.ModeWorldWalk},
 		"world.back":      {core.ModeWorldWalk, core.ModeWorldFocus},
 		"world.line_home": {core.ModeWorldLine, core.ModeWorldPalette},
+		"world.phone":     {core.ModeNormalWorld, core.ModeWorldWalk, core.ModeWorld},
 	} {
 		n := 0
 		for _, c := range a.Registry().All() {
@@ -316,31 +370,38 @@ func TestWorldKeymapRules(t *testing.T) {
 			}
 		}
 	}
-	if len(chords) != 15 {
+	if len(chords) != 16 {
 		t.Errorf("%d chords: %v", len(chords), chords)
 	}
 	// world.quit asks first; the arguments the palette asks for
 	if c, _ := a.Registry().Lookup("world.quit"); !c.Confirm {
 		t.Error("world.quit does not confirm")
 	}
-	for name, arg := range map[string]core.Arg{
-		"world.send_room":      {Name: "room", Type: core.ArgRoom, Required: true},
-		"world.goto_room":      {Name: "room", Type: core.ArgRoom, Required: true},
-		"world.room_new":       {Name: "name", Type: core.ArgString, Required: true},
-		"world.goto_object":    {Name: "name", Type: core.ArgString, Required: true},
-		"world.library_search": {Name: "q", Type: core.ArgString, Required: true},
-		"world.open":           {Name: "path", Type: core.ArgString, Required: true},
-	} {
+	args := map[string][]core.Arg{
+		"world.send_room":      {{Name: "room", Type: core.ArgRoom, Required: true}},
+		"world.goto_room":      {{Name: "room", Type: core.ArgRoom, Required: true}},
+		"world.room_new":       {{Name: "name", Type: core.ArgString, Required: true}},
+		"world.goto_object":    {{Name: "name", Type: core.ArgString, Required: true}},
+		"world.library_search": {{Name: "q", Type: core.ArgString, Required: true}},
+		"world.open":           {{Name: "path", Type: core.ArgString, Required: true}},
+	}
+	maps.Copy(args, s26Args)
+	for name, want := range args {
 		c, _ := a.Registry().Lookup(name)
-		if len(c.Args) != 1 || c.Args[0].Name != arg.Name || c.Args[0].Type != arg.Type || !c.Args[0].Required || c.Args[0].Prompt == "" {
+		if len(c.Args) != len(want) {
 			t.Errorf("%s args = %+v", name, c.Args)
+			continue
+		}
+		for i, w := range want {
+			g := c.Args[i]
+			if g.Name != w.Name || g.Type != w.Type || g.Required != w.Required || g.Prompt == "" {
+				t.Errorf("%s arg %d = %+v, want %+v", name, i, g, w)
+			}
 		}
 	}
 	// no other world command takes arguments or confirms
 	for _, c := range a.Registry().All() {
-		switch c.Name {
-		case "world.send_room", "world.goto_room", "world.room_new", "world.goto_object", "world.quit",
-			"world.library_search", "world.open":
+		if _, ok := args[c.Name]; ok || c.Name == "world.quit" {
 			continue
 		}
 		if isWorldCommand(c.Name) && (len(c.Args) != 0 || c.Confirm) {
@@ -358,7 +419,9 @@ func TestWorldKeymapRules(t *testing.T) {
 // S19's titles, and no title still says which phase it waits for.
 func TestWorldTitlesS19(t *testing.T) {
 	a := worldApp(t)
-	for name, want := range s19Titles {
+	titles := maps.Clone(s19Titles)
+	maps.Copy(titles, s26Titles)
+	for name, want := range titles {
 		c, ok := a.Registry().Lookup(name)
 		if !ok || c.Title != want {
 			t.Errorf("%s title = %q, want %q", name, c.Title, want)
@@ -467,6 +530,73 @@ func TestWorldCommandsRegisterOnce(t *testing.T) {
 	for _, b := range a.Keymap() {
 		if b.Command == "world.hint" {
 			t.Fatalf("binding of an unregistered command: %+v", b)
+		}
+	}
+}
+
+// S26: every key of the phone resolves in world.phone, and only those (the
+// mode has no fallback; the nkw chains "world" before it).
+func TestWorldPhoneKeys(t *testing.T) {
+	a, _ := cmdApp(t)
+	km := a.Keymap()
+	n := 0
+	for _, b := range s9 {
+		if b.mode != core.ModeWorldPhone {
+			continue
+		}
+		for _, k := range b.keys {
+			n++
+			if got, _ := km.Resolve(core.ModeWorldPhone, k); got != b.cmd {
+				t.Errorf("world.phone %q = %q, want %s", k, got, b.cmd)
+			}
+		}
+	}
+	if n != 23 {
+		t.Fatalf("%d phone keys", n)
+	}
+	for _, k := range []string{"x", "q", "t", "world+n", "ctrl+k", ":"} {
+		if got, ok := km.Resolve(core.ModeWorldPhone, k); ok {
+			t.Errorf("world.phone %q falls back to %s", k, got)
+		}
+	}
+	for _, name := range s26NotCore {
+		if _, ok := a.Registry().Lookup(name); ok {
+			t.Errorf("%s is the nkw's, not a core command", name)
+		}
+	}
+}
+
+// tab opens the phone in NAV and ANDAR (one binding each), world+n
+// anywhere; ? and z shadow help.open and pane.zoom inside the world only:
+// the TUI resolves them as before.
+func TestWorldPhoneHelpHudKeys(t *testing.T) {
+	a, _ := cmdApp(t)
+	km := a.Keymap()
+	for _, c := range []struct{ mode, key, want string }{
+		{core.ModeNormalWorld, "tab", "world.phone"},
+		{core.ModeWorldWalk, "tab", "world.phone"},
+		{core.ModeWorld, "world+n", "world.phone"},
+		{core.ModeNormalWorld, "?", "world.help"},
+		{core.ModeNormalWorld, "z", "world.hud"},
+		{core.ModeWorldLibrary, "?", "world.help"}, // the shelf falls back to NAV
+		{core.ModeNormal, "tab", "tab.next"},
+		{core.ModeNormal, "?", "help.open"},
+		{core.ModeNormal, "z", "pane.zoom"},
+		{core.ModeNormalTodos, "?", "help.open"},
+	} {
+		if got, _ := km.Resolve(c.mode, c.key); got != c.want {
+			t.Errorf("%s %q = %q, want %s", c.mode, c.key, got, c.want)
+		}
+	}
+	for _, mode := range []string{core.ModeNormalWorld, core.ModeWorldWalk} {
+		n := 0
+		for _, b := range km {
+			if b.Mode == mode && slices.Contains(b.Keys, "tab") {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("tab bound %d times in %s", n, mode)
 		}
 	}
 }

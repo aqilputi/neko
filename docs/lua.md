@@ -124,11 +124,11 @@ não está mais ligada a uma função). É o caminho do `nkw` para essas teclas 
 [plano](plano-mundo.md)).
 
 Os modos do mundo (`normal.world`, `world`, `world.walk`, `world.focus`, `world.talk`, `world.hint`,
-`world.palette`, `world.line`, `world.library` — [teclas.md](teclas.md#mundo-nkw)) valem como qualquer outro:
+`world.palette`, `world.line`, `world.library`, `world.phone` — [teclas.md](teclas.md#mundo-nkw)) valem como
+qualquer outro:
 
 ```lua
-nk.keymap.set("normal.world", "n", "world.right")       -- n vai para a próxima estação
-nk.keymap.set("world.walk", "j", "world.turn_left")     -- girar com j/l em vez de q/e
+nk.keymap.set("normal.world", "n", "world.phone")       -- n abre o telefone (no lugar de renomear o gato)nk.keymap.set("world.walk", "j", "world.turn_left")     -- girar com j/l em vez de q/e
 nk.keymap.set("world", "world+a", function()             -- acorde próprio: vai à sala "acme"
   nk.ui.scene("world.goto_room", { room = "acme" })
 end)

@@ -33,6 +33,7 @@ func TestParentMode(t *testing.T) {
 	for in, want := range map[string]string{
 		ModeNormalTodos: ModeNormal, ModeNormal: ModeAny, ModeInsert: ModeAny, ModeAny: "", "": "", "a.b.c": "a.b",
 		ModeNormalWorld: ModeNormal, ModeWorld: ModeAny, ModeWorldWalk: ModeWorld, ModeWorldLibrary: ModeNormalWorld,
+		ModeWorldPhone: "", // the phone has no fallback (S26)
 	} {
 		if got := ParentMode(in); got != want {
 			t.Errorf("ParentMode(%q) = %q, want %q", in, got, want)
@@ -47,7 +48,7 @@ func TestIsWorldMode(t *testing.T) {
 			t.Errorf("%s is not a world mode", m)
 		}
 	}
-	if len(WorldModes) != 9 {
+	if len(WorldModes) != 10 {
 		t.Fatalf("WorldModes = %v", WorldModes)
 	}
 	for _, m := range []string{ModeNormal, ModeNormalTodos, ModeInsert, ModeAny, "", "worldly", "normal.worldx", "x.world"} {
@@ -154,6 +155,28 @@ func TestIsSequence(t *testing.T) {
 	for k, want := range map[string]bool{"gg": true, "dd": true, "g": false, "gG": false, "up": false, "": false, "ctrl+d": false} {
 		if IsSequence(k) != want {
 			t.Errorf("IsSequence(%q) != %v", k, want)
+		}
+	}
+}
+
+// world.phone is the phone's keys (S26): a world mode with no fallback, so
+// a key the phone does not bind resolves to nothing here (the nkw chains
+// "world" before it by itself).
+func TestWorldPhoneMode(t *testing.T) {
+	if ModeWorldPhone != "world.phone" || !IsWorldMode(ModeWorldPhone) {
+		t.Fatalf("ModeWorldPhone = %q", ModeWorldPhone)
+	}
+	km := Keymap{
+		{Command: "world.phone_open", Keys: []string{"enter"}, Mode: ModeWorldPhone},
+		{Command: "world.phone", Keys: []string{"world+n"}, Mode: ModeWorld},
+		{Command: "app.quit", Keys: []string{"ctrl+c"}, Mode: ModeAny},
+	}
+	if c, _ := km.Resolve(ModeWorldPhone, "enter"); c != "world.phone_open" {
+		t.Fatalf("enter = %q", c)
+	}
+	for _, k := range []string{"world+n", "ctrl+c"} {
+		if c, ok := km.Resolve(ModeWorldPhone, k); ok {
+			t.Errorf("%s falls back to %q", k, c)
 		}
 	}
 }

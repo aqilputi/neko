@@ -55,7 +55,7 @@ func numbered(mode, name, title string) []worldRow {
 func worldRows() []worldRow {
 	const nav, glob, walk = core.ModeNormalWorld, core.ModeWorld, core.ModeWorldWalk
 	const focus, talk, hint = core.ModeWorldFocus, core.ModeWorldTalk, core.ModeWorldHint
-	const pal, line, lib = core.ModeWorldPalette, core.ModeWorldLine, core.ModeWorldLibrary
+	const pal, line, lib, phone = core.ModeWorldPalette, core.ModeWorldLine, core.ModeWorldLibrary, core.ModeWorldPhone
 	rows := []worldRow{
 		row(nav, "estação anterior", wk("world.left", "", "h", "left")),
 		row(nav, "próxima estação", wk("world.right", "", "l", "right")),
@@ -94,6 +94,17 @@ func worldRows() []worldRow {
 		row(nav, "ir até o objeto", wk("world.goto_object", "")),
 		row(nav, "abre um arquivo no mundo", wk("world.open", "")),
 		row(nav, "tranca o cofre", wk("world.vault_lock", "")),
+		// S26 (wave 4): the phone, the help, the HUD and the palette-only ones
+		row(nav+","+walk, "telefone", wk("world.phone", "", "tab")),
+		row(glob, "telefone", wk("world.phone", "", "world+n")),
+		row(nav, "ajuda", wk("world.help", "", "?")),
+		row(nav, "esconde/mostra o HUD", wk("world.hud", "", "z")),
+		row(nav, "tour da recepcionista", wk("world.tour", "")),
+		row(nav, "ajusta o ANDAR (não salva)", wk("world.walk_set", "")),
+		row(nav, "abre o app com perfil isolado", wk("world.launch_isolated", "")),
+		row(nav, "liga/desliga o X11 (xwayland-satellite)", wk("world.xwayland", "")),
+		row(nav, "ir até o gato", wk("world.goto_cat", "")),
+		row(nav, "FOCO no terminal do gato", wk("world.focus_cat", "")),
 		row(glob, "FOCO na vizinha", wk("world.focus_left", "à esquerda", "world+h"),
 			wk("world.focus_right", "à direita", "world+l"), wk("world.focus_up", "de cima", "world+k"),
 			wk("world.focus_down", "de baixo", "world+j")),
@@ -125,6 +136,18 @@ func worldRows() []worldRow {
 		row(talk, "escolha", wk("world.choice_down", "a de baixo", "j"), wk("world.choice_up", "a de cima", "k")),
 	)
 	rows = append(rows, numbered(talk, "world.choice", "escolha")...)
+	// the phone (S26): open over COMANDOS; its keys only, no fallback
+	rows = append(rows,
+		row(phone, "item à esquerda", wk("world.phone_left", "", "h", "left")),
+		row(phone, "item à direita", wk("world.phone_right", "", "l", "right")),
+		row(phone, "item de baixo", wk("world.phone_down", "", "j", "down")),
+		row(phone, "item de cima", wk("world.phone_up", "", "k", "up")),
+		row(phone, "abre", wk("world.phone_open", "", "enter", "space")),
+		row(phone, "volta", wk("world.phone_back", "", "backspace")),
+		row(phone, "fecha", wk("world.phone_close", "", "esc", "tab")),
+		row(phone, "busca", wk("world.phone_search", "", "/")),
+	)
+	rows = append(rows, numbered(phone, "world.phone_app", "app")...)
 	return append(rows,
 		row(hint, "cancela", wk("world.hint_cancel", "", "esc")),
 		row(hint, "apaga", wk("world.hint_backspace", "", "backspace")),
@@ -150,14 +173,25 @@ func worldRows() []worldRow {
 	)
 }
 
-// worldArgs are the arguments the palette asks for; world.quit confirms.
-var worldArgs = map[string]core.Arg{
-	"world.send_room":      {Name: "room", Type: core.ArgRoom, Prompt: "sala › ", Required: true},
-	"world.goto_room":      {Name: "room", Type: core.ArgRoom, Prompt: "sala › ", Required: true},
-	"world.room_new":       {Name: "name", Type: core.ArgString, Prompt: "nome da sala › ", Required: true},
-	"world.goto_object":    {Name: "name", Type: core.ArgString, Prompt: "objeto › ", Required: true},
-	"world.library_search": {Name: "q", Type: core.ArgString, Prompt: "busca › ", Required: true},
-	"world.open":           {Name: "path", Type: core.ArgString, Prompt: "arquivo › ", Required: true},
+// worldArgs are the arguments the palette asks for, in order (it asks the
+// required ones only); world.quit confirms.
+var worldArgs = map[string][]core.Arg{
+	"world.send_room":      {{Name: "room", Type: core.ArgRoom, Prompt: "sala › ", Required: true}},
+	"world.goto_room":      {{Name: "room", Type: core.ArgRoom, Prompt: "sala › ", Required: true}},
+	"world.room_new":       {{Name: "name", Type: core.ArgString, Prompt: "nome da sala › ", Required: true}},
+	"world.goto_object":    {{Name: "name", Type: core.ArgString, Prompt: "objeto › ", Required: true}},
+	"world.library_search": {{Name: "q", Type: core.ArgString, Prompt: "busca › ", Required: true}},
+	"world.open":           {{Name: "path", Type: core.ArgString, Prompt: "arquivo › ", Required: true}},
+	// S26
+	"world.walk_set": {
+		{Name: "key", Type: core.ArgString, Prompt: "opção (turn, mouse_look, comfort_vignette, speed…) › ", Required: true},
+		{Name: "value", Type: core.ArgString, Prompt: "valor › ", Required: true},
+	},
+	"world.launch_isolated": {{Name: "id", Type: core.ArgString, Prompt: "app › ", Required: true}},
+	"world.xwayland":        {{Name: "on", Type: core.ArgString, Prompt: "ligar? (true/false) › ", Required: true}},
+	"world.goto_cat":        {{Name: "cat", Type: core.ArgString, Prompt: "gato › ", Required: true}},
+	"world.focus_cat":       {{Name: "cat", Type: core.ArgString, Prompt: "gato › ", Required: true}},
+	"world.talk":            {{Name: "cat", Type: core.ArgString, Prompt: "gato › "}}, // none: the station's
 }
 
 // worldCommands builds the commands from worldRows (each once, in its
@@ -179,7 +213,7 @@ func worldCommands() ([]core.Command, core.Keymap) {
 				cmd := core.Command{Name: c.name, Title: r.title, Hint: c.hint, Keys: c.keys, Mode: mode,
 					Scope: core.ScopeClient, Confirm: c.name == "world.quit"}
 				if a, ok := worldArgs[c.name]; ok {
-					cmd.Args = []core.Arg{a}
+					cmd.Args = append([]core.Arg(nil), a...)
 				}
 				cmds = append(cmds, cmd)
 			}

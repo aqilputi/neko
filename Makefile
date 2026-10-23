@@ -152,6 +152,18 @@ world-shot:
 world-perf: world-build
 	$(OFFICE)/scripts/world-perf.sh --record
 
+# app compatibility (docs/mundo.md, "Apps dentro do mundo"): the headless suite (testclient +
+# the real apps installed, NKW_E2E=1 rows skip what is missing); world-compat-nested opens a
+# nested nkw --demo with real apps (throwaway profiles) in your session for up to two minutes
+# and rewrites $(OFFICE)/target/compat/matrix.md.
+.PHONY: world-compat world-compat-nested
+world-compat:
+	$(OFFICE)/scripts/world-compat.sh --headless
+
+world-compat-nested:
+	@echo "world-compat-nested: abre janelas na sua sessão por até 2 minutos (apps com perfis descartáveis)"
+	$(OFFICE)/scripts/world-compat.sh --nested
+
 # nkw (profile world) + the launcher entry "nekuroddo — mundo" and the icon. nkw talks to
 # nk serve like nkg does, so nk must be installed too (make install); docs/mundo.md.
 install-world:

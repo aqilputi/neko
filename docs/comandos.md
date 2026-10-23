@@ -147,7 +147,7 @@ só a ligação principal; a do outro modo fica.
 | `normal.world` | `1`…`9` | `world.room_1` … `world.room_9` | sala N |
 | `normal.world` | `gg` · `G` | `world.first` · `world.last` | primeira mesa · última mesa |
 | `normal.world` | `enter` `i` | `world.focus` | FOCO na tela (ou no terminal do gato) |
-| `normal.world` | `t` | `world.talk` | conversa com o gato |
+| `normal.world` | `t` | `world.talk` (`cat:string`, opcional) | conversa com o gato |
 | `normal.world` | `w` `world+w` | `world.walk` | ANDAR (e volta) |
 | `normal.world` | `f` `world+f` · `F` | `world.hint` · `world.hint_focus` | SALTO · SALTO direto para o FOCO |
 | `normal.world` | `o` `world+o` | `world.overview` | mapa |
@@ -164,6 +164,12 @@ só a ligação principal; a do outro modo fica.
 | `normal.world` | — | `world.fullscreen` · `world.maximize` | tela cheia (TV) · maximiza (largura 1) |
 | `normal.world` | — | `world.room_new` (`name:string*`) · `world.goto_room` (`room:room*`) · `world.goto_object` (`name:string*`) | sala nova · ir para a sala · ir até o objeto |
 | `normal.world` | — | `world.open` (`path:string*`) · `world.vault_lock` | abre um arquivo no mundo · tranca o cofre |
+| `normal.world`, `world.walk` · `world` | `tab` · `world+n` | `world.phone` | telefone |
+| `normal.world` | `?` · `z` | `world.help` · `world.hud` | ajuda · esconde/mostra o HUD |
+| `normal.world` | — | `world.tour` | tour da recepcionista |
+| `normal.world` | — | `world.walk_set` (`key:string*`, `value:string*`) | ajusta o ANDAR (não salva) |
+| `normal.world` | — | `world.launch_isolated` (`id:string*`) · `world.xwayland` (`on:string*`) | abre o app com perfil isolado · liga/desliga o X11 (xwayland-satellite) |
+| `normal.world` | — | `world.goto_cat` (`cat:string*`) · `world.focus_cat` (`cat:string*`) | ir até o gato · FOCO no terminal do gato |
 | `world` | `world+h` `world+l` `world+k` `world+j` | `world.focus_left` / `_right` / `_up` / `_down` | FOCO na vizinha |
 | `world` | `world+d` | `world.launcher` | apps |
 | `world` | `world+shift+e` | `world.quit` (confirma) | sair do mundo (confirma) |
@@ -198,6 +204,21 @@ só a ligação principal; a do outro modo fica.
 | `world.library` | `/` | `world.library_search` (`q:string*`) | busca na estante |
 | `world.library` | `e` · `p` · `y` | `world.book_edit` · `world.book_preview` · `world.book_copy_path` | abre no editor · prévia no atril · copia o caminho |
 | `world.library` | `esc` | `world.library_leave` | sai da estante |
+| `world.phone` | `h` `left` · `l` `right` | `world.phone_left` · `world.phone_right` | item à esquerda · item à direita |
+| `world.phone` | `j` `down` · `k` `up` | `world.phone_down` · `world.phone_up` | item de baixo · item de cima |
+| `world.phone` | `enter` `space` · `backspace` | `world.phone_open` · `world.phone_back` | abre · volta |
+| `world.phone` | `esc` `tab` · `/` | `world.phone_close` · `world.phone_search` | fecha · busca |
+| `world.phone` | `1`…`9` | `world.phone_app_1` … `world.phone_app_9` | app N |
+
+`world.phone` é o **telefone** ([mundo.md](mundo.md#o-telefone)): o `nkw` o abre por cima dos COMANDOS e
+seleciona esse modo enquanto ele está aberto. Ele **não tem fallback** — `core.ParentMode("world.phone") == ""`,
+a outra exceção à regra do ponto —; o `nkw` resolve `world` antes dele (os acordes continuam valendo) e trata
+as teclas imprimíveis que o telefone não liga como texto (a linha de busca, ou a tecla de um item). `world.phone`
+tem três ligações: `tab` no NAV e no ANDAR (um comando, duas ligações) e `world+n` em `world`, que vale em todo
+modo, inclusive no FOCO. `world.help` abre o telefone no app Ajuda; `world.talk` sem argumento conversa com o
+gato da estação e, com `cat`, com aquele gato onde ele estiver (o telefone usa assim). `world.walk_set` muda uma
+opção do `[walk]` só até o mundo fechar (`turn`, `mouse_look`, `comfort_vignette`, `speed`, `run_mul`,
+`snap_deg`, `eye_height`); `world.xwayland` recebe `on: "true"|"false"`.
 
 `world.library` é a estante da biblioteca (você está diante de uma prateleira, navegando pelos livros): é um
 sub-modo do **NAV**, não de `world` — `core.ParentMode("world.library") == "normal.world"`, a única exceção à
@@ -206,7 +227,9 @@ regra do ponto —, então o que a estante não liga cai no NAV (`t`, `o`, `b`�
 `world.vault_lock` tranca o cofre na hora.
 
 Alguns nomes que o `nkw` usa por dentro **não** são comandos do core e nunca aparecem em `GET /v1/commands`:
-`world.place_next`, `world.copy`, `world.band`, `world.goto_screen:<id>`, `world.launch:<id>`. Nem as teclas Lua
+`world.place_next`, `world.copy`, `world.band`, `world.goto_screen:<id>`, `world.launch:<id>`, `world.tour_done`,
+`phone.sub`, `phone.app` (as ações do telefone) e `world.palette_run` com o argumento `name` (abre a paleta já no
+argumento de um comando; o `world.palette_run` sem argumento é o `enter` da paleta, registrado). Nem as teclas Lua
 `lua.key:<modo>:<tecla>` (ver [lua.md](lua.md#teclado)), que rodam por `POST /v1/commands/{name}` mas não são
 comandos registrados.
 
@@ -214,7 +237,8 @@ O tipo de argumento `room` (`core.ArgRoom`) é novo: o `nkw` completa com as sal
 (mesmo título), o `hint` diz qual é qual ("à esquerda", "próxima"…). `world.back` aparece duas vezes: no ANDAR
 (`s`, andar para trás — o título do comando é "andar") e no FOCO (`ctrl+]`, a ligação extra com "sai do FOCO");
 o `nkw` decide pelo modo. O `nkw` nunca liga `app.quit`; os comandos `core` que o NAV herda de `normal`
-(`r x n m X dd c a A ctrl+k ? z`) agem sobre o gato da estação.
+(`r x n m X dd c a A ctrl+k`) agem sobre o gato da estação. `?` e `z` são do mundo no NAV (`world.help`,
+`world.hud`) e sombreiam o `help.open` e o `pane.zoom` só ali: na TUI continuam os mesmos.
 
 ## Confirmação: metadado vs. comportamento
 

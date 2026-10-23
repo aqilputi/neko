@@ -123,11 +123,14 @@ inclusive no FOCO, e nenhum acorde pertence a dois comandos. Assim um comando ca
 | `world.talk` | CONVERSA | `world` → `world.talk` → `normal` (só comandos `scope: core`, com o gato como contexto) |
 | `world.hint`, `world.palette`, `world.line` | SALTO, COMANDOS, linhas de texto | só o próprio modo; teclas imprimíveis são texto |
 | `world.library` | diante de uma estante da biblioteca | `world` → `world.library` → `normal.world` → `normal` → `*` |
+| `world.phone` | o telefone aberto (por cima dos COMANDOS, de qualquer modo) | `world` → `world.phone`; **sem fallback**; teclas imprimíveis que ele não liga são texto |
 
 `normal.world` é um sub-modo de `normal`, como o `normal.todos` (`core.ParentMode`): as teclas dele sombreiam as
-de `normal` e o resto cai em `normal` — os comandos do core que o NAV herda (`r x n m X dd c a A ctrl+k ? z`)
-agem sobre o gato da estação. O `nkw` nunca liga `app.quit`. `world.library` é sub-modo do NAV (a única exceção
-à regra do ponto em `core.ParentMode`): a estante só liga as teclas dela e o resto é o NAV.
+de `normal` e o resto cai em `normal` — os comandos do core que o NAV herda (`r x n m X dd c a A ctrl+k`) agem
+sobre o gato da estação. `?` e `z` o NAV liga ele mesmo (`world.help`, `world.hud`): sombreiam o `help.open` e o
+`pane.zoom` só no mundo. O `nkw` nunca liga `app.quit`. `world.library` é sub-modo do NAV (uma exceção à regra
+do ponto em `core.ParentMode`): a estante só liga as teclas dela e o resto é o NAV. `world.phone` é a outra
+exceção: `core.ParentMode("world.phone") == ""`.
 
 | tecla | NAV (`normal.world`) |
 |---|---|
@@ -137,6 +140,7 @@ agem sobre o gato da estação. O `nkw` nunca liga `app.quit`. `world.library` �
 | `f` · `F` · `o` · `b` | SALTO · SALTO direto para o FOCO · mapa · biblioteca |
 | `H` `L` · `,` `.` · `-` `=` · `p` · `M` | tela para a mesa ao lado · junta/tira da pilha · mesa mais estreita/larga · prende no ar · manda para outra sala |
 | `T` · `Q` · `shift+space` · `:` `ctrl+p` | terminal novo · fecha a janela · chama o gato mais urgente · COMANDOS |
+| `tab` · `?` · `z` | telefone · ajuda (o telefone no app Ajuda) · esconde/mostra o HUD |
 
 | acorde (`world`) | comando |
 |---|---|
@@ -146,14 +150,14 @@ agem sobre o gato da estação. O `nkw` nunca liga `app.quit`. `world.library` �
 | `world+space` | `world.summon` |
 | `world+f` · `world+p` · `world+o` | `world.hint` · `world.palette` · `world.overview` |
 | `world+enter` · `world+q` · `world+d` | `world.terminal` · `world.close` · `world.launcher` |
+| `world+n` | `world.phone` (o telefone, também no FOCO) |
 | `world+shift+e` | `world.quit` (confirma) |
 
 No ANDAR (`world.walk`): `w` `s` `a` `d` andam (segurar), `q` `e` (e `left` `right`) giram, `up` `down` olham, `c`
 volta ao horizonte, `enter` `space` usam o que está na mira, `j` `k` ajustam o objeto, `h` `l` passam
-anterior/próximo nele, `f` é SALTO e `esc` volta ao NAV. As teclas de andar e girar são **seguradas**: o `nkw`
-manda o comando ao apertar e de novo ao soltar (`pressed`), então religá-las no Lua funciona como qualquer outra.
-O mouse e o carregar abaixo são da fase 3, entrando agora (o estado de cada parte está em
-[mundo.md](mundo.md#o-que-já-funciona-e-o-que-ainda-vem)):
+anterior/próximo nele, `f` é SALTO, `tab` abre o telefone e `esc` volta ao NAV. As teclas de andar e girar são
+**seguradas**: o `nkw` manda o comando ao apertar e de novo ao soltar (`pressed`), então religá-las no Lua
+funciona como qualquer outra. O mouse e o carregar:
 
 - **Mouse no ANDAR** (`[walk] mouse_look = true`, ou `nkw --mouse-look on|off`): ao entrar, o ponteiro do host
   fica travado e escondido e o movimento relativo gira a câmera (0,12° por contagem, sem aceleração); botão
@@ -171,6 +175,11 @@ estante, `e` abre no editor, `p` mostra a prévia no atril, `y` copia o caminho 
 `f` senta no terminal do gato, `j` `k` `1`…`9` escolhem, `esc`/`q` encerram. No SALTO, `esc` cancela e
 `backspace` apaga; na paleta e nas linhas, `ctrl+a` `ctrl+e` `ctrl+w` `ctrl+u` editam e `esc`/`enter`
 cancelam/confirmam (`tab` completa na paleta, `shift+enter` quebra a linha).
+
+No telefone (`world.phone`, [mundo.md](mundo.md#o-telefone)): `h` `l` `j` `k` (e as setas) andam pela grade de
+apps e pelas listas, `enter`/`space` abrem o item, `backspace` volta (sub-página → app → início), `esc`/`tab`
+fecham, `/` vai para a linha de busca e `1`…`9` abrem o app N da tela inicial. Um item pode ter teclas próprias
+(`i` "abrir isolado" nos Apps, `Q` fechar nas Janelas…), escritas no rodapé; elas valem antes da tabela do modo.
 
 Do Lua, `nk.keymap.set` vale nesses modos como em qualquer outro ([lua.md](lua.md)):
 

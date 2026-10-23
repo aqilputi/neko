@@ -27,11 +27,15 @@ const (
 	// ModeWorldLibrary is browsing a shelf of the library (plan-mundo §7):
 	// it falls back to NAV (normal.world), not to "world".
 	ModeWorldLibrary = "world.library"
+	// ModeWorldPhone is the phone's keys (S26): the nkw selects it while
+	// the phone is open over COMANDOS and chains "world" before it by
+	// itself; it has no fallback of its own.
+	ModeWorldPhone = "world.phone"
 )
 
 // WorldModes lists the world's modes.
 var WorldModes = []string{ModeWorld, ModeNormalWorld, ModeWorldWalk, ModeWorldFocus, ModeWorldTalk,
-	ModeWorldHint, ModeWorldPalette, ModeWorldLine, ModeWorldLibrary}
+	ModeWorldHint, ModeWorldPalette, ModeWorldLine, ModeWorldLibrary, ModeWorldPhone}
 
 // IsWorldMode reports whether mode is one of the world's ("world",
 // "world.*", "normal.world"): bindings the TUI and the GUI never show.
@@ -61,11 +65,12 @@ func BuildKeymap(cmds []Command) Keymap {
 func helpKey(keys []string) string { return strings.Join(keys, "/") }
 
 // ParentMode is the mode a mode falls back to: "normal.todos" → "normal" →
-// "*" → "". The library's mode is the one exception: "world.library" →
-// "normal.world" (the shelf keys shadow NAV's, the rest is NAV).
+// "*" → "". The world has two exceptions: "world.library" →
+// "normal.world" (the shelf keys shadow NAV's, the rest is NAV) and
+// "world.phone" → "" (the phone's own keys only).
 func ParentMode(mode string) string {
 	switch {
-	case mode == ModeAny || mode == "":
+	case mode == ModeAny || mode == "" || mode == ModeWorldPhone:
 		return ""
 	case mode == ModeWorldLibrary:
 		return ModeNormalWorld

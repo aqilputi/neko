@@ -49,6 +49,8 @@ func TestKeyResolverMatchesOverlay(t *testing.T) {
 		{core.ModeNormalWorld, "h"}:  {"", "nav.collapse"},
 		{core.ModeWorldLibrary, "j"}: {"nav.top", "world.shelf_down"},
 		{core.ModeWorldLibrary, "h"}: {"", "world.book_prev"},
+		{core.ModeNormalWorld, "z"}:  {luaKeyPrefix + "normal:z", "world.hud"},
+		{core.ModeWorldLibrary, "z"}: {luaKeyPrefix + "normal:z", "world.hud"},
 	}
 	n := 0
 	for _, mode := range modes {

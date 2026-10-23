@@ -127,6 +127,19 @@ nkw                   # suas sessões de verdade, numa janela da sua sessão
 `make install-world PREFIX=/usr/local` instala em outro prefixo (o atalho aponta para o binário instalado);
 `make -n install-world` mostra os passos sem rodar nada. `make run-world` roda o demo direto do código.
 
+**Opcional, para apps X11:** o [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite). Com ele
+no `PATH`, o mundo o sobe sozinho na primeira vez que você abre um app, e os apps só X11 abrem lá dentro
+([mundo.md](mundo.md#x11-pelo-xwayland-satellite)); sem ele, só apps Wayland. Ele precisa do `Xwayland`
+instalado. Arch e derivados: `sudo pacman -S xwayland-satellite` (traz o `xorg-xwayland`). Debian/Ubuntu: o
+pacote `xwayland-satellite` onde a versão da distribuição já o tem, mais o `xwayland`; senão,
+`cargo install --git https://github.com/Supreeeme/xwayland-satellite` (precisa de `libxcb` e
+`xcb-util-cursor` para compilar).
+
+`make world-compat` roda a suíte de compatibilidade sem janela (o `nkw-testclient` e os apps reais que
+estiverem instalados); `make world-compat-nested` abre um `nkw --demo` aninhado com apps de verdade, com
+perfis descartáveis, na sua sessão por até dois minutos, e reescreve a matriz em
+`gui/office/target/compat/matrix.md`.
+
 ## Ferramenta de diagnóstico
 
 ```sh
