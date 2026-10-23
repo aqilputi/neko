@@ -3,6 +3,28 @@
 Histórico de decisões e progresso. Entradas mais recentes no topo. Até a v0.1.0 o projeto se chamava `neko`,
 e as entradas antigas mantêm o nome da época.
 
+## 2026-10-23
+
+- **progresso:** onda 3 do mundo (`nkw`), sete pacotes em paralelo:
+  - **arte:** salas com teto de vigas, duas janelas com cortina e luz que segue a hora do dia, papel de
+    parede e piso por sala, ON AIR corrigido, pescoço do monitor mais grosso, recepção recomposta.
+  - **ANDAR:** mouse-look pelo fork `aqilputi/smithay` (`nkw/winit-relative-pointer`, patch de 60 linhas em
+    `gui/office/patches/`), mira, carregar telas e soltar na mesa, na parede ou no ar, teclas seguradas
+    religáveis, vinheta de conforto opcional, `[walk]`/`[camera]` no `world.toml`.
+  - **gatos:** caixa de diálogo completa (o texto não corta mais), gatos andando em quatro patas, chegam
+    bem enquadrados e lado a lado, viram a cabeça a 2,5 m e ronronam a 1,3 m, a bibliotecária.
+  - **biblioteca e cofre:** estantes, busca com orçamento, atril, abrir com intenção de lugar; o cofre na
+    biblioteca com a bibliotecária, frase digitada, trava automática, auditoria 0600 e `vault_never_leaves`.
+  - **core:** teclas do Lua no `/v1/keymap` e `lua.key` remoto; `make install-world` e o atalho
+    "nekuroddo — mundo"; guia em [mundo.md](mundo.md).
+- **medida** (aninhado no niri, máquina ociosa): S1 0,02 % de CPU; S3 quadro p50 1,08 / p95 1,47 ms (antes
+  4,3); S4 p50 1,54 / p95 2,27 ms e 1 quadro perdido (acima do alvo); S5 1 perdido; RSS 97–110 MB (biblioteca
+  123 MB); binário 14,1 MB.
+- **decisão:** orçamento de RAM na partida de 45 para 90 MB no [plano](plano-mundo.md) (§1.3).
+- **pendências:** S4 p50 ≤ 1 ms (passar o dano do overlay à composição); 1 quadro perdido em S4/S5;
+  crachás de gatos de outras salas aparecem através das paredes; a câmera fica perto demais das estantes;
+  unificar a `Policy` do cofre entre `nkw-objects` e `nkw_core::library`; abrir o PR do patch no Smithay.
+
 ## 2026-10-22
 
 - **progresso:** onda 2 do mundo (`nkw`), seis pacotes em paralelo sobre os contratos congelados:

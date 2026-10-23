@@ -38,7 +38,7 @@ pub struct Sky {
     pub ambient_ground: [f32; 3],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MeshId {
     Box,
     RoundedBox,
@@ -98,11 +98,26 @@ pub enum MeshId {
     Fish,
     Package,
     OnAir,
+    // S17 (wave 3): the room shell
+    FloorPlanks,
+    FloorTiles,
+    Rug,
+    WallPanel,
+    Ceiling,
+    WindowFrame,
+    WindowPane,
+    Lintel,
+    Skirting,
+    // additive to S17: the two patterned wallpapers (`WallPanel` is the plain one)
+    WallStripes,
+    WallDots,
+    /// the window's light on the floor: four panes' worth, the glazing cross as gaps
+    LightPatch,
 }
 
 impl MeshId {
     /// How many kit meshes there are.
-    pub const COUNT: usize = 56;
+    pub const COUNT: usize = 68;
 
     pub const ALL: [MeshId; MeshId::COUNT] = [
         MeshId::Box,
@@ -161,6 +176,18 @@ impl MeshId {
         MeshId::Fish,
         MeshId::Package,
         MeshId::OnAir,
+        MeshId::FloorPlanks,
+        MeshId::FloorTiles,
+        MeshId::Rug,
+        MeshId::WallPanel,
+        MeshId::Ceiling,
+        MeshId::WindowFrame,
+        MeshId::WindowPane,
+        MeshId::Lintel,
+        MeshId::Skirting,
+        MeshId::WallStripes,
+        MeshId::WallDots,
+        MeshId::LightPatch,
     ];
 
     /// Position in [`MeshId::ALL`].
@@ -248,55 +275,58 @@ impl Camera {
 /// "sun" is a dim bluish moonlight and the warm ambient (lamps) carries the
 /// room.
 pub fn sky_for_band(band: u8) -> Sky {
-    // (sky, sun, ambient sky, ambient ground)
+    // (sky, sun, ambient sky, ambient ground). Interiors carry the mood: the
+    // ambient is cool blue-grey at dawn (1), clear and bright by day (2–4),
+    // warm at late afternoon and sunset (5–6), and at night (7, 0) a dim
+    // warm lamp-light under a blue moon.
     const BANDS: [[[f32; 3]; 4]; 8] = [
         [
-            [0.16, 0.18, 0.30],
-            [0.20, 0.22, 0.35],
-            [0.36, 0.36, 0.50],
-            [0.30, 0.25, 0.26],
+            [0.14, 0.16, 0.28],
+            [0.30, 0.30, 0.44],
+            [0.50, 0.46, 0.52],
+            [0.46, 0.37, 0.32],
         ],
         [
-            [0.56, 0.52, 0.66],
-            [0.70, 0.56, 0.50],
-            [0.50, 0.48, 0.58],
-            [0.36, 0.30, 0.30],
+            [0.60, 0.64, 0.76],
+            [0.72, 0.70, 0.78],
+            [0.62, 0.64, 0.74],
+            [0.46, 0.45, 0.50],
         ],
         [
             [0.70, 0.82, 0.92],
-            [1.00, 0.90, 0.76],
-            [0.56, 0.60, 0.68],
-            [0.40, 0.34, 0.30],
+            [1.00, 0.93, 0.82],
+            [0.70, 0.72, 0.78],
+            [0.54, 0.48, 0.44],
         ],
         [
             [0.62, 0.78, 0.94],
-            [1.00, 0.96, 0.88],
-            [0.58, 0.62, 0.70],
-            [0.42, 0.36, 0.32],
+            [1.00, 0.97, 0.90],
+            [0.74, 0.76, 0.80],
+            [0.56, 0.50, 0.46],
         ],
         [
             [0.64, 0.79, 0.93],
-            [1.00, 0.95, 0.84],
-            [0.58, 0.62, 0.70],
-            [0.42, 0.36, 0.32],
+            [1.00, 0.96, 0.86],
+            [0.74, 0.75, 0.78],
+            [0.57, 0.50, 0.45],
         ],
         [
-            [0.86, 0.80, 0.70],
+            [0.90, 0.80, 0.66],
             [1.00, 0.84, 0.62],
-            [0.58, 0.56, 0.58],
-            [0.44, 0.34, 0.28],
+            [0.76, 0.68, 0.62],
+            [0.58, 0.47, 0.39],
         ],
         [
-            [0.80, 0.62, 0.68],
-            [0.98, 0.68, 0.52],
-            [0.58, 0.52, 0.62],
-            [0.44, 0.34, 0.32],
+            [0.82, 0.64, 0.66],
+            [0.96, 0.72, 0.56],
+            [0.70, 0.60, 0.60],
+            [0.56, 0.44, 0.38],
         ],
         [
-            [0.20, 0.20, 0.34],
-            [0.24, 0.24, 0.38],
-            [0.38, 0.36, 0.50],
-            [0.30, 0.25, 0.26],
+            [0.18, 0.18, 0.32],
+            [0.32, 0.30, 0.44],
+            [0.52, 0.46, 0.50],
+            [0.48, 0.38, 0.33],
         ],
     ];
     const WARM: [f32; 3] = [0.96, 0.90, 0.80];
@@ -315,6 +345,23 @@ pub fn sky_for_band(band: u8) -> Sky {
         ambient_sky,
         ambient_ground,
     }
+}
+
+/// The light through a window at `band`: the pane's tint and how much it
+/// glows (0..1). Warm late afternoon (5–6), cool at dawn (1–2), pale
+/// daylight around noon, dark blue at night (7, 0) with the lamps' 0.15.
+pub fn window_light(band: u8) -> ([u8; 4], f32) {
+    const PANES: [([u8; 4], f32); 8] = [
+        ([70, 82, 128, 255], 0.15),
+        ([178, 196, 226, 255], 0.45),
+        ([196, 224, 246, 255], 0.65),
+        ([188, 222, 248, 255], 0.75),
+        ([200, 226, 244, 255], 0.75),
+        ([255, 222, 168, 255], 0.75),
+        ([255, 190, 150, 255], 0.7),
+        ([92, 96, 146, 255], 0.15),
+    ];
+    PANES[(band % 8) as usize]
 }
 
 #[cfg(test)]
@@ -398,6 +445,52 @@ mod tests {
         assert!(c.proj().abs_diff_eq(want, 1e-6));
     }
 
+    #[test]
+    fn interiors_are_warm_late_and_blue_grey_at_dawn() {
+        // warmth of the light a wall facing you gets: red minus blue of the ambient's middle
+        let warmth = |b: u8| {
+            let s = sky_for_band(b);
+            let m = |i: usize| (s.ambient_sky[i] + s.ambient_ground[i]) / 2.0;
+            m(0) - m(2)
+        };
+        assert!(warmth(1) < 0.0, "dawn is cool: {}", warmth(1));
+        for b in [5, 6] {
+            assert!(warmth(b) > 0.1, "band {b}: {}", warmth(b));
+            assert!(warmth(b) > warmth(3) + 0.05);
+        }
+        // the day is the brightest inside
+        let lum = |b: u8| {
+            let s = sky_for_band(b);
+            (0..3)
+                .map(|i| s.ambient_sky[i] + s.ambient_ground[i])
+                .sum::<f32>()
+        };
+        for b in [0, 1, 5, 6, 7] {
+            assert!(lum(b) < lum(3), "band {b}");
+        }
+    }
+
+    #[test]
+    fn window_light_warms_through_the_afternoon_and_glows_at_night() {
+        let warmth = |b: u8| {
+            let (c, _) = window_light(b);
+            c[0] as i32 - c[2] as i32
+        };
+        for b in 3..6 {
+            assert!(warmth(b) < warmth(b + 1), "band {b}");
+        }
+        assert!(warmth(1) < 0 && warmth(2) < 0, "cool mornings");
+        for b in [7u8, 0] {
+            let (c, e) = window_light(b);
+            assert!(e >= 0.1, "lamps at night");
+            assert!(c[0] < 120 && c[2] > c[0], "dark blue night: {c:?}");
+        }
+        for b in 1..7 {
+            assert!(window_light(b).1 > window_light(0).1);
+        }
+        assert_eq!(window_light(8), window_light(0));
+    }
+
     fn sun_height(band: u8) -> f32 {
         sky_for_band(band).sun_dir.y
     }
@@ -438,6 +531,7 @@ mod tests {
         }
         // night is darker than day
         assert!(lum(sky_for_band(0).color) < lum(sky_for_band(4).color));
+        assert!(lum(sky_for_band(7).ambient_sky) < lum(sky_for_band(3).ambient_sky));
         assert!(lum(sky_for_band(0).sun_color) < lum(sky_for_band(4).sun_color));
     }
 }

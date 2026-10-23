@@ -1,8 +1,10 @@
 # The AC dialogue box (P3), from a test DialogView handed in with `inject overlay`
-# (the cats' own dialogue wins once P4's is open).
+# (the cats' own dialogue wins once P4's is open). R3: the counters are what the
+# box drew — the whole text and both choices.
 inject overlay {"dialog": {"name": "api-gateway", "rgb": [106, 159, 216], "text": "Aplicar a migração agora? O banco de demo tem 3 tabelas novas.", "more": false, "choices": ["sim, aplicar agora", "não, revisar antes"], "selected": 0}}
+wait json /ext/overlay/dialog/choices 2 1000
 wait 600
-expect json /ext/overlay/dialog/chars 62
+expect json /ext/overlay/dialog {"chars": 62, "choices": 2}
 shot ${OUT}/shot-ui-dialog.png
 dump ${OUT}/dump-ui-dialog.json
 quit

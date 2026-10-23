@@ -1,6 +1,7 @@
 //! The wave-2 testclient flags against the real compositor (headless): the
 //! features other packages' tests build on (`--copy`, `--log-selection`,
-//! `--damage`, `--parent-of`, `--fullscreen`).
+//! `--damage`, `--parent-of`, `--fullscreen`; wave 3: `--spawn-child`,
+//! `--activation-token`).
 
 mod common;
 
@@ -110,4 +111,71 @@ quit
     );
     assert_eq!(r.code(), 0, "{}", r.stderr());
     assert!(!evs(&r.log("a.json"), "configure").is_empty());
+}
+
+#[test]
+fn spawn_child_maps_a_second_window_from_a_descendant() {
+    if testclient().is_none() {
+        return;
+    }
+    let r = run(
+        "spawn testclient --app-id acme.alpha --spawn-child --no-frame-wait --log {dir}/a.json
+wait 1200
+dump {dir}/w.json
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let a = r.log("a.json");
+    let spawned = evs(&a, "spawned_child");
+    assert_eq!(spawned.len(), 1, "{a:?}");
+    let child = r.log("a.json.child");
+    assert!(
+        !evs(&child, "configure").is_empty(),
+        "the child mapped: {child:?}"
+    );
+    let d = r.json("w.json");
+    let apps: Vec<&str> = d["screens"]
+        .as_object()
+        .map(|m| m.values().filter_map(|s| s["app_id"].as_str()).collect())
+        .or_else(|| {
+            d["screens"]
+                .as_array()
+                .map(|v| v.iter().filter_map(|s| s["app_id"].as_str()).collect())
+        })
+        .unwrap_or_default();
+    assert!(apps.contains(&"acme.alpha.child"), "{apps:?}");
+}
+
+#[test]
+fn spawned_clients_get_an_activation_token() {
+    if testclient().is_none() {
+        return;
+    }
+    let r = run(
+        // the WM creates xdg_activation in an idle callback: after the loop starts
+        "wait 100
+spawn testclient --app-id acme.alpha --activation-token --no-frame-wait --log {dir}/a.json
+wait 500
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let a = r.log("a.json");
+    let act = evs(&a, "activation");
+    assert_eq!(act.len(), 1, "{a:?}");
+    assert_eq!(
+        act[0]["token"], true,
+        "the hub's spawn passes XDG_ACTIVATION_TOKEN"
+    );
+    assert!(
+        !std::fs::read_to_string(r.path("a.json"))
+            .unwrap()
+            .contains("XDG_ACTIVATION"),
+        "the token is never logged"
+    );
 }

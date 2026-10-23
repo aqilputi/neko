@@ -1,0 +1,6 @@
+# The art pass (R5): the library (tiles, a long runner), made on demand by `world.library`.
+wait 300
+inject cats {"cmd":"world.library","args":{}}
+wait 1200
+shot ${OUT}/shot-art-room-library.png
+quit

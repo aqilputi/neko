@@ -91,11 +91,13 @@ target = 1
 fail = 16.7
 noise = 0.2
 
-# RAM | partida sem janelas / 8 janelas | ≤ 45 MB / ≤ 110 MB RSS | 150 MB
+# RAM | partida sem janelas / 8 janelas | ≤ 90 MB / ≤ 110 MB RSS | 150 MB
+# 45 → 90 (onda 3): só o Mesa já reside ≈ 48 MB (NKW_MEM=1: gpu_driver + gpu_buffers); o alvo
+# antigo não era alcançável com GL no processo.
 [ram_empty]
 metric = "rss_mb"
 scenarios = []
-target = 45
+target = 90
 fail = 150
 gated = false
 
@@ -105,6 +107,20 @@ scenarios = ["S1", "S2", "S3", "S4", "S5"]
 target = 110
 fail = 150
 noise = 5
+
+# RAM com a biblioteca aberta | S6: fixture "big" (50k entradas), 3 estantes, 1 busca |
+# ≤ S1 + 30 MB (S1 ≈ 100–110 MB: alvo 140) | só relatado nesta onda
+[ram_library]
+metric = "rss_mb"
+scenarios = ["S6"]
+target = 140
+gated = false
+
+# composições forçadas por mudança no HUD sem vontade (S14: o diálogo que parava) | relatado
+[compose_hud_changes]
+metric = "compose_hud_changes"
+scenarios = ["S1", "S3", "S4", "S5", "S6"]
+gated = false
 
 # binário | release, stripped | ≤ 15 MB | 25 MB
 [binary]
@@ -166,6 +182,6 @@ gated = false
 # objetos: no máximo 4 vontades Rate simultâneas (P5, rate_wishes_max)
 [rate_wishes]
 metric = "rate_wishes_max"
-scenarios = ["S1", "S3", "S4", "S5"]
+scenarios = ["S1", "S3", "S4", "S5", "S6"]
 target = 4
 fail = 4

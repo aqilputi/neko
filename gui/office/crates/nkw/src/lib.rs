@@ -25,6 +25,7 @@ pub mod render;
 pub mod router;
 pub mod scene;
 pub mod script;
+pub mod shell;
 pub mod shot;
 pub mod state;
 pub mod stats;

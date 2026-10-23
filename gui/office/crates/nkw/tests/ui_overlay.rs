@@ -149,3 +149,76 @@ quit
         "nothing changed, nothing re-rasterised"
     );
 }
+
+/// R3 (S16): ANDAR shows the dot; something in the aim makes it a ring;
+/// NAV shows none.
+#[test]
+fn andar_crosshair_dot_then_ring() {
+    let r = run(
+        "key w
+wait 200
+expect mode ANDAR
+expect json /ext/overlay/crosshair \"dot\"
+inject overlay {\"aimed\": true}
+wait 200
+expect json /ext/overlay/crosshair \"ring\"
+inject overlay {\"carrying\": true, \"vignette\": 0.5}
+wait 200
+expect json /ext/overlay/hand true
+expect json /ext/overlay/vignette 0.5
+key Escape
+wait 300
+expect mode NAV
+expect json /ext/overlay/crosshair null
+expect json /ext/overlay/hand false
+expect json /ext/overlay/vignette 0.0
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+}
+
+/// R3 (S16): the dialogue's counters are what the box drew: the whole
+/// question and both choices once the view has them (the stale-dialog
+/// regression asserts on these).
+#[test]
+fn dialog_counters_full_text_and_choices() {
+    let r = run(
+        "inject overlay {\"dialog\": {\"name\": \"api-gateway\", \"text\": \"Aplicar a migração agora?\", \"choices\": [\"sim, aplicar agora\", \"não, revisar antes\"]}}
+wait json /ext/overlay/dialog/choices 2 1000
+expect json /ext/overlay/dialog {\"chars\": 25, \"choices\": 2}
+inject overlay {\"dialog\": {\"name\": \"api-gateway\", \"text\": \"Aplicar a\", \"more\": false}}
+wait 200
+expect json /ext/overlay/dialog {\"chars\": 9, \"choices\": 0}
+inject overlay {\"dialog\": null}
+wait 200
+expect json /ext/overlay/dialog null
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+}
+
+/// R3 (S16): at 1.25 the overlay rasters at physical px; the same input
+/// twice gives the same PNG.
+#[test]
+fn fractional_scale_shot_is_pixel_stable() {
+    let script = "wait 300
+expect json /ext/overlay/label \"NAVEGAR\"
+inject overlay {\"toast\": {\"text\": \"escala 1,25: texto nítido\", \"kind\": \"info\", \"ms\": 20000}}
+wait 400
+shot {dir}/s.png
+quit
+";
+    let a = run(script, &["--scale", "1.25"], &[]);
+    assert_eq!(a.code(), 0, "{}", a.stderr());
+    let b = run(script, &["--scale", "1.25"], &[]);
+    assert_eq!(b.code(), 0, "{}", b.stderr());
+    let pa = std::fs::read(a.path("s.png")).unwrap();
+    let pb = std::fs::read(b.path("s.png")).unwrap();
+    assert!(pa == pb, "the same HUD at 1.25 twice gives the same PNG");
+}

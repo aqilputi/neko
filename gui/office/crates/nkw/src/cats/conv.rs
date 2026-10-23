@@ -8,8 +8,9 @@ use glam::Vec3;
 use nkw_core::{Action, CatId, Effect, Pose, Station, TalkPurpose, Time, layout};
 use serde_json::{Value, json};
 
+use super::Cats;
+use super::office::{LIBRARIAN, RECEPTIONIST};
 use super::talk::{self, Call, Choice, Reveal, Row, Step, Who};
-use super::{Cats, office::RECEPTIONIST};
 use crate::ext::{Ctx, DialogView, LineView, Req, ToastKind};
 
 /// How far before a cat's face the camera stops (§3.7).
@@ -35,6 +36,9 @@ pub struct Talk {
     pub framed: bool,
     /// when the cat left (the box closes `GONE_S` later)
     pub gone_at: Option<Time>,
+    /// the finished text (and its choices) was asked to compose once; reset
+    /// with every new reveal (the overlay only re-rasters on compose frames)
+    pub composed_done: bool,
 }
 
 /// The camera pose that frames a face at `face`, seen along `yaw` from
@@ -55,6 +59,9 @@ impl Cats {
                 None => Who::Receptionist,
             };
             return Some((who, "recepcionista".into(), cream));
+        }
+        if cat == LIBRARIAN {
+            return Some((Who::Librarian, "bibliotecária".into(), cream));
         }
         if let Some((from, to, text)) = self.walks.postman(cat) {
             return Some((Who::Postman(from, to, text), "carteiro".into(), cream));
@@ -81,6 +88,7 @@ impl Cats {
             line: false,
             framed: false,
             gone_at: None,
+            composed_done: false,
             reveal: Reveal::new(&text, labels, now, self.reduced_motion),
             who,
             row,
@@ -98,6 +106,7 @@ impl Cats {
             t.reveal = Reveal::new(question, vec!["Sim".into(), "Não".into()], now, reduced);
             t.pending = Some(token.to_string());
             t.waiting = None;
+            t.composed_done = false;
         }
     }
 
@@ -106,7 +115,7 @@ impl Cats {
         if let Some((p, yaw)) = self.walks.face(cat, ctx.now) {
             return Some((p, yaw));
         }
-        let (room, desk) = ctx.world.cat_desk(cat)?;
+        let (room, desk) = self.desk_of(ctx, cat)?;
         let seat = ctx.world.cat_seat(room, desk)?;
         // it turns on its chair to face you: its face is over the seat
         Some((
@@ -128,6 +137,17 @@ impl Cats {
 
     /// A machine effect for CONVERSA / FOCO on a cat (purpose `Session`).
     pub(super) fn talk_effect(&mut self, e: &Effect, ctx: &Ctx) -> Vec<Req> {
+        // the vault's conversation (the librarian, purpose `VaultUnlock`) is
+        // the objects plugin's: the cats only frame her face
+        if ctx.world.mode().purpose() == Some(TalkPurpose::VaultUnlock) {
+            return match *e {
+                Effect::FrameFace(cat) => match self.face_of(ctx, cat) {
+                    Some((face, yaw)) => vec![Req::GlideTo(face_pose(face, yaw))],
+                    None => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+        }
         match *e {
             Effect::FrameFace(cat) => {
                 if self.talk.as_ref().is_none_or(|t| t.cat != cat) {
@@ -261,6 +281,13 @@ impl Cats {
                 }
                 r
             }
+            Step::Command(name, args) => vec![
+                Req::Action(Action::Back),
+                Req::Command {
+                    name,
+                    args: args.into_iter().collect(),
+                },
+            ],
             Step::End => vec![Req::Action(Action::Back)],
         }
     }
@@ -284,7 +311,12 @@ impl Cats {
                 .iter()
                 .find(|r| r.id == room)
                 .and_then(|r| r.desks.get(desk))
-                .and_then(|d| d.cat),
+                .and_then(|d| d.cat)
+                .or_else(|| {
+                    // the library's counter is the librarian's
+                    (desk == 0 && self.librarian_seat(ctx).is_some_and(|(r, _)| r == room))
+                        .then_some(LIBRARIAN)
+                }),
             _ => None,
         }
     }
@@ -368,10 +400,17 @@ impl Cats {
             t.who = who;
             t.row = row;
             t.gone_at = Some(ctx.now);
+            t.composed_done = false;
         }
         if t.gone_at.is_some_and(|g| ctx.now - g >= GONE_S) {
             self.talk = None;
             return vec![Req::Action(Action::Back)];
+        }
+        // the frame the reveal completes composes (text and choices), even
+        // if no other wish asks for it (the stale box of wave 2)
+        if !t.composed_done && t.reveal.done(ctx.now) {
+            t.composed_done = true;
+            return vec![Req::Wish(nkw_core::Wish::compose(nkw_core::Want::Once))];
         }
         Vec::new()
     }
@@ -653,6 +692,38 @@ mod tests {
         command(&mut w, &mut cats, "world.talk_end", 20.5);
         assert_eq!(w.mode().label(), "NAVEGAR");
         assert!(cats.talk.is_none(), "CatBackToWork ends it");
+    }
+
+    #[test]
+    fn the_frame_the_reveal_completes_asks_to_compose_once() {
+        let (mut w, mut cats) = fixture_world();
+        acme(&mut w);
+        w.command(crate::world::Cmd::Move(nkw_core::Dir::Right), 10.0);
+        w.tick(20.0);
+        command(&mut w, &mut cats, "world.talk", 20.0);
+        let once = Req::Wish(nkw_core::Wish::compose(nkw_core::Want::Once));
+        let rooms = w.visible_rooms(&[]);
+        // 25 characters at 45 c/s: done at 20.556
+        let end = 20.0 + demo::QUESTION.chars().count() as f64 / talk::CPS as f64;
+        let mut asked = Vec::new();
+        for i in 0..40 {
+            let now = 20.0 + i as f64 / 30.0;
+            let r = with_ctx(&w, &rooms, now, |ctx| cats.talk_tick(ctx));
+            if r.contains(&once) {
+                asked.push(now);
+            }
+        }
+        assert_eq!(asked.len(), 1, "once: {asked:?}");
+        assert!(
+            asked[0] >= end && asked[0] < end + 1.0 / 30.0 + 1e-9,
+            "{asked:?}"
+        );
+        // a new question (Sim / Não) asks again when it is done
+        cats.ask("t1", "Tem certeza?", 22.0);
+        let r = with_ctx(&w, &rooms, 25.0, |ctx| cats.talk_tick(ctx));
+        assert_eq!(r, [once]);
+        let r = with_ctx(&w, &rooms, 25.1, |ctx| cats.talk_tick(ctx));
+        assert!(r.is_empty());
     }
 
     #[test]

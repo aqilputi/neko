@@ -7,10 +7,15 @@
 //! - `{"toast": {"text","kind":"info"|"error","ms"}}`
 //! - `{"pickables": [{"screen":N}|{"app_id":"…"}|{"cat":N}|{"door":N}, "pos":[x,y,z]?]}`:
 //!   extra SALTO targets (`[]` clears); a screen's pos defaults to its place.
+//!   `{"book":N,"pos":[..]}` too (a library book; the map draws the shelves
+//!   from them).
 //! - `{"palette_items": [{"name","title","keys":[..],"source":"world"|"core"|"app"|"goto"|"object"}]}`
+//! - `{"aimed": bool|null}`, `{"carrying": bool|null}`, `{"vignette": 0..1|null}`:
+//!   force ANDAR's crosshair ring, the "na mão" keys and the comfort
+//!   vignette over the hub's/World's values (`null` gives them back).
 
 use glam::Vec3;
-use nkw_core::{CatId, Pick, RoomId, ScreenId, Station};
+use nkw_core::{BookId, CatId, Pick, RoomId, ScreenId, Station};
 use serde_json::Value;
 
 use crate::ext::{DialogView, LineView, PaletteItem, Pickable, Source, ToastKind};
@@ -102,6 +107,8 @@ pub fn pickables(v: &Value, world: &World) -> Vec<Pickable> {
                 )
             } else if let Some(n) = id("cat") {
                 (Pick::Cat(CatId(n)), pos?)
+            } else if let Some(n) = id("book") {
+                (Pick::Book(BookId(n)), pos?)
             } else {
                 (Pick::Door(RoomId(id("door")?)), pos?)
             };
@@ -179,10 +186,11 @@ mod tests {
         assert_eq!(toast(&json!({"kind": "error"})), None);
         let w = crate::render::tests::world(&[&[1, 2]]);
         let p = pickables(
-            &json!([{"screen": 2}, {"cat": 5, "pos": [1, 2, 3]}, {"cat": 6}, {"screen": 99}]),
+            &json!([{"screen": 2}, {"cat": 5, "pos": [1, 2, 3]}, {"cat": 6}, {"screen": 99}, {"book": 7, "pos": [0, 1, 0]}, {"book": 8}]),
             &w,
         );
-        assert_eq!(p.len(), 2);
+        assert_eq!(p.len(), 3);
+        assert_eq!(p[2].pick, Pick::Book(BookId(7)));
         assert!(matches!(
             p[0].pick,
             Pick::Screen {

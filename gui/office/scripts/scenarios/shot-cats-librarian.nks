@@ -1,0 +1,15 @@
+# The librarian (R4): `world.library` makes the library room (R2) and goes there; she sits at its
+# counter (desk 0), her monitor dark, her name tag "bibliotecária". Talking to her (outside the
+# vault's own conversation) gives the short dialogue with "Ver o cofre".
+inject cats {"librarian":true}
+wait json /ext/cats/librarian 999000 3000
+wait 800
+shot ${OUT}/shot-cats-librarian.png
+inject cats {"near":{"cat":999000,"m":1.2}}
+wait 600
+inject cats {"cmd":"world.talk"}
+wait json /ext/cats/dialog/choices/0 "Ver o cofre" 3000
+wait 300
+shot ${OUT}/shot-cats-librarian-talk.png
+dump ${OUT}/dump-cats-librarian.json
+quit

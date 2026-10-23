@@ -56,11 +56,12 @@ cat >"$TMP/stderr" <<'EOF'
 uma linha qualquer do nkw
 nkw-stats {"t_us":10,"frame":1,"pass":"world","update_us":1,"cull_us":1,"submit_us":1,"compose_us":0,"draws":12,"tris":900,"gpu_us":null}
 nkw-stats {"t_us":20,"frame":2,"pass":"compose","update_us":1,"cull_us":1,"submit_us":1,"compose_us":5,"draws":30,"tris":100,"gpu_us":1500}
+nkw-stats {"t_us":30,"frame":3,"pass":"world","update_us":2500,"cull_us":1,"submit_us":1,"compose_us":0,"draws":5,"tris":50,"gpu_us":null}
 nkw-stats {"inject":{"key":"Return","t_us":1000}}
 nkw-stats {"inject":{"key":"a","t_us":2000}}
 nkw-stats {"inject":{"key":"a","t_us":3000}}
 nkw-stats quebrado {
-nkw-stats {"summary":true,"frames":2,"world_passes":1,"p50_us":800,"p95_us":2500,"dropped":1,"first_frame_ms":140,"rss_kb":51200}
+nkw-stats {"summary":true,"frames":2,"world_passes":1,"p50_us":800,"p95_us":2500,"dropped":1,"first_frame_ms":140,"rss_kb":51200,"compose_hud_changes":3,"look_events":7,"ext_plugin_us_p95":{"cats":1500,"wm":10}}
 EOF
 cat >"$TMP/client.json" <<'EOF'
 {"ev":"configure","w":640,"h":480,"states":[],"t_us":5}
@@ -74,6 +75,10 @@ check "dropped/first/rss" jqe '.dropped == 1 and .first_frame_ms == 140 and .rss
 check "máximos por quadro" jqe '.draws_max == 30 and .tris_max == 900 and .gpu_ms == 1.5' <<<"$st"
 check "latência casa tecla com tecla (Return fica no mundo)" \
 	jqe '.keys_injected == 3 and .keys_delivered == 2 and .key_latency_max_ms == 0.9 and .key_latency_p95_ms == 0.3' <<<"$st"
+check "divisão por estágio e quadros lentos" \
+	jqe '.stage_p95_ms.update == 0.001 and .stage_p50_ms.compose == 0 and .stage_p95_ms.compose == 0 and .slow_frames == 1' <<<"$st"
+check "campos novos do resumo (S14)" \
+	jqe '.compose_hud_changes == 3 and .look_events == 7 and .ext_plugin_p95_ms.cats == 1.5 and .ext_plugin_p95_ms.wm == 0.01' <<<"$st"
 check "sem resumo: summary false" jqe '.summary == false and .frame_p95_ms == null' <<<"$(stats_json /dev/null)"
 
 # ---- budget file mirrors plan §1.3 ----
@@ -87,7 +92,9 @@ check "S3 cpu 3/6" test "$(row cpu_animated)" = '[3,6,true]'
 check "quadro p50 1, p95 2/3" test "$(row frame_cpu_p50)$(row frame_cpu_p95)" = '[1,null,true][2,3,true]'
 check "GPU 2/4 só relatado" test "$(row frame_gpu)" = '[2,4,false]'
 check "tecla 1 ms / 1 quadro" test "$(row key_latency)" = '[1,16.7,true]'
-check "RAM 45 e 110 / 150" test "$(row ram_empty)$(row ram_windows)" = '[45,150,false][110,150,true]'
+check "RAM 90 e 110 / 150" test "$(row ram_empty)$(row ram_windows)" = '[90,150,false][110,150,true]'
+check "RAM da biblioteca só relatada" test "$(row ram_library)" = '[140,null,false]'
+check "composições por mudança no HUD só relatadas" test "$(row compose_hud_changes)" = '[null,null,false]'
 check "binário 15/25" test "$(row binary)" = '[15,25,true]'
 check "partida 250/500 e 1000/2000" test "$(row startup_first_frame)$(row startup_cats)" = '[250,500,true][1000,2000,false]'
 check "build 240/480 e 15/30" test "$(row build_cold)$(row build_incremental)" = '[240,480,false][15,30,false]'
@@ -114,7 +121,7 @@ check "tabela: uma linha por cenário" test "$(grep -cE '^(S1|S2|S4|bin) +pass' 
 check "campos novos do resumo (S12)" jqe '.scenarios.S1.metrics.ext_tick_p95_ms == 0.04 and .scenarios.S1.metrics.rate_wishes_max == 1' <<<"$OUT"
 
 perf
-check "padrão: S1 a S5 e S3r (rc=$RC)" jqe '.scenarios | keys == ["S1","S2","S3","S3r","S4","S5","bin"]' <<<"$OUT"
+check "padrão: S1 a S6 e S3r (rc=$RC)" jqe '.scenarios | keys == ["S1","S2","S3","S3r","S4","S5","S6","bin"]' <<<"$OUT"
 
 FAKE_NKW_RATES=5 perf --scenario S1
 check "mais de 4 vontades Rate falham" jqe '.scenarios.S1.checks[] | select(.row == "rate_wishes") | .status == "fail"' <<<"$OUT"

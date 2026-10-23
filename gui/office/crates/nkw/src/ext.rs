@@ -81,6 +81,9 @@ pub enum Req {
     /// → `Router::set_bindings` (from `/v1/keymap`)
     Keymap(Vec<nk_client::Binding>),
     Quit(i32),
+    /// the office's contexts changed: `World::sync_contexts(&c, now)` →
+    /// `Nkw::apply(outs)` (S14)
+    SyncContexts(Vec<(String, Vec<CatId>)>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,7 +148,7 @@ pub struct Tag {
     pub max_m: f32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Badge {
     Inbox(u32),
     Confirm,
@@ -157,13 +160,13 @@ pub enum Badge {
     Layout(String),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LineView {
     pub text: String,
     pub cursor: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct DialogView {
     pub name: String,
     pub rgb: [u8; 3],
@@ -186,6 +189,42 @@ pub struct HudInput {
     pub tags: Vec<Tag>,
     /// gathered from every plugin while SALTO is open, else empty
     pub pickables: Vec<Pickable>,
+    /// ANDAR: something interactable is in the aim (`World::aim()` or
+    /// `Objects::aimed()`); the crosshair becomes a ring (S14)
+    pub aimed: bool,
+}
+
+impl HudInput {
+    /// Something on the HUD can change without a wish of its own (a dialog,
+    /// a badge, SALTO's labels): the hub then compares [`hud_hash`] on
+    /// frames that run anyway.
+    pub fn busy(&self) -> bool {
+        self.dialog.is_some() || !self.badges.is_empty() || !self.pickables.is_empty()
+    }
+}
+
+/// A 64-bit hash of what the overlay draws from a [`HudInput`]: `(dialog,
+/// badges, tags, focus_rect, mode_label, aimed)`. A different hash than the
+/// last composed one makes the frame compose even with no wish (S14; the
+/// stale dialogue of wave 2).
+pub fn hud_hash(h: &HudInput) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut s = std::collections::hash_map::DefaultHasher::new();
+    h.mode_label.hash(&mut s);
+    h.badges.hash(&mut s);
+    h.dialog.hash(&mut s);
+    h.focus_rect.hash(&mut s);
+    h.aimed.hash(&mut s);
+    h.tags.len().hash(&mut s);
+    for t in &h.tags {
+        t.id.hash(&mut s);
+        t.text.hash(&mut s);
+        t.rgb.hash(&mut s);
+        for f in [t.pos.x, t.pos.y, t.pos.z, t.max_m] {
+            f.to_bits().hash(&mut s);
+        }
+    }
+    s.finish()
 }
 
 /// One 2D element, logical px, top-left origin. The overlay owns the buffer
@@ -194,6 +233,9 @@ pub struct OverlayElem {
     pub id: u64,
     pub pos: (i32, i32),
     pub buf: MemoryRenderBuffer,
+    /// buffer px per logical px: 1.0 = integer-scale raster (the buffer's
+    /// own scale); `Ctx.scale` when the overlay rasters at physical px (S14)
+    pub buf_scale: f64,
 }
 
 pub trait Plugin {
@@ -294,6 +336,12 @@ pub trait Plugin {
         Value::Null
     }
     fn shutdown(&mut self) {}
+    /// A keymap sub-mode the router consults (`Route` resolution chain):
+    /// the overlay's "map", the library's "library". The hub asks overlay,
+    /// objects, cats, wm in that order; the first `Some` wins (S14).
+    fn submode(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 pub struct Ext {
@@ -306,9 +354,17 @@ pub struct Ext {
 
 impl Ext {
     pub fn new(cli: &crate::cli::Cli) -> Ext {
+        // the WM parses world.toml first; its `[keys]` feed the router (the
+        // CLI flags win)
+        let wm = crate::wm::Wm::new(cli);
+        let keys = &wm.config().keys;
+        let router = crate::router::Router::new(
+            cli.world_mod_or(keys.world_mod.as_deref()),
+            &cli.focus_escape_or(keys.focus_escape.as_deref()),
+        );
         Ext {
-            router: crate::router::Router::new(cli.world_mod, FOCUS_ESCAPE),
-            wm: crate::wm::Wm::new(cli),
+            router,
+            wm,
             overlay: crate::overlay::Overlay::new(cli),
             cats: crate::cats::Cats::new(cli),
             objects: crate::objects::Objects::new(cli),
@@ -328,6 +384,16 @@ impl Ext {
     /// The same, read-only (draw, wishes, badges …).
     pub fn plugins_ref(&self) -> [&dyn Plugin; 4] {
         [&self.wm, &self.objects, &self.cats, &self.overlay]
+    }
+
+    /// The keymap sub-mode for the router: overlay, objects, cats, wm; the
+    /// first `Some` wins (S14).
+    pub fn submode(&self) -> Option<&'static str> {
+        self.overlay
+            .submode()
+            .or_else(|| Plugin::submode(&self.objects))
+            .or_else(|| Plugin::submode(&self.cats))
+            .or_else(|| Plugin::submode(&self.wm))
     }
 
     /// `world.dump()["ext"]`.
@@ -413,6 +479,8 @@ pub fn route_effect(e: &Effect, purpose: TalkPurpose) -> EffectTo {
         | Effect::TalkNext
         | Effect::KeyboardEnter(nkw_core::Target::CatTerm(_))
         | Effect::KeyboardLeave => dialogue,
+        // the library lives in the objects plugin (R6)
+        Effect::OpenBook(_) => EffectTo::Objects,
         _ => EffectTo::Wm,
     }
 }
@@ -569,11 +637,97 @@ mod tests {
             (Effect::OpenPane(CatId(2)), s, T::Cats),
             (Effect::KeyboardEnter(Target::CatTerm(CatId(2))), s, T::Cats),
             (Effect::KeyboardLeave, s, T::Cats),
-            (Effect::OpenBook(BookId(1)), s, T::Wm),
+            (Effect::OpenBook(BookId(1)), s, T::Objects),
         ];
         for (e, p, want) in rows {
             assert_eq!(route_effect(&e, p), want, "{e:?} {p:?}");
         }
+    }
+
+    fn hud() -> HudInput {
+        HudInput {
+            mode_label: "NAVEGAR",
+            badges: Vec::new(),
+            dialog: None,
+            focus_rect: None,
+            tags: Vec::new(),
+            pickables: Vec::new(),
+            aimed: false,
+        }
+    }
+
+    fn dialog(text: &str, choices: &[&str]) -> DialogView {
+        DialogView {
+            name: "acme".into(),
+            rgb: [1, 2, 3],
+            text: text.into(),
+            more: choices.is_empty(),
+            choices: choices.iter().map(|c| c.to_string()).collect(),
+            selected: 0,
+            line: None,
+        }
+    }
+
+    #[test]
+    fn the_hud_hash_sees_what_the_overlay_draws() {
+        let base = hud_hash(&hud());
+        assert_eq!(base, hud_hash(&hud()), "same input, same hash");
+        let with = |f: &dyn Fn(&mut HudInput)| {
+            let mut h = hud();
+            f(&mut h);
+            hud_hash(&h)
+        };
+        // the wave-2 stale dialogue: the reveal finished and the choices came
+        let partial = with(&|h| h.dialog = Some(dialog("Aplicar a migra", &[])));
+        let full = with(&|h| h.dialog = Some(dialog("Aplicar a migração?", &["sim", "não"])));
+        assert_ne!(partial, full);
+        assert_eq!(
+            full,
+            with(&|h| h.dialog = Some(dialog("Aplicar a migração?", &["sim", "não"])))
+        );
+        let changes: [&dyn Fn(&mut HudInput); 7] = [
+            &|h| h.mode_label = "ANDAR",
+            &|h| h.badges.push(Badge::Inbox(1)),
+            &|h| h.focus_rect = Some([0, 0, 10, 10]),
+            &|h| h.aimed = true,
+            &|h| {
+                h.tags.push(Tag {
+                    id: 1,
+                    pos: Vec3::ZERO,
+                    text: "acme".into(),
+                    rgb: [0; 3],
+                    max_m: 4.0,
+                })
+            },
+            &|h| h.dialog = Some(dialog("a", &["x"])),
+            &|h| {
+                let mut d = dialog("a", &["x"]);
+                d.selected = 1;
+                h.dialog = Some(d);
+            },
+        ];
+        let mut seen = vec![base];
+        for c in changes {
+            let v = with(c);
+            assert!(!seen.contains(&v), "every change is seen");
+            seen.push(v);
+        }
+        let moved = |x: f32| {
+            with(&|h| {
+                h.tags.push(Tag {
+                    id: 1,
+                    pos: Vec3::new(x, 0.0, 0.0),
+                    text: "acme".into(),
+                    rgb: [0; 3],
+                    max_m: 4.0,
+                })
+            })
+        };
+        assert_ne!(moved(0.0), moved(0.5), "a tag that moves");
+        assert!(!hud().busy());
+        let mut b = hud();
+        b.badges.push(Badge::Confirm);
+        assert!(b.busy());
     }
 
     #[test]

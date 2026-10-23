@@ -63,7 +63,11 @@ impl CompositorHandler for Nkw {
                     // first configure, so it gets its desk's size)
                     if !app_id.is_empty() && !self.world.screen_state(id).placed {
                         let now = self.now();
-                        match self.ext.wm.place_for(&app_id, now) {
+                        // `world.place_next` wins once, over rules and memory
+                        let pid = self.pids.get(&id).copied();
+                        let ours: Vec<u32> = self.children.iter().map(|c| c.id()).collect();
+                        let intent = self.ext.wm.take_intent(pid, &|p| ours.contains(&p), now);
+                        match intent.or_else(|| self.ext.wm.place_for(&app_id, now)) {
                             Some(p) => {
                                 let outs = self.world.place_new(id, &p, now);
                                 self.apply(outs);
@@ -401,7 +405,9 @@ impl SelectionHandler for Nkw {
         _seat: Seat<Self>,
         _user_data: &(),
     ) {
-        if ty == SelectionTarget::Clipboard {
+        if ty == SelectionTarget::Clipboard
+            && let Err(fd) = self.ext.wm.send_copied(&mime_type, fd)
+        {
             self.ext.wm.host_receive(mime_type, fd);
         }
     }

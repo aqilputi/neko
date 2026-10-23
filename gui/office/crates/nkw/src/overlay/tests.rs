@@ -33,6 +33,7 @@ fn hud(w: &World) -> HudInput {
         focus_rect: None,
         tags: Vec::new(),
         pickables: Vec::new(),
+        aimed: false,
     }
 }
 
@@ -470,6 +471,15 @@ fn commands_not_ours_are_not_taken() {
         "world.talk_sit",
         "session.stop",
         "world.summon",
+        // the World's since S15 (no more "fase 3/4" toasts)
+        "world.library",
+        "world.grab",
+        "world.nearer",
+        "world.farther",
+        // the library's (objects plugin)
+        "world.book_next",
+        "world.library_search",
+        "lua.key:normal.world:n",
     ] {
         assert!(
             with(&w, 0.0, |c| o.command(n, &BTreeMap::new(), c)).is_none(),
@@ -477,8 +487,364 @@ fn commands_not_ours_are_not_taken() {
         );
     }
     assert!(!o.dirty);
-    for n in ["world.library", "world.grab"] {
-        assert!(with(&w, 0.0, |c| o.command(n, &BTreeMap::new(), c)).is_some());
+    assert_eq!(o.dump()["toasts"], 0);
+}
+
+fn with_scale<R>(w: &World, now: Time, scale: f64, f: impl FnOnce(&Ctx) -> R) -> R {
+    let pids = BTreeMap::new();
+    let vis = [RoomId(0)];
+    let ctx = Ctx {
+        world: w,
+        now,
+        frame: 0,
+        reduced_motion: false,
+        demo: true,
+        scale,
+        size_px: [1280, 720],
+        pids: &pids,
+        visible_rooms: &vis,
+        line: None,
+    };
+    f(&ctx)
+}
+
+fn walking() -> World {
+    let mut w = world();
+    w.command(Cmd::Walk, 0.0);
+    assert!(w.mode().walking());
+    w
+}
+
+fn inject(o: &mut Overlay, w: &World, j: Value) {
+    with(w, 0.0, |c| o.inject(&j, c));
+}
+
+fn el(els: &[OverlayElem], id: u64) -> Option<&OverlayElem> {
+    els.iter().find(|e| e.id == id)
+}
+
+#[test]
+fn crosshair_dot_then_ring_only_in_andar() {
+    let w = walking();
+    let mut o = ov();
+    let mut h = hud(&w);
+    let els = with(&w, 1.0, |c| o.elements(c, &h));
+    let x = el(&els, CROSS_ID).expect("a crosshair in ANDAR");
+    let c = draw::CROSS_BOX;
+    assert_eq!(x.pos, ((1280 - c) / 2, (720 - c) / 2), "centred");
+    assert_eq!(o.dump()["crosshair"], "dot");
+    assert!(
+        with(&w, 1.0, |c| o.wishes(c)).is_empty(),
+        "a resting dot: no wish"
+    );
+    // something interactable in the aim: a ring in 80 ms
+    h.aimed = true;
+    with(&w, 2.0, |c| o.elements(c, &h));
+    assert_eq!(o.dump()["crosshair"], "ring");
+    assert!(with(&w, 2.0, |c| o.wishes(c)).contains(&Wish::compose(Want::Continuous)));
+    let made = o.dump()["rasters"].as_u64().unwrap();
+    with(&w, 2.04, |c| o.elements(c, &h));
+    with(&w, 2.08, |c| o.elements(c, &h));
+    assert!(o.dump()["rasters"].as_u64().unwrap() > made, "the steps");
+    assert!(with(&w, 2.08, |c| o.wishes(c)).is_empty(), "then at rest");
+    // the same through `inject overlay {"aimed": …}` (null gives it back)
+    h.aimed = false;
+    inject(&mut o, &w, serde_json::json!({"aimed": true}));
+    with(&w, 3.0, |c| o.elements(c, &h));
+    assert_eq!(o.dump()["crosshair"], "ring");
+    inject(&mut o, &w, serde_json::json!({"aimed": null}));
+    with(&w, 4.0, |c| o.elements(c, &h));
+    assert_eq!(o.dump()["crosshair"], "dot");
+    // NAV: none
+    let n = world();
+    let mut h = hud(&n);
+    h.aimed = true;
+    let els = with(&n, 5.0, |c| o.elements(c, &h));
+    assert!(el(&els, CROSS_ID).is_none());
+    assert_eq!(o.dump()["crosshair"], Value::Null);
+}
+
+#[test]
+fn vignette_is_cached_by_quantised_alpha_and_wishes_nothing() {
+    let w = walking();
+    let mut o = ov();
+    let h = hud(&w);
+    inject(&mut o, &w, serde_json::json!({"vignette": 0.5}));
+    let els = with(&w, 1.0, |c| o.elements(c, &h));
+    let v = els.last().unwrap();
+    assert_eq!(v.id, VIGNETTE_ID, "under everything");
+    assert_eq!(v.pos, (0, 0));
+    assert_eq!(v.buf_scale, 0.25, "quarter-res, the hub upsamples");
+    assert_eq!(o.dump()["vignette"], 0.5);
+    let made = o.dump()["rasters"].as_u64().unwrap();
+    // 0.51 is the same sixteenth: no raster
+    inject(&mut o, &w, serde_json::json!({"vignette": 0.51}));
+    with(&w, 1.1, |c| o.elements(c, &h));
+    assert_eq!(o.dump()["rasters"].as_u64().unwrap(), made);
+    inject(&mut o, &w, serde_json::json!({"vignette": 0.8}));
+    with(&w, 1.2, |c| o.elements(c, &h));
+    assert_eq!(o.dump()["rasters"].as_u64().unwrap(), made + 1);
+    assert_eq!(o.dump()["vignette"], 0.8125);
+    for t in [1.0, 1.1, 1.2] {
+        assert!(
+            with(&w, t, |c| o.wishes(c))
+                .iter()
+                .all(|x| !matches!(x.want, Want::Rate(_))),
+            "never a Rate"
+        );
     }
-    assert_eq!(o.dump()["toasts"], 2);
+    // off (the World's own value, 0 with the option off) and outside ANDAR
+    inject(&mut o, &w, serde_json::json!({"vignette": null}));
+    let els = with(&w, 2.0, |c| o.elements(c, &h));
+    assert!(el(&els, VIGNETTE_ID).is_none());
+    assert_eq!(o.dump()["vignette"], 0.0);
+    inject(&mut o, &w, serde_json::json!({"vignette": 1.0}));
+    let n = world();
+    let els = with(&n, 3.0, |c| o.elements(c, &hud(&n)));
+    assert!(el(&els, VIGNETTE_ID).is_none());
+}
+
+#[test]
+fn the_hand_hint_while_carrying() {
+    let w = walking();
+    let mut o = ov();
+    let h = hud(&w);
+    let els = with(&w, 1.0, |c| o.elements(c, &h));
+    assert!(el(&els, HAND_ID).is_none());
+    assert_eq!(o.dump()["hand"], false);
+    inject(&mut o, &w, serde_json::json!({"carrying": true}));
+    let els = with(&w, 1.0, |c| o.elements(c, &h));
+    let e = el(&els, HAND_ID).expect("the keys");
+    assert_eq!(o.dump()["hand"], true);
+    let size = {
+        let mut f = Fonts::new();
+        cache::Cache::new()
+            .get(
+                &Spec::Bar {
+                    text: HAND_HINT.into(),
+                },
+                Px(1.0),
+                &mut f,
+            )
+            .size
+    };
+    assert_eq!(e.pos.0, (1280 - size.0) / 2, "bottom-centre");
+    assert!(e.pos.1 > 600);
+    let n = world();
+    let els = with(&n, 1.0, |c| o.elements(c, &hud(&n)));
+    assert!(el(&els, HAND_ID).is_none(), "only in ANDAR");
+}
+
+fn dialog(text: &str, choices: &[&str], more: bool) -> DialogView {
+    DialogView {
+        name: "api-gateway".into(),
+        rgb: [0x6a, 0x9f, 0xd8],
+        text: text.into(),
+        more,
+        choices: choices.iter().map(|c| c.to_string()).collect(),
+        selected: 0,
+        line: None,
+    }
+}
+
+/// S16 counters: what the box drew, not what the view had.
+#[test]
+fn dialog_counters_are_what_is_drawn() {
+    let w = world();
+    let mut o = ov();
+    let mut h = hud(&w);
+    let q = "Aplicar a migração agora?";
+    assert_eq!(q.chars().count(), 25);
+    h.dialog = Some(dialog(
+        q,
+        &["sim, aplicar agora", "não, revisar antes"],
+        false,
+    ));
+    let els = with(&w, 0.0, |c| o.elements(c, &h));
+    assert!(el(&els, CHOICES_ID).is_some());
+    assert_eq!(
+        o.dump()["dialog"],
+        serde_json::json!({"chars": 25, "choices": 2})
+    );
+    // still revealing: no choices yet
+    h.dialog = Some(dialog("Aplicar a migra", &[], false));
+    with(&w, 0.1, |c| o.elements(c, &h));
+    assert_eq!(
+        o.dump()["dialog"],
+        serde_json::json!({"chars": 15, "choices": 0})
+    );
+    // a long text: the box shows its last three lines only
+    let long = "um dois três quatro cinco seis sete oito nove dez ".repeat(8);
+    h.dialog = Some(dialog(&long, &[], true));
+    with(&w, 0.2, |c| o.elements(c, &h));
+    let chars = o.dump()["dialog"]["chars"].as_u64().unwrap() as usize;
+    assert!(chars < long.chars().count() && chars > 60, "{chars}");
+    // the choices box would cover the FOCO window: not drawn, not counted
+    h.dialog = Some(dialog(q, &["sim", "não"], false));
+    h.focus_rect = Some([0, 0, 1280, 720]);
+    with(&w, 0.3, |c| o.elements(c, &h));
+    assert_eq!(o.dump()["dialog"]["choices"], 0);
+    h.dialog = None;
+    with(&w, 0.4, |c| o.elements(c, &h));
+    assert_eq!(o.dump()["dialog"], Value::Null);
+}
+
+#[test]
+fn toasts_stack_above_an_open_dialogue() {
+    let w = world();
+    let mut o = ov();
+    let mut h = hud(&w);
+    o.toast("salvo", ToastKind::Info, 10_000, 0.0);
+    let els = with(&w, 1.0, |c| o.elements(c, &h));
+    let alone = el(&els, TOAST_ID).unwrap().pos.1;
+    assert!(alone > 650, "bottom-left: {alone}");
+    h.dialog = Some(dialog("Aplicar a migração agora?", &[], true));
+    let els = with(&w, 2.0, |c| o.elements(c, &h));
+    let box_top = el(&els, DIALOG_ID).unwrap().pos.1;
+    let t = el(&els, TOAST_ID).unwrap();
+    let th = with(&w, 2.0, |_| {
+        cache::Cache::new()
+            .get(
+                &Spec::Toast {
+                    text: "salvo".into(),
+                    error: false,
+                },
+                Px(1.0),
+                &mut Fonts::new(),
+            )
+            .size
+            .1
+    });
+    assert!(t.pos.1 + th <= box_top, "{} + {th} vs {box_top}", t.pos.1);
+}
+
+#[test]
+fn drawn_chars_counts_the_kept_lines() {
+    let t = "a bb ccc dddd";
+    let all = draw::wrap(t, 4);
+    assert_eq!(all, ["a bb", "ccc", "dddd"]);
+    assert_eq!(drawn_chars(t, &all, 0), 13);
+    assert_eq!(drawn_chars(t, &all, 1), 8, "\"a bb \" gone");
+    assert_eq!(drawn_chars(t, &all, 2), 4);
+    assert_eq!(drawn_chars("", &[String::new()], 0), 0);
+}
+
+/// Fractional scale: every element at physical px with `buf_scale` = the
+/// scale; integer scales keep today's integer buffers; one raster per
+/// scale, hits after.
+#[test]
+fn fractional_scale_elements_and_cache() {
+    let w = world();
+    let mut o = ov();
+    let h = hud(&w);
+    let one = with_scale(&w, 0.0, 1.0, |c| o.elements(c, &h));
+    assert_eq!(one[0].buf_scale, 1.0);
+    let r1 = o.dump()["rasters"].as_u64().unwrap();
+    let q = with_scale(&w, 0.0, 1.25, |c| o.elements(c, &h));
+    assert_eq!(q[0].id, LABEL_ID);
+    assert_eq!(q[0].buf_scale, 1.25);
+    assert_eq!(q[0].pos, LABEL_POS, "positions stay logical");
+    assert_eq!(o.dump()["rasters"].as_u64().unwrap(), r1 + 1, "a miss");
+    with_scale(&w, 0.0, 1.25, |c| o.elements(c, &h));
+    assert_eq!(o.dump()["rasters"].as_u64().unwrap(), r1 + 1, "then hits");
+    let two = with_scale(&w, 0.0, 2.0, |c| o.elements(c, &h));
+    assert_eq!(two[0].buf_scale, 1.0, "2×: integer buffer");
+    for (s, want) in [
+        (1.0, 1.0),
+        (2.0, 2.0),
+        (1.25, 1.25),
+        (1.5, 1.5),
+        (1.75, 1.75),
+        (0.0, 1.0),
+    ] {
+        assert_eq!(raster_scale(s), Px(want), "{s}");
+    }
+}
+
+/// SALTO over 20 targets with books mixed in: each gets a label, none
+/// covers another, the dump names their kinds.
+#[test]
+fn hint_labels_on_twenty_targets_with_books() {
+    let mut w = world();
+    let mut o = ov();
+    let r = with(&w, 0.0, |c| o.command("world.hint", &BTreeMap::new(), c)).unwrap();
+    apply(&mut o, &mut w, r);
+    let cam = w.camera;
+    let fwd = crate::world::facing(cam.yaw);
+    let right = glam::Vec3::new(-fwd.z, 0.0, fwd.x);
+    let picks: Vec<Value> = (0..20)
+        .map(|i| {
+            let p = cam.pos
+                + fwd * 3.0
+                + right * ((i % 5) as f32 - 2.0) * 0.5
+                + glam::Vec3::Y * ((i / 5) as f32 * 0.3 - 0.5);
+            let pos = [p.x, p.y, p.z];
+            if i % 2 == 0 {
+                serde_json::json!({"book": i, "pos": pos})
+            } else {
+                serde_json::json!({"cat": i, "pos": pos})
+            }
+        })
+        .collect();
+    inject(&mut o, &w, serde_json::json!({ "pickables": picks }));
+    let els = with(&w, 0.0, |c| o.elements(c, &hud(&w)));
+    assert_eq!(o.dump()["hints"]["count"], 20);
+    let boxes: Vec<_> = els
+        .iter()
+        .filter(|e| e.id >= HINT_ID && e.id < TAG_ID)
+        .collect();
+    assert_eq!(boxes.len(), 20);
+    let kinds = o.dump()["hints"]["targets"].clone();
+    let books = kinds
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["kind"] == "book")
+        .count();
+    assert_eq!(books, 10);
+    let labels: std::collections::BTreeSet<String> = o.dump()["hints"]["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(labels.len(), 20, "unique labels");
+    for (i, a) in boxes.iter().enumerate() {
+        for b in &boxes[i + 1..] {
+            assert_ne!(a.pos, b.pos);
+        }
+    }
+}
+
+#[test]
+fn tags_fade_in_and_out_on_at_wishes() {
+    let w = world();
+    let mut o = ov();
+    let mut h = hud(&w);
+    let at = w.camera.pos + crate::world::facing(w.camera.yaw) * 1.5;
+    h.tags = vec![Tag {
+        id: 7,
+        pos: at,
+        text: "notas.md".into(),
+        rgb: [0x6a, 0x9f, 0xd8],
+        max_m: 1.8,
+    }];
+    let els = with(&w, 1.0, |c| o.elements(c, &h));
+    assert!(el(&els, TAG_ID + 7).is_some(), "from its first frame");
+    assert_eq!(
+        with(&w, 1.0, |c| o.wishes(c)),
+        [Wish::compose(Want::At(1.02))]
+    );
+    with(&w, 1.1, |c| o.elements(c, &h));
+    assert!(with(&w, 1.1, |c| o.wishes(c)).is_empty(), "opaque: at rest");
+    // out of its radius: fades for 120 ms, then gone
+    h.tags.clear();
+    let els = with(&w, 2.0, |c| o.elements(c, &h));
+    assert!(el(&els, TAG_ID + 7).is_some(), "fading");
+    assert_eq!(o.dump()["tags"], 0, "not counted as shown");
+    let wish = with(&w, 2.0, |c| o.wishes(c));
+    assert!(matches!(wish.as_slice(), [Wish { want: Want::At(t), .. }] if *t > 2.0 && *t <= 2.12));
+    let els = with(&w, 2.12, |c| o.elements(c, &h));
+    assert!(el(&els, TAG_ID + 7).is_none());
+    assert!(with(&w, 2.12, |c| o.wishes(c)).is_empty());
 }

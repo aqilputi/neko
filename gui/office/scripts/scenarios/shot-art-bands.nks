@@ -1,0 +1,18 @@
+# The art pass (R5): acme's room through the day for the user's approval: dawn (1), afternoon (4),
+# sunset (6) and night (7), set with `world.band` (a command by name through the cats' inject).
+wait 300
+key J
+wait 600
+inject cats {"cmd":"world.band","args":{"band":"1"}}
+wait 300
+shot ${OUT}/shot-art-bands-1.png
+inject cats {"cmd":"world.band","args":{"band":"4"}}
+wait 300
+shot ${OUT}/shot-art-bands-4.png
+inject cats {"cmd":"world.band","args":{"band":"6"}}
+wait 300
+shot ${OUT}/shot-art-bands-6.png
+inject cats {"cmd":"world.band","args":{"band":"7"}}
+wait 300
+shot ${OUT}/shot-art-bands.png
+quit

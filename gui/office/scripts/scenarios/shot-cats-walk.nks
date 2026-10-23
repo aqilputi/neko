@@ -1,0 +1,16 @@
+# The walkers on four legs (R4): in ANDAR, stepped back to the reception's door, the busy fixture
+# sends the postman (and then api-gateway) to you; the first shot catches the postman mid-stride
+# (rig::cat_walking, the stride from the distance walked), the second once they sit before you.
+key w
+expect mode ANDAR
+down s
+wait 1200
+up s
+wait 200
+inject cats {"fixture":"busy"}
+wait 2000
+shot ${OUT}/shot-cats-walk.png
+dump ${OUT}/dump-cats-walk.json
+wait 4000
+shot ${OUT}/shot-cats-walk-arrived.png
+quit

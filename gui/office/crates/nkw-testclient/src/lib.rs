@@ -19,6 +19,19 @@
 //!   configure, maps the main window with `xdg_toplevel.set_parent(mother)`
 //!   (`set_parent` only takes toplevels of the same client). The mother's lines
 //!   carry `"win":"parent"`; the main window's lines have no `win` key.
+//!
+//! Wave-3 additions (R1):
+//! - `--activation-token`: reads `XDG_ACTIVATION_TOKEN` (and unsets it, as
+//!   the protocol asks), and after the first configure calls
+//!   `xdg_activation_v1.activate(token, surface)`; logs
+//!   `{"ev":"activation","token":true}` (`false`: no token in the env).
+//!   The token itself is never logged.
+//! - `--spawn-child`: 300 ms after start, starts a second testclient as its
+//!   own child (a pid descendant: placement intents, `world.open`), with the
+//!   same arguments except `--spawn-child`/`--activation-token`/`--parent-of`,
+//!   `--app-id`/`--title` + `.child` and the log at `<log>.child` (see
+//!   [`child_argv`]); logs `{"ev":"spawned_child","pid":N}`. The child dies
+//!   with its parent (`PR_SET_PDEATHSIG`).
 
 use std::io::Write;
 
@@ -26,7 +39,8 @@ use serde::Serialize;
 
 pub const USAGE: &str = "usage: nkw-testclient [--app-id ID] [--title T] [--color RRGGBB | --checker] \
 [--size WxH] [--log PATH|-] [--popup-on-key] [--exit-after-ms N] [--no-frame-wait] [--copy TEXT] \
-[--log-selection] [--damage WxH] [--fractional] [--fullscreen] [--parent-of APP_ID]";
+[--log-selection] [--damage WxH] [--fractional] [--fullscreen] [--parent-of APP_ID] \
+[--activation-token] [--spawn-child]";
 
 /// The mimes `--copy` offers and `--log-selection` prefers, best first.
 pub const TEXT_MIMES: [&str; 3] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"];
@@ -73,6 +87,51 @@ pub struct Args {
     pub fullscreen: bool,
     /// `--parent-of`: the mother window's app_id (and title).
     pub parent_of: Option<String>,
+    /// `--activation-token`: activate with `XDG_ACTIVATION_TOKEN`.
+    pub activation_token: bool,
+    /// `--spawn-child`: start a child testclient after [`CHILD_AFTER_MS`].
+    pub spawn_child: bool,
+}
+
+/// When `--spawn-child` starts its child.
+pub const CHILD_AFTER_MS: u64 = 300;
+
+/// The child's arguments for `--spawn-child` (from the parent's `argv`):
+/// the flags that make a second parent (`--spawn-child`), use a one-shot
+/// token (`--activation-token`) or a mother (`--parent-of X`) are dropped;
+/// `--app-id`/`--title` get `.child` (added when missing); `--log P` becomes
+/// `P.child` (stdout stays stdout).
+pub fn child_argv<S: AsRef<str>>(argv: &[S]) -> Vec<String> {
+    let mut out = Vec::new();
+    let (mut app_id, mut title) = (false, false);
+    let mut it = argv.iter().map(AsRef::as_ref);
+    while let Some(a) = it.next() {
+        match a {
+            "--spawn-child" | "--activation-token" => {}
+            "--parent-of" => {
+                it.next();
+            }
+            "--app-id" | "--title" | "--log" => {
+                let Some(v) = it.next() else { break };
+                let v = match a {
+                    "--log" if v == "-" => v.to_string(),
+                    _ => format!("{v}.child"),
+                };
+                app_id |= a == "--app-id";
+                title |= a == "--title";
+                out.extend([a.to_string(), v]);
+            }
+            _ => out.push(a.to_string()),
+        }
+    }
+    let d = Args::default();
+    if !app_id {
+        out.extend(["--app-id".into(), format!("{}.child", d.app_id)]);
+    }
+    if !title {
+        out.extend(["--title".into(), format!("{}.child", d.title)]);
+    }
+    out
 }
 
 impl Default for Args {
@@ -92,6 +151,8 @@ impl Default for Args {
             fractional: false,
             fullscreen: false,
             parent_of: None,
+            activation_token: false,
+            spawn_child: false,
         }
     }
 }
@@ -150,6 +211,8 @@ pub fn parse_args<S: AsRef<str>>(argv: &[S]) -> Result<Args, String> {
                 }
                 a.parent_of = Some(v.to_string());
             }
+            "--activation-token" => a.activation_token = true,
+            "--spawn-child" => a.spawn_child = true,
             other => return Err(format!("unknown argument: {other}")),
         }
     }
@@ -323,6 +386,14 @@ pub enum Event {
     /// `--fractional`: the compositor's preferred scale, in 120ths.
     Scale {
         scale_120: u32,
+    },
+    /// `--activation-token`: `activate` was called (`token`: the env had one).
+    Activation {
+        token: bool,
+    },
+    /// `--spawn-child`: the child testclient's pid.
+    SpawnedChild {
+        pid: u32,
     },
 }
 
@@ -508,6 +579,65 @@ mod tests {
             assert!(parse_args(bad).is_err(), "{bad:?} should fail");
         }
         assert!(USAGE.contains("--parent-of APP_ID") && USAGE.contains("--damage WxH"));
+    }
+
+    #[test]
+    fn cli_wave3_flags() {
+        let a = ok(&["--activation-token", "--spawn-child"]);
+        assert!(a.activation_token && a.spawn_child);
+        assert!(!Args::default().activation_token && !Args::default().spawn_child);
+        assert!(USAGE.contains("--activation-token") && USAGE.contains("--spawn-child"));
+    }
+
+    #[test]
+    fn the_childs_arguments() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            child_argv(&[
+                "--app-id",
+                "alpha",
+                "--spawn-child",
+                "--color",
+                "3366cc",
+                "--log",
+                "/r/client-alpha.json",
+                "--activation-token",
+                "--title",
+                "a",
+            ]),
+            s(&[
+                "--app-id",
+                "alpha.child",
+                "--color",
+                "3366cc",
+                "--log",
+                "/r/client-alpha.json.child",
+                "--title",
+                "a.child",
+            ])
+        );
+        assert_eq!(
+            child_argv(&["--spawn-child", "--log", "-", "--parent-of", "m"]),
+            s(&[
+                "--log",
+                "-",
+                "--app-id",
+                "nkw-testclient.child",
+                "--title",
+                "nkw-testclient.child"
+            ])
+        );
+        let child = parse_args(&child_argv(&["--spawn-child", "--checker"])).unwrap();
+        assert!(!child.spawn_child, "never a grandchild");
+        assert_eq!(child.fill, Fill::Checker);
+    }
+
+    #[test]
+    fn wave3_lines() {
+        let v: Value = serde_json::from_str(&line(&Event::Activation { token: true }, 5)).unwrap();
+        assert_eq!(v, json!({"ev": "activation", "token": true, "t_us": 5}));
+        let v: Value = serde_json::from_str(&line(&Event::SpawnedChild { pid: 42 }, 6)).unwrap();
+        assert_eq!(v, json!({"ev": "spawned_child", "pid": 42, "t_us": 6}));
     }
 
     #[test]

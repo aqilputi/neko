@@ -5,6 +5,9 @@
 //! S12 adds `expect json <pointer> <json>` and `wait json <pointer> <json>
 //! <ms>` (RFC 6901 pointers into `world.dump()`) and `inject <plugin>
 //! <json>`; the JSON is the rest of the line, verbatim.
+//!
+//! Wave 3 (S14) adds `pointer <dx> <dy>` (a relative motion, as the host's
+//! relative pointer delivers it) and `button left|right down|up`.
 
 use std::path::PathBuf;
 
@@ -56,7 +59,28 @@ pub enum Cmd {
         plugin: String,
         json: Value,
     },
+    /// a relative pointer motion (counts), through `process_input`
+    Pointer(f64, f64),
+    /// a pointer button press (`true`) or release
+    Button(PointerButton, bool),
     Quit,
+}
+
+/// `button left|right`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PointerButton {
+    Left,
+    Right,
+}
+
+impl PointerButton {
+    /// The evdev code (`BTN_LEFT`, `BTN_RIGHT`).
+    pub fn code(self) -> u32 {
+        match self {
+            PointerButton::Left => 0x110,
+            PointerButton::Right => 0x111,
+        }
+    }
 }
 
 /// A command and the line it came from (1-based), for error messages.
@@ -280,6 +304,35 @@ fn parse_line(line: &str) -> Result<Option<Cmd>, String> {
                 );
             }
         },
+        "pointer" => match args.as_slice() {
+            [dx, dy] => {
+                let n = |v: &str| {
+                    v.parse::<f64>()
+                        .ok()
+                        .filter(|x| x.is_finite())
+                        .ok_or_else(|| format!("bad pointer delta {v:?}"))
+                };
+                Cmd::Pointer(n(dx)?, n(dy)?)
+            }
+            _ => return Err("pointer <dx> <dy>".into()),
+        },
+        "button" => {
+            const USE: &str = "button left|right down|up";
+            let b = match args.first().map(String::as_str) {
+                Some("left") => PointerButton::Left,
+                Some("right") => PointerButton::Right,
+                _ => return Err(USE.into()),
+            };
+            let down = match args.get(1).map(String::as_str) {
+                Some("down") => true,
+                Some("up") => false,
+                _ => return Err(USE.into()),
+            };
+            if args.len() != 2 {
+                return Err(USE.into());
+            }
+            Cmd::Button(b, down)
+        }
         "quit" => {
             if !args.is_empty() {
                 return Err("quit takes no arguments".into());
@@ -341,6 +394,9 @@ expect json /mode "FOCO"
 expect json /ext/cats {"stub": true, "n": [1, 2]}
 wait json /station/desk/desk 2 1500
 inject cats {"postman": {"to": "alpha"}}
+pointer 100 -2.5
+button left down
+button right up
    quit
 "#;
         let got: Vec<Cmd> = parse(src).unwrap().into_iter().map(|l| l.cmd).collect();
@@ -384,6 +440,9 @@ inject cats {"postman": {"to": "alpha"}}
                     plugin: "cats".into(),
                     json: serde_json::json!({"postman": {"to": "alpha"}}),
                 },
+                Cmd::Pointer(100.0, -2.5),
+                Cmd::Button(PointerButton::Left, true),
+                Cmd::Button(PointerButton::Right, false),
                 Cmd::Quit,
             ]
         );
@@ -453,6 +512,14 @@ inject cats {"postman": {"to": "alpha"}}
             ("inject cats [1,", 1, "bad JSON"),
             ("quit now", 1, "no arguments"),
             ("key hyper+x", 1, "unknown modifier"),
+            ("pointer 1", 1, "pointer <dx> <dy>"),
+            ("pointer 1 2 3", 1, "pointer <dx> <dy>"),
+            ("pointer a 2", 1, "bad pointer delta"),
+            ("pointer 1 inf", 1, "bad pointer delta"),
+            ("button middle down", 1, "button left|right"),
+            ("button left", 1, "button left|right"),
+            ("button left sideways", 1, "button left|right"),
+            ("button left down now", 1, "button left|right"),
         ];
         for (src, line, want) in cases {
             let e = parse(src).unwrap_err();
@@ -460,6 +527,12 @@ inject cats {"postman": {"to": "alpha"}}
             assert!(e.msg.contains(want), "{src:?} → {e}");
             assert!(e.to_string().starts_with(&format!("script line {line}:")));
         }
+    }
+
+    #[test]
+    fn button_codes_are_evdev() {
+        assert_eq!(PointerButton::Left.code(), 0x110);
+        assert_eq!(PointerButton::Right.code(), 0x111);
     }
 
     #[test]

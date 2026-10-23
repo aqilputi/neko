@@ -77,6 +77,8 @@ pub struct Ctx<'a> {
     pub reduced_motion: bool,
     pub data: Option<&'a Data>,
     pub anim: AnimState,
+    /// the vault's door, 0 shut .. 1 open
+    pub vault_open: f32,
 }
 
 struct Out<'a> {
@@ -188,7 +190,10 @@ pub fn object(o: &Object, c: &Ctx, out: &mut Vec<Instance>) {
                 Some(Data::Net(_)) => 0,
                 _ => 2,
             };
-            rig::plant(on_floor, bars, f.v);
+            // on the window sill: its point is PLANT_UP above the pot's base
+            let sill =
+                Mat4::from_rotation_translation(turn, o.pos - Vec3::Y * super::place::PLANT_UP);
+            rig::plant(sill, bars, f.v);
         }
         Kind::Fireplace => {
             let pressure = matches!(c.data, Some(Data::Load(l)) if l.pressure);
@@ -256,7 +261,7 @@ pub fn object(o: &Object, c: &Ctx, out: &mut Vec<Instance>) {
                 ..rig::piece(MeshId::Lamp, on_floor)
             });
         }
-        Kind::Vault => rig::safe(on_floor, 0.0, f.v),
+        Kind::Vault => rig::safe(on_floor, c.vault_open, f.v),
         // doors are drawn by `doors::Doors::models`
         Kind::Door(_) => {}
     }
@@ -330,6 +335,7 @@ mod tests {
             reduced_motion: false,
             data,
             anim: AnimState::default(),
+            vault_open: 0.0,
         }
     }
 

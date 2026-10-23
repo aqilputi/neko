@@ -62,7 +62,13 @@ for n in "${names[@]}"; do
 	sed -e "s|\${OUT}|$OUT|g" -e "s|\${TESTCLIENT}|$TESTCLIENT|g" "$src" >"$work/$n.nks"
 	rm -f "$OUT/shot-$n.png"
 	rc=0
-	"$BIN" --demo --headless --socket "nkw-shot-$$-$n" --seconds 30 --script "$work/$n.nks" \
+	# "#@args …" lines (world-perf.sh's directive): extra nkw flags, e.g. --scale 1.25
+	extra=()
+	while IFS= read -r line; do
+		read -r -a more <<<"${line#\#@args }"
+		extra+=("${more[@]}")
+	done < <(grep '^#@args ' "$src" || true)
+	"$BIN" --demo --headless "${extra[@]}" --socket "nkw-shot-$$-$n" --seconds 30 --script "$work/$n.nks" \
 		2>"$work/$n.err" || rc=$?
 	if [ "$rc" -ne 0 ] || [ ! -s "$OUT/shot-$n.png" ]; then
 		echo "shot-$n: falhou (nkw saiu com $rc)" >&2

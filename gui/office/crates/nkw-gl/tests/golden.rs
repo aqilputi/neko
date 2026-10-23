@@ -860,7 +860,8 @@ fn kittens() {
 #[test]
 fn room_reception() {
     let Some(ctx) = context() else { return };
-    let list = scenes::reception(ASPECT);
+    // wave 3: the reception as place.rs composes it, from near its door
+    let list = scenes::reception_room(ASPECT, 3, reception_view());
     let r = render(&ctx, &list, opts());
     eprintln!(
         "room_reception: {} draws, {} tris, {} instances",
@@ -870,6 +871,83 @@ fn room_reception() {
     assert!(list.triangle_estimate() <= 100_000);
     assert_eq!(r.stats.triangles, list.triangle_estimate());
     compare("room_reception", &r.px, SIZE);
+}
+
+/// Standing by the reception's door, looking at its back wall.
+fn reception_view() -> scenes::View {
+    let slot = scenes::shell_slot(1);
+    scenes::View::At(Pose::new(
+        nkw_core::layout::to_world(&slot, Vec3::new(slot.len / 2.0, 1.55, 4.6)),
+        0.0,
+        -0.08,
+    ))
+}
+
+// ---- wave 3 (R5): the room shell, ON AIR, the walking villagers
+
+/// Renders a shell scene, checks the room budget (≤ 80 draws, ≤ 100k tris).
+fn shell_golden(name: &str, list: &DrawList) {
+    let Some(ctx) = context() else { return };
+    let r = render(&ctx, list, opts());
+    eprintln!(
+        "{name}: {} draws, {} tris, {} instances",
+        r.stats.draws, r.stats.triangles, r.stats.instances
+    );
+    assert!(r.stats.draws <= 80, "{} draws", r.stats.draws);
+    assert!(r.stats.triangles <= 100_000, "{} tris", r.stats.triangles);
+    assert_eq!(r.stats.triangles, list.triangle_estimate());
+    compare(name, &r.px, SIZE);
+}
+
+#[test]
+fn room_shell_reception_day() {
+    use nkw_core::persist::RoomKind;
+    let list = scenes::shelled(
+        ASPECT,
+        &RoomKind::Reception,
+        0,
+        3,
+        &[23],
+        scenes::View::Hall,
+    );
+    shell_golden("room_shell_reception_day", &list);
+}
+
+#[test]
+fn room_shell_context_evening() {
+    use nkw_core::persist::RoomKind;
+    let list = scenes::shelled(
+        ASPECT,
+        &RoomKind::Context("acme".into()),
+        1,
+        6,
+        &[11, 23, 37],
+        scenes::View::Hall,
+    );
+    shell_golden("room_shell_context_evening", &list);
+}
+
+#[test]
+fn room_shell_library_night() {
+    use nkw_core::persist::RoomKind;
+    let list = scenes::shelled(ASPECT, &RoomKind::Library, 3, 7, &[41], scenes::View::Hall);
+    shell_golden("room_shell_library_night", &list);
+}
+
+#[test]
+fn cat_walking() {
+    shell_golden("cat_walking", &scenes::cats_walking(ASPECT));
+}
+
+#[test]
+fn on_air() {
+    let Some(ctx) = context() else { return };
+    let mut l = DrawList::empty(camera(Vec3::new(0.0, 1.5, 0.75), 0.0, 0.0), sky_for_band(3));
+    scenes::shell(&mut l, 3.0, -0.05, 2.0);
+    let sign = |x: f32| scenes::root(Vec3::new(x, 1.5, 0.0), 0.0);
+    nkw_gl::rig::on_air(sign(-0.27), true, &mut l.instances);
+    nkw_gl::rig::on_air(sign(0.27), false, &mut l.instances);
+    compare("on_air", &render(&ctx, &l, opts()).px, SIZE);
 }
 
 #[test]
@@ -943,4 +1021,98 @@ fn preview_p6() {
     shoot("p6-doors", &door_swing(a));
     shoot("p6-room", &office(a, &[11, 23, 37], 1, None));
     shoot("p6-room-talk", &office(a, &[11, 23, 37], 1, Some(1)));
+}
+
+/// Not a golden: `NKW_PREVIEW=<dir> cargo test -p nkw-gl --test golden preview_r5 -- --ignored`
+/// renders the wave-3 room shell by kind and band, and the walking villagers (`r5-*.png`).
+#[test]
+#[ignore]
+fn preview_r5() {
+    let Some(dir) = std::env::var_os("NKW_PREVIEW") else {
+        return;
+    };
+    let Some(ctx) = context() else { return };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    const BIG: [u32; 2] = [1280, 720];
+    let a = 16.0 / 9.0;
+    let shoot = |name: &str, list: &DrawList| {
+        let gl = &ctx.gl;
+        let target = ctx.fbo(BIG);
+        unsafe {
+            let mut w = WorldRenderer::new(gl, opts()).expect("renderer");
+            let st = w
+                .draw(
+                    gl,
+                    list,
+                    Target::Fbo {
+                        fbo: target.id(),
+                        size: BIG,
+                    },
+                )
+                .expect("draw");
+            let px = ctx.read(Some(target.fbo), BIG);
+            w.destroy(gl);
+            egl::write_png(&dir.join(format!("{name}.png")), &px, BIG);
+            eprintln!(
+                "{name}: {} draws, {} tris, {} instances",
+                st.draws, st.triangles, st.instances
+            );
+        }
+    };
+    use nkw_core::persist::RoomKind;
+    use scenes::*;
+    let only = std::env::var("NKW_PREVIEW_ONLY").unwrap_or_default();
+    let want = |n: &str| only.is_empty() || n.contains(only.as_str());
+    let ctx_kind = RoomKind::Context("acme".into());
+    let seeds = [11u64, 23, 37];
+    for (name, kind, index, band, view) in [
+        ("r5-context-entry-day", &ctx_kind, 1, 3, View::Entry),
+        ("r5-context-hall-day", &ctx_kind, 1, 3, View::Hall),
+        ("r5-context-desk-day", &ctx_kind, 1, 4, View::Desk(1)),
+        ("r5-context-entry-evening", &ctx_kind, 1, 6, View::Entry),
+        (
+            "r5-reception-hall-day",
+            &RoomKind::Reception,
+            0,
+            3,
+            View::Hall,
+        ),
+        (
+            "r5-library-entry-night",
+            &RoomKind::Library,
+            3,
+            7,
+            View::Entry,
+        ),
+        ("r5-user-hall-dawn", &RoomKind::User, 2, 1, View::Hall),
+    ] {
+        if want(name) {
+            shoot(name, &shelled(a, kind, index, band, &seeds, view));
+        }
+    }
+    if want("r5-walk") {
+        shoot("r5-walk", &cats_walking(a));
+    }
+    let slot = shell_slot(1);
+    let near_door = nkw_core::Pose::new(
+        nkw_core::layout::to_world(&slot, glam::Vec3::new(slot.len / 2.0, 1.55, 4.6)),
+        0.0,
+        -0.08,
+    );
+    let back = nkw_core::Pose::new(
+        nkw_core::layout::to_world(&slot, glam::Vec3::new(slot.len / 2.0, 1.5, 1.6)),
+        std::f32::consts::PI,
+        0.12,
+    );
+    for (name, band, view) in [
+        ("r5-reception-door", 3, View::At(near_door)),
+        ("r5-reception-desk", 3, View::Entry),
+        ("r5-reception-hall", 5, View::Hall),
+        ("r5-reception-clock", 3, View::At(back)),
+    ] {
+        if want(name) {
+            shoot(name, &reception_room(a, band, view));
+        }
+    }
 }

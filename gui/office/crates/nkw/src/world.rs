@@ -9,7 +9,7 @@ use glam::{Vec2, Vec3};
 use nkw_core::collide::{Aabb, Door as Gap, Grid, WalkInput, WalkParams, Walker, Wall};
 use nkw_core::layout;
 use nkw_core::strip::{self, Desk, Dir, RoomSlot, Side, Spot, Station, Width};
-use nkw_core::walk_exit::{self, ExitRule};
+use nkw_core::walk_exit;
 use nkw_core::{
     Action, CatId, Effect, Machine, Mode, ObjectAction, ObjectId, OneToOne, Output, Pose, RoomId,
     ScreenId, ScreenPlace, TalkPurpose, Target, Time, Tween, TweenOpts, Want, Wish, onetoone,
@@ -20,11 +20,17 @@ use crate::router::sym;
 
 #[path = "wm/world_ops.rs"]
 mod ops;
-use nkw_core::persist::RoomKind;
+#[path = "wm/walk.rs"]
+mod walk;
+pub use nkw_core::TurnMode;
+pub use nkw_core::carry::{self, HAND_DEFAULT};
+pub use nkw_core::persist::RoomKind;
+pub use nkw_core::rules::WalkConfig;
 pub use ops::{
     ATTENTION_S, COMMANDS, CmdInfo, DIALOG_DEFAULT, DIALOG_FRONT, Hold, LAYOUT_NOTE_S, RoomRef,
     ScreenState, ShortName, info as command_info, width_label,
 };
+pub use walk::{Aim, Carry, LIBRARIAN, LIBRARY};
 
 /// The geometry lives in `nkw_core::layout`; its constants are re-exported
 /// here for the hub and the plugins.
@@ -123,10 +129,20 @@ pub enum Cmd {
     GotoRoom(RoomRef),
     /// `world.goto_screen:<id>` (the palette's "ir para" items)
     GotoScreen(ScreenId),
-    /// `world.forward` … (held until the key's release)
-    Hold(Hold),
+    /// `world.forward` … `{pressed}`: held (`true`) or released (`false`)
+    Hold(Hold, bool),
     /// `c` in ANDAR
     Recenter,
+    /// `g` in ANDAR: pick up the aimed screen / drop the one in hand
+    Grab,
+    /// `[` / `]`: the screen in hand nearer / farther
+    Nearer,
+    Farther,
+    /// `b`: the library room (made when missing), then there
+    Library {
+        /// go there (`world.library`); `false`: a restore only makes it
+        go: bool,
+    },
 }
 
 impl Cmd {
@@ -144,6 +160,7 @@ impl Cmd {
             "world.walk_exit" | "world.talk_end" | "world.hint_cancel" | "world.palette_cancel" => {
                 Cmd::Back
             }
+            "world.back" if !pressed(args) => Cmd::Hold(Hold::Back, false),
             "world.back" => Cmd::BackOrStep,
             "world.walk" => Cmd::Walk,
             "world.focus_left" => Cmd::Neighbour(Dir::Left),
@@ -183,14 +200,19 @@ impl Cmd {
                 }
             }
             "world.goto_room" => Cmd::GotoRoom(RoomRef::parse(args.get("room")?)?),
-            "world.forward" => Cmd::Hold(Hold::Forward),
-            "world.strafe_left" => Cmd::Hold(Hold::StrafeLeft),
-            "world.strafe_right" => Cmd::Hold(Hold::StrafeRight),
-            "world.turn_left" => Cmd::Hold(Hold::TurnLeft),
-            "world.turn_right" => Cmd::Hold(Hold::TurnRight),
-            "world.look_up" => Cmd::Hold(Hold::LookUp),
-            "world.look_down" => Cmd::Hold(Hold::LookDown),
+            "world.forward" => Cmd::Hold(Hold::Forward, pressed(args)),
+            "world.strafe_left" => Cmd::Hold(Hold::StrafeLeft, pressed(args)),
+            "world.strafe_right" => Cmd::Hold(Hold::StrafeRight, pressed(args)),
+            "world.turn_left" => Cmd::Hold(Hold::TurnLeft, pressed(args)),
+            "world.turn_right" => Cmd::Hold(Hold::TurnRight, pressed(args)),
+            "world.look_up" => Cmd::Hold(Hold::LookUp, pressed(args)),
+            "world.look_down" => Cmd::Hold(Hold::LookDown, pressed(args)),
+            "world.run" => Cmd::Hold(Hold::Run, pressed(args)),
             "world.recenter" => Cmd::Recenter,
+            "world.grab" => Cmd::Grab,
+            "world.nearer" => Cmd::Nearer,
+            "world.farther" => Cmd::Farther,
+            "world.library" => Cmd::Library { go: true },
             GOTO_SCREEN => Cmd::GotoScreen(ScreenId(args.get("screen")?.parse().ok()?)),
             n => {
                 if let Some(k) = n.strip_prefix("world.room_") {
@@ -279,17 +301,25 @@ impl Cmd {
                     BTreeMap::from([("screen".to_string(), s.0.to_string())]),
                 );
             }
-            Cmd::Hold(h) => match h {
-                Hold::Forward => "world.forward",
-                Hold::Back => "world.back",
-                Hold::StrafeLeft => "world.strafe_left",
-                Hold::StrafeRight => "world.strafe_right",
-                Hold::TurnLeft => "world.turn_left",
-                Hold::TurnRight => "world.turn_right",
-                Hold::LookUp => "world.look_up",
-                Hold::LookDown => "world.look_down",
-            },
+            Cmd::Hold(h, down) => {
+                let n = match h {
+                    Hold::Forward => "world.forward",
+                    Hold::Back => "world.back",
+                    Hold::StrafeLeft => "world.strafe_left",
+                    Hold::StrafeRight => "world.strafe_right",
+                    Hold::TurnLeft => "world.turn_left",
+                    Hold::TurnRight => "world.turn_right",
+                    Hold::LookUp => "world.look_up",
+                    Hold::LookDown => "world.look_down",
+                    Hold::Run => "world.run",
+                };
+                return (n, BTreeMap::from([(PRESSED.to_string(), down.to_string())]));
+            }
             Cmd::Recenter => "world.recenter",
+            Cmd::Grab => "world.grab",
+            Cmd::Nearer => "world.nearer",
+            Cmd::Farther => "world.farther",
+            Cmd::Library { .. } => "world.library",
         };
         (n, BTreeMap::new())
     }
@@ -299,6 +329,14 @@ impl Cmd {
 /// runs (`Cmd::from_name` takes each one, with its args).
 pub fn command_names() -> &'static [(&'static str, &'static str)] {
     &ops::NAMES
+}
+
+/// The arg of the held walking commands: `"true"` (default) / `"false"`.
+pub const PRESSED: &str = "pressed";
+
+/// `{pressed}` of a held command: anything but `"false"` is a press.
+fn pressed(args: &BTreeMap<String, String>) -> bool {
+    args.get(PRESSED).is_none_or(|v| v.trim() != "false")
 }
 
 /// `world.goto_screen {screen}` (the palette's "ir para" items use
@@ -381,6 +419,8 @@ pub struct Walking {
     pub keys: WalkKeys,
     grid: Grid,
     last: Time,
+    /// the last mouse-look or snap turn (the comfort vignette)
+    looked: Time,
 }
 
 /// Options of the world.
@@ -431,6 +471,14 @@ pub struct World {
     note: Option<(Time, String)>,
     /// counts layout changes (persistence)
     layout_gen: u64,
+    /// `[walk]` + `[camera]` (S15)
+    walk_cfg: WalkConfig,
+    /// the screen in hand (ANDAR)
+    carry: Option<Carry>,
+    /// the comfort vignette: (since when, rising) of the last change
+    vignette: (Time, bool, f32),
+    /// when the last frame was drawn (the vignette's ramp wants frames)
+    last_frame: Time,
 }
 
 impl World {
@@ -470,6 +518,10 @@ impl World {
             kinds: BTreeMap::new(),
             note: None,
             layout_gen: 0,
+            walk_cfg: WalkConfig::default(),
+            carry: None,
+            vignette: (f64::NEG_INFINITY, false, 0.0),
+            last_frame: f64::NEG_INFINITY,
         };
         w.next_room = w.rooms.iter().map(|r| r.id.0 + 1).max().unwrap_or(0);
         w.station = match w.rooms.first().map(|r| r.desks.is_empty()) {
@@ -799,6 +851,9 @@ impl World {
     /// A window went away.
     pub fn remove_screen(&mut self, id: ScreenId, now: Time) -> Vec<Out> {
         let mut out = Vec::new();
+        if self.carrying() == Some(id) {
+            self.carry = None;
+        }
         let st = self.wm.remove(&id).unwrap_or_default();
         // a dialog in FOCO: back to its mother, still in FOCO
         let mother = st
@@ -1001,8 +1056,20 @@ impl World {
                     self.focus_2d = None;
                     self.arrive = None;
                 }
-                Effect::WalkStart => self.walk_start(now),
-                Effect::WalkStop => self.walking = None,
+                Effect::WalkStart => {
+                    self.walk_start(now);
+                    out.push(Out::Effect(*e));
+                }
+                Effect::WalkStop => {
+                    // leaving ANDAR (not an overlay over it): the screen in
+                    // hand stays in the air where it is
+                    if self.carry.is_some() && self.mode().base != nkw_core::Base::Walk {
+                        out.extend(self.drop_hand(now, true));
+                    }
+                    self.walking = None;
+                    self.vignette_step(now);
+                    out.push(Out::Effect(*e));
+                }
                 Effect::WalkExit => self.walk_exit(now),
                 Effect::GoTo(st) => self.go_to(st, now, false),
                 Effect::GoToRoom(r) => {
@@ -1057,6 +1124,7 @@ impl World {
         };
         let floor = Aabb::new(Vec2::new(s.x0, z0), Vec2::new(s.x0 + s.len, z1));
         let mut obstacles = self.desk_obstacles(room);
+        obstacles.extend(self.air_obstacles(room));
         if let Some(extra) = self.obstacles.get(&self.rooms[room].id) {
             obstacles.extend_from_slice(extra);
         }
@@ -1098,15 +1166,26 @@ impl World {
             keys: WalkKeys::default(),
             grid: self.room_grid(room),
             last: now,
+            looked: f64::NEG_INFINITY,
         });
+        self.camera = self
+            .walking
+            .as_ref()
+            .map_or(self.camera, |w| w.walker.pose(&self.walk_params));
     }
 
     /// `walk.on_exit = auto` (§3.5): a station close by and ahead, else
     /// stay where you are.
     fn walk_exit(&mut self, now: Time) {
         let room = self.room_at(self.camera.pos).unwrap_or(self.current_room());
-        let to = walk_exit::exit(ExitRule::Auto, &self.camera, &self.spots(room));
+        let to = walk_exit::exit(self.walk_cfg.on_exit, &self.camera, &self.spots(room));
         self.station = to.station;
+        if to.cut {
+            self.camera = to.pose;
+            self.tween = None;
+            self.pending.push(Wish::world(Want::Once));
+            return;
+        }
         let opts = TweenOpts {
             reduced_motion: self.opts.reduced_motion,
             max: walk_exit::EXIT_GLIDE,
@@ -1119,13 +1198,28 @@ impl World {
     /// A walking key went down or up (ANDAR only); `s`: the keysym.
     /// Returns whether it is one.
     pub fn walk_key(&mut self, s: u32, down: bool) -> bool {
-        let Some(w) = self.walking.as_mut() else {
+        if self.walking.is_none() {
             return false;
-        };
+        }
         let lower = if (0x41..=0x5a).contains(&s) {
             s | 0x20
         } else {
             s
+        };
+        // snap turn: one step per press, at once (the release does nothing)
+        let turn = match lower {
+            0x71 | sym::LEFT => -1.0,
+            0x65 | sym::RIGHT => 1.0,
+            _ => 0.0,
+        };
+        if turn != 0.0 && self.walk_params.turn == TurnMode::Snap {
+            if down {
+                self.turn_press(turn);
+            }
+            return true;
+        }
+        let Some(w) = self.walking.as_mut() else {
+            return false;
         };
         let k = &mut w.keys;
         let slot = match lower {
@@ -1157,6 +1251,7 @@ impl World {
             let input = w.keys.input();
             w.walker.update(&w.grid, &input, &self.walk_params, dt);
             self.camera = w.walker.pose(&self.walk_params);
+            self.vignette_step(now);
         }
         let Some(t) = self.tween else {
             return false;
@@ -1202,7 +1297,7 @@ impl World {
             .walking
             .as_ref()
             .is_some_and(|w| w.keys.any() || w.walker.moving());
-        if self.tween.is_some() || walking {
+        if self.tween.is_some() || walking || self.vignette_busy() {
             w.push(Wish::world(Want::Continuous));
         }
         if self.frozen && self.focus_2d.is_some() {
@@ -1221,6 +1316,7 @@ impl World {
     /// A frame was drawn at `now`: drop the wants it satisfied.
     pub fn frame_done(&mut self, now: Time) {
         self.arrival_pass = false;
+        self.last_frame = now;
         self.pending
             .retain(|w| matches!(w.want, Want::At(t) if t > now + 1e-6));
     }
@@ -1241,6 +1337,19 @@ impl World {
         };
         let reception = take(RECEPTION);
         let mut rooms = vec![reception.unwrap_or_else(|| self.new_room(RECEPTION))];
+        // the library right after the reception
+        let kinds = &self.kinds;
+        let (libraries, rest): (Vec<Room>, Vec<Room>) = old
+            .into_iter()
+            .partition(|r| kinds.get(&r.id) == Some(&RoomKind::Library));
+        old = rest;
+        let library_ids: Vec<RoomId> = libraries.iter().map(|r| r.id).collect();
+        rooms.extend(libraries);
+        let mut take = |name: &str| {
+            old.iter()
+                .position(|r| r.name == name)
+                .map(|i| old.remove(i))
+        };
         let mut seen: Vec<&str> = vec![RECEPTION, MY_ROOM];
         for (name, cats) in contexts {
             if seen.contains(&name.as_str()) {
@@ -1266,6 +1375,9 @@ impl World {
         }
         rooms.push(mine.unwrap_or_else(|| self.new_room(MY_ROOM)));
         self.rooms = rooms;
+        for id in library_ids {
+            self.library_counter(id);
+        }
 
         let mut out = Vec::new();
         if let Some(Target::CatTerm(c)) = self.mode().focus()
@@ -1489,6 +1601,8 @@ impl World {
                         fullscreen: st.fullscreen,
                         maximized: st.maximized,
                         air: st.air.is_some(),
+                        wall: st.wall,
+                        hand: self.carrying() == Some(*sid),
                         placement: DumpPlacement {
                             room: r.id.0,
                             desk: di,
@@ -1500,9 +1614,17 @@ impl World {
                 }
             }
         }
-        let focus = self.focus_2d().map(|(id, o)| DumpFocus {
-            screen: id.0,
-            rect: [o.origin.x, o.origin.y, o.size.x, o.size.y],
+        let focus = self.focus_2d_target().map(|(t, o)| {
+            let (target, screen, cat) = match t {
+                Target::Screen(s) => ("Screen", Some(s.0), None),
+                Target::CatTerm(c) => ("CatTerm", None, Some(c.0)),
+            };
+            DumpFocus {
+                target,
+                screen,
+                cat,
+                rect: [o.origin.x, o.origin.y, o.size.x, o.size.y],
+            }
         });
         let d = Dump {
             version: 1,
@@ -1518,6 +1640,8 @@ impl World {
             screens,
             focus,
             wants: wants.iter().map(want_name).collect(),
+            aim: self.aim(),
+            carrying: self.carrying().map(|s| s.0),
         };
         serde_json::to_value(d).expect("dump serialises")
     }
@@ -1566,6 +1690,10 @@ struct Dump {
     screens: Vec<DumpScreen>,
     focus: Option<DumpFocus>,
     wants: Vec<String>,
+    /// ANDAR: what the World aims at (`{"Screen": n}` ...)
+    aim: Option<Aim>,
+    /// the screen in hand
+    carrying: Option<u32>,
 }
 
 /// A floor box (x, z) of half size `half` around `c`.
@@ -1610,6 +1738,8 @@ struct DumpScreen {
     fullscreen: bool,
     maximized: bool,
     air: bool,
+    wall: bool,
+    hand: bool,
     placement: DumpPlacement,
 }
 
@@ -1624,7 +1754,12 @@ struct DumpPlacement {
 
 #[derive(Serialize)]
 struct DumpFocus {
-    screen: u32,
+    /// "Screen" | "CatTerm"
+    target: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screen: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cat: Option<u32>,
     rect: [f32; 4],
 }
 

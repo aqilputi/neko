@@ -16,6 +16,7 @@ pub mod kit;
 pub mod mesh;
 mod pack;
 pub mod rig;
+pub mod shell;
 
 use glow::HasContext;
 

@@ -1,5 +1,6 @@
 //! The inbox walks to you (§6.6): where the walkers stop (a semicircle
-//! 1.3 m before the camera, the first 0.6 m to the side), the A* on each
+//! 1.8 m before the camera, the first 0.75 m to the side, or a desk top
+//! that frames them comfortably: [`framing`]), the A* on each
 //! room's 0.25 m occupancy grid (`World::room_grid`), the hall between the
 //! doors, and the walk along the path at 1.4 m/s. Pure; the queue itself
 //! (order, stagger, dismiss, summon) is `nk_cats::inbox`.
@@ -17,8 +18,24 @@ use crate::world::{HALL_W, World};
 /// Walking speed, m/s.
 pub const SPEED: f32 = 1.4;
 /// How far before you a walker stops, and how far to the side the first.
-pub const STOP_M: f32 = 1.3;
-pub const SIDE_M: f32 = 0.6;
+pub const STOP_M: f32 = 1.8;
+pub const SIDE_M: f32 = 0.75;
+/// The comfortable frame of a walker seen from your station: its head's
+/// centre between these fractions of the frame height (0 = top), its ear
+/// tips inside, at most `MAX_SCREEN_OVERLAP` of it over your screen, never
+/// nearer than `MIN_DIST_M` (camera to face).
+pub const HEAD_Y_MIN: f32 = 0.35;
+pub const HEAD_Y_MAX: f32 = 0.60;
+pub const MAX_SCREEN_OVERLAP: f32 = 0.10;
+pub const MIN_DIST_M: f32 = 1.6;
+/// Two perched walkers' faces at least this far apart across the frame
+/// (a share of its width): side by side, never one in front of another.
+pub const SPOT_GAP: f32 = 0.13;
+/// A sitting walker above its floor (or perch) point: face, ear tips, and
+/// its half width (the box the overlap is measured on).
+pub const FACE_Y: f32 = super::body::FACE_Y;
+pub const EAR_TIP_Y: f32 = 0.80;
+pub const HALF_W: f32 = 0.2;
 /// Walkers near you at once; the rest is a badge.
 pub const NEAR_MAX: usize = 3;
 /// The walkers' frame rate while one moves.
@@ -46,6 +63,123 @@ pub fn stop(cam: &Pose, i: usize) -> (Vec2, f32) {
     let dir = h * c + right * s;
     let p = Vec2::new(cam.pos.x, cam.pos.z) + dir * STOP_M;
     (p, yaw_of(-dir))
+}
+
+/// A rectangle in normalised device coordinates: centre and half size.
+pub type NdcRect = (Vec2, Vec2);
+
+/// How a walker sitting at `base` reads from `cam`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Framing {
+    /// the face's height in the frame, 0 = top, 1 = bottom (NaN behind)
+    pub head_y: f32,
+    /// the face's horizontal place, 0 = left, 1 = right
+    pub head_x: f32,
+    /// both ear tips inside the frame
+    pub ears_inside: bool,
+    /// the share of its box over `screen`
+    pub screen_overlap: f32,
+    /// camera to face, metres
+    pub dist: f32,
+    /// its box's height as a share of the frame height
+    pub height: f32,
+}
+
+impl Framing {
+    /// Every rule of the comfortable frame.
+    pub fn ok(&self) -> bool {
+        (HEAD_Y_MIN..=HEAD_Y_MAX).contains(&self.head_y)
+            && (0.05..=0.95).contains(&self.head_x)
+            && self.ears_inside
+            && self.screen_overlap <= MAX_SCREEN_OVERLAP
+            && self.dist >= MIN_DIST_M
+    }
+}
+
+/// The view-projection of a camera at `cam` (the world's FOV, `aspect`).
+pub fn view_proj(cam: &Pose, aspect: f32) -> glam::Mat4 {
+    let c = nkw_gl::draw::Camera {
+        pose: *cam,
+        fov_y: crate::world::FOV_Y,
+        near: 0.05,
+        far: 60.0,
+        aspect,
+    };
+    c.proj() * c.view()
+}
+
+fn ndc(vp: &glam::Mat4, p: Vec3) -> Option<Vec2> {
+    let c = *vp * p.extend(1.0);
+    (c.w > 1e-4).then(|| Vec2::new(c.x, c.y) / c.w)
+}
+
+fn overlap(a: NdcRect, b: NdcRect) -> f32 {
+    let lo = (a.0 - a.1).max(b.0 - b.1);
+    let hi = (a.0 + a.1).min(b.0 + b.1);
+    let d = (hi - lo).max(Vec2::ZERO);
+    let area = 4.0 * a.1.x * a.1.y;
+    if area <= 0.0 { 0.0 } else { d.x * d.y / area }
+}
+
+/// How a walker sitting at `base` (its floor or perch point) shows from
+/// `cam` at `aspect`, against your screen's rectangle.
+pub fn framing(cam: &Pose, aspect: f32, base: Vec3, screen: Option<NdcRect>) -> Framing {
+    let vp = view_proj(cam, aspect);
+    let face = base + Vec3::Y * FACE_Y;
+    let dist = cam.pos.distance(face);
+    // its box faces the camera: right is the camera's
+    let right = cam.right();
+    let right = Vec3::new(right.x, 0.0, right.z).normalize_or_zero() * HALF_W;
+    let top = base + Vec3::Y * EAR_TIP_Y;
+    let pts = [base - right, base + right, top - right, top + right].map(|p| ndc(&vp, p));
+    let Some(f) = ndc(&vp, face) else {
+        return Framing {
+            head_y: f32::NAN,
+            head_x: f32::NAN,
+            ears_inside: false,
+            screen_overlap: 1.0,
+            dist,
+            height: 0.0,
+        };
+    };
+    let ears_inside = pts[2..]
+        .iter()
+        .all(|p| p.is_some_and(|p| p.x.abs() <= 1.0 && p.y.abs() <= 1.0));
+    let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+    for p in pts.iter().flatten() {
+        lo = lo.min(*p);
+        hi = hi.max(*p);
+    }
+    let boxed = ((lo + hi) / 2.0, (hi - lo) / 2.0);
+    Framing {
+        head_y: (1.0 - f.y) / 2.0,
+        head_x: (1.0 + f.x) / 2.0,
+        ears_inside,
+        screen_overlap: screen.map_or(0.0, |s| overlap(boxed, s)),
+        dist,
+        height: (hi.y - lo.y) / 2.0,
+    }
+}
+
+/// A screen place's rectangle in NDC seen from `cam`.
+pub fn screen_rect(
+    cam: &Pose,
+    aspect: f32,
+    place: &nkw_core::ScreenPlace,
+    size_m: glam::Vec2,
+) -> NdcRect {
+    let vp = view_proj(cam, aspect);
+    let right = Pose::new(Vec3::ZERO, place.yaw, 0.0).right();
+    let up = Vec3::Y * size_m.y / 2.0;
+    let r = right * size_m.x / 2.0;
+    let mut lo = Vec2::splat(f32::MAX);
+    let mut hi = Vec2::splat(f32::MIN);
+    for p in [-r - up, -r + up, r - up, r + up] {
+        let q = ndc(&vp, place.center + p).unwrap_or(Vec2::ZERO);
+        lo = lo.min(q);
+        hi = hi.max(q);
+    }
+    ((lo + hi) / 2.0, (hi - lo) / 2.0)
 }
 
 #[derive(Clone, Copy, PartialEq)]

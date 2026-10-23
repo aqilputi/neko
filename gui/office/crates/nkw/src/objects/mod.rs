@@ -18,16 +18,25 @@
 //! `{"Media":{…}}`, `"MediaGone"`, `{"Clock":{…}}`, `{"Net":{…}}`,
 //! `{"Pressure":{"cpu":true,"mem":false}}`, `{"Audio":{"Added":{…}}}`), or
 //! `{"Door":{"id":0,"toggle":true}}`, `{"Command":{"name":"world.interact","args":{}}}`,
-//! `{"Cue":"Meow"}`, `{"Shot":true}`.
+//! `{"Cue":"Meow"}`, `{"Shot":true}`, `{"FocusLost":true}`,
+//! `{"library":{"fixture":"demo"|"big"}}`, `{"vault":{"phrase":"…"}}` (typed as the
+//! line would).
+//!
+//! The library (plan §7) lives here too ([`library`], phase 4): the objects
+//! delegate its commands, drawing and hooks; the vault's cards are its.
 //!
 //! `dump` (`/ext/objects`): `{"objects":[{id,kind,room,tier,data_kind}],
 //! "doors":[{id,rooms,openness,passable}], "audio":{streams,anchored,gains,calls},
 //! "badges":[…], "rate_wishes":n, "visible_rooms":[…], "sound":{played,active,last},
-//! "sys":{"mpris":"ok|error|off",…}}`. No titles, no SSIDs, no device names.
+//! "sys":{"mpris":"ok|error|off",…}, "library":{…}, "vault":{state,cards,fails,
+//! last_lock,audit}}`. No titles, no SSIDs, no device names, never a vault name.
 
 pub mod audio;
+pub mod audit;
 pub mod doors;
 pub mod draw;
+#[path = "../library/mod.rs"]
+pub mod library;
 pub mod map;
 pub mod place;
 pub mod sound;
@@ -116,6 +125,15 @@ enum Inject {
     },
     Cue(Cue),
     Shot(bool),
+    FocusLost(bool),
+    #[serde(rename = "library")]
+    Library {
+        fixture: String,
+    },
+    #[serde(rename = "vault")]
+    VaultPhrase {
+        phrase: String,
+    },
     Media(nkw_sys::MediaState),
     MediaGone,
     Power(nkw_sys::PowerState),
@@ -135,6 +153,8 @@ const VOLUME_STEP: f32 = object::STEP;
 const VIEW_SLACK_DEG: f32 = 15.0;
 /// Readouts show within this, metres (the overlay hides them beyond).
 const TAG_M: f32 = 2.2;
+/// `Objects::aimed` for a library bookcase (the crosshair's ring).
+pub const SHELF_AIM: ObjectId = ObjectId(0x5e1f_0000);
 
 pub struct Objects {
     demo: bool,
@@ -166,11 +186,35 @@ pub struct Objects {
     /// the World's day band as of the last tick
     band: u8,
     pub vault: vault::VaultGlue,
+    pub lib: library::LibGlue,
+}
+
+/// `[library]` + `[vault]` of `world.toml` (never under `--demo`); a bad
+/// table warns and keeps the defaults.
+pub fn library_config(cli: &crate::cli::Cli) -> library::model::Config {
+    let Some(p) = cli.world_toml() else {
+        return library::model::Config::default();
+    };
+    let Ok(text) = std::fs::read_to_string(&p) else {
+        return library::model::Config::default();
+    };
+    library::model::parse_config(&text).unwrap_or_else(|e| {
+        tracing::warn!(%e, "world.toml: [library]/[vault] ignored");
+        library::model::Config::default()
+    })
 }
 
 impl Objects {
     pub fn new(cli: &crate::cli::Cli) -> Objects {
-        Objects::with(cli.demo, cli.sys(), None)
+        let mut o = Objects::with(cli.demo, cli.sys(), None);
+        if !cli.demo {
+            let cfg = library_config(cli);
+            let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+            let log = audit::AuditLog::new(cli.state_root().map(|d| d.join("vault.log")));
+            o.vault = vault::VaultGlue::new(vault::params(&cfg.vault), log);
+            o.lib = library::LibGlue::new(false, cfg, home);
+        }
+        o
     }
 
     /// `demo`: the fixture world; `sys_on`: the adapters will run; `port`:
@@ -219,7 +263,12 @@ impl Objects {
             visible: Vec::new(),
             now: 0.0,
             band: crate::world::DEFAULT_BAND,
-            vault: vault::VaultGlue::default(),
+            vault: vault::VaultGlue::new(
+                nkw_objects::vault::Params::default(),
+                audit::AuditLog::default(),
+            ),
+            // a library on the fixture, never the disk, until `new` says otherwise
+            lib: library::LibGlue::new(true, library::model::Config::default(), None),
         };
         if let Some(p) = port {
             o.attach(p);
@@ -313,6 +362,53 @@ impl Objects {
         self.vault.dialog()
     }
 
+    /// The vault's room (the library once R5 moves it; the reception
+    /// before).
+    fn vault_room(&self) -> Option<RoomId> {
+        self.world.find(Kind::Vault).map(|o| o.room)
+    }
+
+    /// Who guards the vault: the cat at desk 0 of its room (the librarian
+    /// in the library).
+    fn librarian(&self, ctx: &Ctx) -> Option<nkw_core::CatId> {
+        let room = self.vault_room()?;
+        let seated = ctx
+            .world
+            .rooms
+            .iter()
+            .find(|r| r.id == room)
+            .and_then(|r| r.desks.first())
+            .and_then(|d| d.cat);
+        // in the library she is ours even before she has a desk (R4)
+        let in_library = library::LibGlue::room(ctx).is_some_and(|(_, id, _)| id == room);
+        seated.or(in_library.then_some(crate::cats::office::LIBRARIAN))
+    }
+
+    /// Where the cards are drawn: inside the safe's opening, and its yaw.
+    fn cards_at(&self) -> Option<(Vec3, f32)> {
+        let o = self.world.find(Kind::Vault)?;
+        let floor = Vec3::new(o.pos.x, 0.0, o.pos.z);
+        let back = layout::facing(o.yaw);
+        Some((floor + Vec3::Y * 0.31 - back * 0.19, o.yaw))
+    }
+
+    /// The vault opened or locked: the library's cards follow.
+    fn vault_changes(&mut self, ctx: &Ctx) -> Vec<Req> {
+        let mut out = Vec::new();
+        for c in self.vault.take_changes() {
+            match c {
+                vault::Change::Unlocked => {
+                    let at = self.cards_at();
+                    self.lib.on_unlock(at);
+                    out.extend(self.lib.drain(ctx));
+                }
+                vault::Change::Locked(_) => self.lib.on_lock(),
+            }
+            out.push(redraw());
+        }
+        out
+    }
+
     fn vault_cues(&mut self, cues: Vec<Cue>, ctx: &Ctx) {
         let at = self
             .world
@@ -385,6 +481,9 @@ impl Objects {
     /// Keep the objects and doors in step with the rooms.
     fn sync(&mut self, ctx: &Ctx) {
         let rooms = Self::rooms(ctx);
+        // the vault stands in the library once there is one (R5's place.rs)
+        self.placement
+            .set_library(library::LibGlue::room(ctx).map(|(_, id, _)| id));
         if self.placement.sync(&rooms, &mut self.world.objects) {
             // new clocks show the time the others show
             let clock = self
@@ -443,13 +542,10 @@ impl Objects {
                 }),
                 ObjEffect::ToggleDoor(d) => out.extend(self.toggle_door(d, ctx)),
                 ObjEffect::VaultPrompt => {
-                    let cat = ctx
-                        .world
-                        .rooms
-                        .first()
-                        .and_then(|r| r.desks.first())
-                        .and_then(|d| d.cat);
-                    out.extend(self.vault.prompt(cat));
+                    let (r, cues) = self.vault.prompt(self.librarian(ctx), ctx.now);
+                    out.extend(r);
+                    self.vault_cues(cues, ctx);
+                    out.extend(self.vault_changes(ctx));
                 }
                 ObjEffect::Cue(c) => {
                     let at = self
@@ -605,9 +701,16 @@ impl Objects {
         cam.heading().angle_to(v).abs().to_degrees() <= half + VIEW_SLACK_DEG
     }
 
+    /// What the crosshair is on: an object (below), else a library bookcase
+    /// (`SHELF_AIM`, never an object of the world).
+    pub fn aimed(&self, ctx: &Ctx) -> Option<ObjectId> {
+        self.aimed_object(ctx)
+            .or_else(|| self.lib.aimed_run(ctx).map(|_| SHELF_AIM))
+    }
+
     /// The object the crosshair is on: the proximity rule, then a door whose
     /// gap the view ray crosses within reach.
-    pub fn aimed(&self, ctx: &Ctx) -> Option<ObjectId> {
+    pub fn aimed_object(&self, ctx: &Ctx) -> Option<ObjectId> {
         let cam = ctx.world.camera;
         let near: Vec<object::Object> = self
             .world
@@ -787,6 +890,10 @@ impl Plugin for Objects {
         ping: calloop::ping::Ping,
     ) {
         let _ = lh;
+        // the library's scan thread wakes the loop (it starts on the first
+        // read, never here)
+        let p = ping.clone();
+        self.lib.set_wake(Arc::new(move || p.ping()));
         if !cli.sys() || self.port.is_some() {
             return;
         }
@@ -808,6 +915,7 @@ impl Plugin for Objects {
         for ev in evs {
             out.extend(self.on_sys(ev, ctx));
         }
+        out.extend(self.lib.drain(ctx));
         out
     }
 
@@ -830,15 +938,21 @@ impl Plugin for Objects {
             self.door_effects(d, vec![e], ctx);
         }
 
+        // the library: arriving, leaving
+        out.extend(self.lib.tick(ctx));
+
         // the vault: our CONVERSA ends, the auto-locks
         let talking = ctx.world.mode().purpose() == Some(nkw_core::TalkPurpose::VaultUnlock);
-        let reception = ctx.world.rooms.first().map(|r| r.id);
         let here = self.room_at(ctx, me);
-        let cues = self.vault.tick(now, talking, reception == Some(here));
+        let in_room = self.vault_room().is_none_or(|r| r == here);
+        let focus = ctx.world.mode().focus().is_some();
+        let (cues, reqs) = self.vault.tick(now, talking, in_room, focus);
+        out.extend(reqs);
         if !cues.is_empty() {
             out.push(redraw());
         }
         self.vault_cues(cues, ctx);
+        out.extend(self.vault_changes(ctx));
 
         // footsteps in ANDAR
         let walking = ctx.world.walking.as_ref().map(|_| me);
@@ -911,6 +1025,20 @@ impl Plugin for Objects {
                 dist: 0.0,
             });
         }
+        if self.vault.animating(now) && !ctx.reduced_motion {
+            needs.push(Need {
+                id: ObjectId(u32::MAX - 3),
+                want: Want::Continuous,
+                dist: 0.0,
+            });
+        }
+        for w in self.lib.wants(now, ctx.reduced_motion) {
+            needs.push(Need {
+                id: ObjectId(u32::MAX - 4),
+                want: w,
+                dist: 0.0,
+            });
+        }
         if !ctx.world.frozen {
             for w in self.doors.wants(now, ctx.reduced_motion) {
                 needs.push(Need {
@@ -976,6 +1104,7 @@ impl Plugin for Objects {
                 reduced_motion: ctx.reduced_motion,
                 data: self.world.data.get(&o.id),
                 anim: self.anims.get(&o.id).copied().unwrap_or_default(),
+                vault_open: self.vault.openness(ctx.now, ctx.reduced_motion),
             };
             draw::object(o, &c, &mut list.instances);
         }
@@ -996,6 +1125,16 @@ impl Plugin for Objects {
                 });
             }
         }
+        self.lib.draw(ctx, list);
+    }
+
+    unsafe fn upload(&mut self, gl: &nkw_gl::glow::Context, ctx: &Ctx) {
+        let _ = ctx;
+        unsafe { self.lib.upload(gl) };
+    }
+
+    fn submode(&self) -> Option<&'static str> {
+        self.lib.submode()
     }
 
     fn command(
@@ -1005,8 +1144,42 @@ impl Plugin for Objects {
         ctx: &Ctx,
     ) -> Option<Vec<Req>> {
         self.sync(ctx);
-        let aim_req =
-            |me: &Self, a: ObjectAction| me.aimed(ctx).map(|id| vec![ext::object_req(id, a)]);
+        // the library's keys first (only while browsing), `world.open`, the
+        // search
+        let mut touch = false;
+        if let Some(r) = self.lib.command(name, args, ctx, &mut touch) {
+            if touch {
+                self.vault.touch(ctx.now);
+            }
+            let mut r = r;
+            r.extend(self.lib.drain(ctx));
+            return Some(r);
+        }
+        if name == "world.vault_lock" {
+            let cues = self.vault.lock(ctx.now);
+            self.vault_cues(cues, ctx);
+            let mut out = self.vault_changes(ctx);
+            if out.is_empty() {
+                out.push(Req::Toast {
+                    text: "o cofre já está trancado".into(),
+                    kind: ToastKind::Info,
+                    ms: 1500,
+                });
+            }
+            return Some(out);
+        }
+        if name == "world.interact" {
+            // a bookcase in the aim (no object nearer): browse it
+            if self.aimed_object(ctx).is_none()
+                && let Some(mut r) = self.lib.interact(ctx)
+            {
+                r.extend(self.lib.drain(ctx));
+                return Some(r);
+            }
+        }
+        let aim_req = |me: &Self, a: ObjectAction| {
+            me.aimed_object(ctx).map(|id| vec![ext::object_req(id, a)])
+        };
         Some(match name {
             "media.play_pause" => self.media_cmd(MediaCmd::PlayPause, ctx),
             "media.next" => self.media_cmd(MediaCmd::Next, ctx),
@@ -1042,8 +1215,12 @@ impl Plugin for Objects {
     }
 
     fn effect(&mut self, e: &nkw_core::Effect, ctx: &Ctx) -> Vec<Req> {
+        if let nkw_core::Effect::OpenBook(b) = e {
+            return self.lib.open_book(*b, ctx);
+        }
         let (mut reqs, cues) = self.vault.effect(e, ctx.line, ctx.now);
         self.vault_cues(cues, ctx);
+        reqs.extend(self.vault_changes(ctx));
         reqs.push(Req::Wish(Wish::compose(Want::Once)));
         reqs
     }
@@ -1070,7 +1247,33 @@ impl Plugin for Objects {
             Ok(Inject::Shot(_)) => {
                 let cues = self.vault.shot(ctx.now);
                 self.vault_cues(cues, ctx);
-                return vec![redraw()];
+                let mut out = self.vault_changes(ctx);
+                out.push(redraw());
+                return out;
+            }
+            Ok(Inject::FocusLost(_)) => {
+                let cues = self.vault.focus_lost(ctx.now);
+                self.vault_cues(cues, ctx);
+                let mut out = self.vault_changes(ctx);
+                out.push(redraw());
+                return out;
+            }
+            Ok(Inject::Library { fixture }) => {
+                return match self.lib.use_fixture(&fixture) {
+                    Ok(()) => vec![redraw()],
+                    Err(e) => vec![Req::Toast {
+                        text: e,
+                        kind: ToastKind::Error,
+                        ms: 2000,
+                    }],
+                };
+            }
+            Ok(Inject::VaultPhrase { phrase }) => {
+                let cues = self.vault.attempt(&phrase, ctx.now);
+                self.vault_cues(cues, ctx);
+                let mut out = self.vault_changes(ctx);
+                out.push(redraw());
+                return out;
             }
             Ok(Inject::Media(m)) => SysEvent::Media(m),
             Ok(Inject::MediaGone) => SysEvent::MediaGone,
@@ -1097,7 +1300,8 @@ impl Plugin for Objects {
     }
 
     fn pickables(&self, ctx: &Ctx) -> Vec<Pickable> {
-        self.world
+        let mut v: Vec<Pickable> = self
+            .world
             .objects
             .iter()
             .filter(|o| ctx.visible_rooms.contains(&o.room))
@@ -1109,12 +1313,15 @@ impl Plugin for Objects {
                 pos: o.pos,
                 radius: 0.3,
             })
-            .collect()
+            .collect();
+        v.extend(self.lib.pickables(ctx));
+        v
     }
 
     fn tags(&self, ctx: &Ctx) -> Vec<Tag> {
-        let _ = ctx;
-        self.tags.clone()
+        let mut t = self.tags.clone();
+        t.extend(self.lib.tags(ctx));
+        t
     }
 
     fn badges(&self, ctx: &Ctx) -> Vec<Badge> {
@@ -1175,6 +1382,15 @@ impl Plugin for Objects {
             "sys": map::sys_status(self.sys_on && self.port.is_some(), &self.errors),
             "demo": self.demo,
             "band": self.band,
+            "library": self.lib.dump(),
+            "vault": {
+                "state": self.vault.state_name(),
+                "cards": self.lib.cards(),
+                "fails": self.vault.vault.fails(),
+                "last_lock": self.vault.last_lock.map(|r| r.audit()),
+                "audit": self.vault.log.written,
+                "room": self.vault_room().map(|r| r.0),
+            },
         })
     }
 

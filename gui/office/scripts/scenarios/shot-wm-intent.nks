@@ -1,0 +1,11 @@
+# R2: the placement intent — `world.place_next {room: demo, desk: 0}` then a testclient:
+# under --demo the next toplevel lands on the demo room's first desk, not right of the
+# station.
+inject wm {"command": "world.place_next", "args": {"room": "demo", "desk": "0"}}
+spawn ${TESTCLIENT} --app-id alpha --color 33aa66 --no-frame-wait
+wait json /screens/0/placement/room 2 3000
+expect json /screens/0/placement/desk 0
+wait 600
+shot ${OUT}/shot-wm-intent.png
+dump ${OUT}/dump-wm-intent.json
+quit

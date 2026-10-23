@@ -1,4 +1,4 @@
-# CONVERSA with api-gateway (P4): the camera frames its face, the box asks the fixture's question
+# CONVERSA with api-gateway (P4, R4): the camera frames its face, the box asks the fixture's question
 # with its options; `inject cats {"cmd":…}` is the command a key sends (`t`, `1`), so the shot does
 # not depend on the keymap.
 key J
@@ -9,6 +9,8 @@ inject cats {"cmd":"world.talk"}
 wait 100
 expect mode CONVERSA
 wait json /ext/cats/dialog/choices/0 "sim, aplicar agora" 3000
+wait json /ext/overlay/dialog/choices 4 1000
+expect json /ext/overlay/dialog/chars 25
 wait 300
 shot ${OUT}/shot-cats-talk.png
 dump ${OUT}/dump-cats-talk.json

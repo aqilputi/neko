@@ -147,7 +147,9 @@ impl Cats {
         let mut seen = Vec::new();
         for room in w.rooms.iter().filter(|r| ctx.visible_rooms.contains(&r.id)) {
             for (d, desk) in room.desks.iter().enumerate() {
-                let Some(cat) = desk.cat else { continue };
+                let Some(cat) = desk.cat.filter(|c| *c != super::office::LIBRARIAN) else {
+                    continue;
+                };
                 let Some((_, logical)) = w.monitor_place(room.id, d) else {
                     continue;
                 };
@@ -248,7 +250,9 @@ impl Cats {
         let hidden = w.focus_2d_target().map(|(t, _)| t);
         for room in w.rooms.iter().filter(|r| ctx.visible_rooms.contains(&r.id)) {
             for (d, desk) in room.desks.iter().enumerate() {
-                let Some(cat) = desk.cat else { continue };
+                let Some(cat) = desk.cat.filter(|c| *c != super::office::LIBRARIAN) else {
+                    continue;
+                };
                 if !desk.screens.is_empty() || hidden == Some(Target::CatTerm(cat)) {
                     continue;
                 }

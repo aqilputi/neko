@@ -7,14 +7,13 @@
 
 use glam::{Mat4, Quat, Vec2, Vec3};
 use nkw_core::onetoone::M_PER_PX;
-use nkw_core::strip::Side;
 use nkw_core::{RoomId, ScreenId, ScreenPlace, layout};
 use nkw_gl::draw::{Blob, Camera, ClientTex, DrawList, Instance, MeshId, ScreenQuad, sky_for_band};
 
-use crate::world::{HALL_W, ROOM_DEPTH, World};
+use crate::world::World;
 
-/// Wall height, metres.
-pub const WALL_H: f32 = 2.8;
+/// Wall height, metres (the shell's, S17.3).
+pub use crate::shell::WALL_H;
 /// Near and far planes, metres (fog ends at 40).
 pub const NEAR: f32 = 0.05;
 pub const FAR: f32 = 60.0;
@@ -28,15 +27,6 @@ pub const NECK_D: f32 = 0.05;
 pub const FOOT_DEPTH: f32 = 0.22;
 pub const FOOT_H: f32 = 0.02;
 
-/// Room floor tints (pastel; one per room, cycling).
-const FLOORS: [[u8; 4]; 4] = [
-    [0xe8, 0xd5, 0xb5, 0xff],
-    [0xc9, 0xdd, 0xc0, 0xff],
-    [0xd9, 0xcc, 0xe6, 0xff],
-    [0xf2, 0xc9, 0xb8, 0xff],
-];
-const WALL: [u8; 4] = [0xf6, 0xee, 0xdf, 0xff];
-const HALL: [u8; 4] = [0xd8, 0xc8, 0xac, 0xff];
 const WOOD: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
 const FRAME: [u8; 4] = [0x6b, 0x5a, 0x4e, 0xff];
 const CHAIR: [u8; 4] = [0xff, 0xff, 0xff, 0xff];
@@ -76,7 +66,7 @@ fn local_centre(mesh: MeshId) -> Vec3 {
     }
 }
 
-fn push(list: &mut DrawList, mesh: MeshId, m: Mat4, tint: [u8; 4]) {
+pub(crate) fn push(list: &mut DrawList, mesh: MeshId, m: Mat4, tint: [u8; 4]) {
     let cam = list.camera.pose.pos;
     let centre = m.transform_point3(local_centre(mesh));
     list.instances.push(inst(mesh, m, tint, cam, centre));
@@ -90,70 +80,53 @@ pub fn draw_list(
     tex: &dyn Fn(ScreenId) -> Option<ClientTex>,
     visible: &[RoomId],
 ) -> DrawList {
-    let aspect = w.out.width_px as f32 / w.out.height_px.max(1) as f32;
-    let camera = Camera {
+    let mut list = DrawList::empty(camera_of(w), sky_for_band(w.band));
+    draw_list_into(w, tex, visible, &mut list);
+    list
+}
+
+/// The world's camera for the pass.
+fn camera_of(w: &World) -> Camera {
+    Camera {
         pose: w.camera,
         fov_y: crate::world::FOV_Y,
         near: NEAR,
         far: FAR,
-        aspect,
-    };
-    let mut list = DrawList::empty(camera, sky_for_band(w.band));
+        aspect: w.out.width_px as f32 / w.out.height_px.max(1) as f32,
+    }
+}
+
+/// [`draw_list`] into a list the caller keeps (cleared first; its vectors
+/// keep their capacity: no allocation per pass once warm, S4).
+pub fn draw_list_into(
+    w: &World,
+    tex: &dyn Fn(ScreenId) -> Option<ClientTex>,
+    visible: &[RoomId],
+    list: &mut DrawList,
+) {
+    list.camera = camera_of(w);
+    list.sky = sky_for_band(w.band);
+    list.instances.clear();
+    list.screens.clear();
+    list.blobs.clear();
     let slots = w.slots();
     let hidden = w.focus_2d().map(|(id, _)| id);
 
-    // the hall
-    let end = slots.iter().map(|s| s.x0 + s.len).fold(0.0, f32::max);
-    push(
-        &mut list,
-        MeshId::Box,
-        model(
-            Vec3::new(end / 2.0, -0.025, 0.0),
-            0.0,
-            Vec3::new(end + 2.0, 0.05, HALL_W),
-        ),
-        HALL,
-    );
+    crate::shell::hall(list, &slots, w.band);
 
     for (ri, (room, slot)) in w.rooms.iter().zip(&slots).enumerate() {
-        let sign = if slot.side == Side::North { -1.0 } else { 1.0 };
-        let zc = sign * (HALL_W / 2.0 + ROOM_DEPTH / 2.0);
-        let xc = slot.x0 + slot.len / 2.0;
-        let back = sign * (HALL_W / 2.0 + ROOM_DEPTH);
-        push(
-            &mut list,
-            MeshId::Box,
-            model(
-                Vec3::new(xc, -0.02, zc),
-                0.0,
-                Vec3::new(slot.len, 0.04, ROOM_DEPTH),
-            ),
-            FLOORS[ri % FLOORS.len()],
+        let shown = visible.contains(&room.id);
+        crate::shell::room(
+            list,
+            &crate::shell::Shell {
+                slot,
+                index: ri,
+                kind: w.room_kind(room.id),
+                band: w.band,
+                visible: shown,
+            },
         );
-        // back wall and the two side walls
-        push(
-            &mut list,
-            MeshId::Box,
-            model(
-                Vec3::new(xc, WALL_H / 2.0, back),
-                0.0,
-                Vec3::new(slot.len, WALL_H, 0.1),
-            ),
-            WALL,
-        );
-        for x in [slot.x0, slot.x0 + slot.len] {
-            push(
-                &mut list,
-                MeshId::Box,
-                model(
-                    Vec3::new(x, WALL_H / 2.0, zc),
-                    0.0,
-                    Vec3::new(0.1, WALL_H, ROOM_DEPTH),
-                ),
-                WALL,
-            );
-        }
-        if !visible.contains(&room.id) {
+        if !shown {
             continue;
         }
 
@@ -164,7 +137,7 @@ pub fn draw_list(
             let (root, yaw) = layout::desk_root(slot, x);
             let dw = layout::desk_width(first.x);
             push(
-                &mut list,
+                list,
                 MeshId::Desk,
                 model(root, yaw, Vec3::new(dw / 1.6, 1.0, 1.0)),
                 WOOD,
@@ -176,12 +149,7 @@ pub fn draw_list(
             });
             // the chair at its front edge
             let (chair, cyaw) = layout::chair_root(slot, x);
-            push(
-                &mut list,
-                MeshId::Chair,
-                model(chair, cyaw, Vec3::ONE),
-                CHAIR,
-            );
+            push(list, MeshId::Chair, model(chair, cyaw, Vec3::ONE), CHAIR);
             list.blobs.push(Blob {
                 center: chair + Vec3::Y * 0.01,
                 radius: 0.3,
@@ -189,14 +157,16 @@ pub fn draw_list(
             });
 
             // the monitor: a stand on the desk, a bezel per screen
-            let n = desk.screens.len();
+            // loose dialogs/air screens at the end of `desk.screens` do
+            // not raise the stand
+            let n = w.stack_len(ri, di);
             let lift = layout::stack_bottom(n, first) - layout::DESK_TOP;
-            monitor_stand(&mut list, slot, x, first, lift);
+            monitor_stand(list, slot, x, first, lift);
             if desk.screens.is_empty() {
                 let p = layout::monitor_place(slot, x, first);
-                bezel(&mut list, &p, first);
+                bezel(list, &p, first);
                 push(
-                    &mut list,
+                    list,
                     MeshId::Box,
                     screen_model(&p, Vec3::new(first.x, first.y, 0.004)),
                     SCREEN_OFF,
@@ -205,7 +175,7 @@ pub fn draw_list(
             for (k, &sid) in desk.screens.iter().enumerate() {
                 let p = w.screen_place(ri, di, k);
                 let size = w.screen_logical(ri, di, k) * M_PER_PX;
-                bezel(&mut list, &p, size);
+                bezel(list, &p, size);
                 if hidden == Some(sid) {
                     continue;
                 }
@@ -220,7 +190,6 @@ pub fn draw_list(
             }
         }
     }
-    list
 }
 
 /// The bezel behind a screen of `size` metres.
@@ -389,9 +358,50 @@ mod tests {
 
     #[test]
     fn a_typical_room_stays_in_budget() {
+        // the plan's budget: ≤ 80 draws (one per distinct mesh) and ≤ 100k
+        // triangles per room; the room shell adds instances, not draws
         let w = demo((1920, 1080));
         let l = draw_list(&w, &tex, ALL);
-        assert!(l.instances.len() < 80, "{}", l.instances.len());
+        let mut meshes: Vec<MeshId> = Vec::new();
+        for i in &l.instances {
+            if !meshes.contains(&i.mesh) {
+                meshes.push(i.mesh);
+            }
+        }
+        let draws = meshes.len() + l.screens.len();
+        assert!(draws <= 80, "{draws} draws");
+        assert!(
+            l.triangle_estimate() <= 100_000,
+            "{}",
+            l.triangle_estimate()
+        );
+        assert!(l.instances.len() < 400, "{}", l.instances.len());
+    }
+
+    #[test]
+    fn a_loose_dialog_does_not_raise_the_stand() {
+        let stand_top = |w: &World| {
+            let l = draw_list(w, &tex, ALL);
+            let neck = l
+                .instances
+                .iter()
+                .find(|i| i.mesh == MeshId::MonitorStand)
+                .unwrap();
+            neck.model.transform_point3(Vec3::Y).y
+        };
+        let mut w = world(&[&[1, 2]]);
+
+        // the second screen becomes a dialog of the first: loose, at the end
+        w.set_parent(ScreenId(2), Some(ScreenId(1)), 0.0);
+        assert_eq!(w.stack_len(0, 0), 1);
+        assert_eq!(w.rooms[0].desks[0].screens.len(), 2, "still on the desk");
+        let one = world(&[&[1]]);
+        assert!(
+            (stand_top(&w) - stand_top(&one)).abs() < 1e-5,
+            "the stand of a one-screen stack: {} vs {}",
+            stand_top(&w),
+            stand_top(&one)
+        );
     }
 
     #[test]

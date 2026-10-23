@@ -8,7 +8,7 @@
 //! along walls. At 1/120 s even 3× the running speed moves less than a cell
 //! per step, so nothing is tunnelled through.
 
-use glam::{BVec2, Vec2};
+use glam::{BVec2, Mat4, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 use crate::Time;
@@ -22,6 +22,10 @@ pub const DOOR_W: f32 = 1.2;
 pub const STEP: Time = 1.0 / 120.0;
 /// A screen in the air only blocks if its bottom edge is below this, metres.
 pub const AIR_BLOCK_BELOW: f32 = 1.9;
+/// How far the aim reaches, metres (§3.5).
+pub const REACH_M: f32 = 4.0;
+/// Half-angle of the aim cone, radians.
+pub const AIM_CONE_RAD: f32 = 8.0_f32.to_radians();
 /// How far outside its walls a room's grid reaches (to walk out of doors).
 const MARGIN: f32 = 1.0;
 /// At most this many steps per update (a quarter second); a longer stall
@@ -257,6 +261,103 @@ impl Default for WalkParams {
     }
 }
 
+impl WalkParams {
+    /// The params of `world.toml`'s `[walk]`/`[camera]` (angles in degrees),
+    /// clamped to the plan's ranges; the rest stays default.
+    pub fn from_config(
+        speed: f32,
+        run_mul: f32,
+        turn: TurnMode,
+        turn_rate_dps: f32,
+        snap_deg: f32,
+        pitch_max_deg: f32,
+        eye: f32,
+    ) -> WalkParams {
+        let d = WalkParams::default();
+        // NaN keeps the default; out of range clamps
+        let clamp = |v: f32, lo: f32, hi: f32, def: f32| {
+            if v.is_nan() { def } else { v.clamp(lo, hi) }
+        };
+        let snap = [15.0f32, 30.0, 45.0]
+            .into_iter()
+            .min_by(|a, b| (a - snap_deg).abs().total_cmp(&(b - snap_deg).abs()))
+            .filter(|_| !snap_deg.is_nan())
+            .unwrap_or(d.snap_step);
+        WalkParams {
+            speed: clamp(speed, 1.0, 5.0, d.speed),
+            run: clamp(run_mul, 1.0, 3.0, d.run),
+            turn,
+            turn_speed: clamp(turn_rate_dps, 45.0, 240.0, d.turn_speed),
+            snap_step: snap,
+            pitch_max: clamp(pitch_max_deg, 10.0, 85.0, d.pitch_max),
+            eye_height: clamp(eye, 1.2, 1.8, d.eye_height),
+            ..d
+        }
+    }
+}
+
+/// Where a ray (origin, unit `dir`) enters the box `min..max`: the distance
+/// along `dir` (0 when it starts inside), `None` when it misses or the box
+/// is behind.
+pub fn ray_hit_aabb(origin: Vec3, dir: Vec3, min: Vec3, max: Vec3) -> Option<f32> {
+    let (mut t0, mut t1) = (0.0f32, f32::INFINITY);
+    for a in 0..3 {
+        let (o, d) = (origin[a], dir[a]);
+        if d.abs() < 1e-9 {
+            if o < min[a] || o > max[a] {
+                return None;
+            }
+            continue;
+        }
+        let (mut n, mut f) = ((min[a] - o) / d, (max[a] - o) / d);
+        if n > f {
+            std::mem::swap(&mut n, &mut f);
+        }
+        t0 = t0.max(n);
+        t1 = t1.min(f);
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some(t0)
+}
+
+/// Where a ray first touches a sphere (0 from inside), `None` if it misses.
+pub fn ray_hit_sphere(origin: Vec3, dir: Vec3, centre: Vec3, r: f32) -> Option<f32> {
+    let oc = origin - centre;
+    let c = oc.length_squared() - r * r;
+    if c <= 0.0 {
+        return Some(0.0);
+    }
+    let b = oc.dot(dir);
+    let disc = b * b - c;
+    if b > 0.0 || disc < 0.0 {
+        return None;
+    }
+    Some(-b - disc.sqrt())
+}
+
+/// Where a ray hits the unit quad (x, y in -0.5..0.5, z = 0, facing +z)
+/// placed by `model`; either side counts. `None` if it misses.
+pub fn ray_hit_quad(origin: Vec3, dir: Vec3, model: Mat4) -> Option<f32> {
+    let inv = model.inverse();
+    if !inv.is_finite() {
+        return None;
+    }
+    // the ray parameter is the same in both spaces (affine map)
+    let o = inv.transform_point3(origin);
+    let d = inv.transform_vector3(dir);
+    if d.z.abs() < 1e-7 {
+        return None;
+    }
+    let t = -o.z / d.z;
+    if t < 0.0 {
+        return None;
+    }
+    let p = o + d * t;
+    (p.x.abs() <= 0.5 && p.y.abs() <= 0.5).then_some(t)
+}
+
 /// What the player is doing this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct WalkInput {
@@ -392,7 +493,7 @@ impl Walker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::Vec3;
+    use std::f32::consts::FRAC_PI_2;
 
     /// A 10 × 8 m room from (0, 0) to (10, 8), a door on the north wall
     /// (z = 0) at x = 5, a desk from (2, 2) to (4, 3).
@@ -694,6 +795,107 @@ mod tests {
         assert_eq!(p.turn, TurnMode::Snap);
         assert_eq!(p.run, 2.0);
         assert_eq!(p.fov_y, 60.0);
+    }
+
+    #[test]
+    fn ray_hits_boxes_by_slabs() {
+        let (min, max) = (Vec3::new(-1.0, 0.0, -6.0), Vec3::new(1.0, 2.0, -4.0));
+        let o = Vec3::new(0.0, 1.0, 0.0);
+        // (origin, dir, want)
+        let rows: [(Vec3, Vec3, Option<f32>); 7] = [
+            (o, Vec3::NEG_Z, Some(4.0)),                         // straight ahead
+            (o, Vec3::Z, None),                                  // behind
+            (o, Vec3::X, None),                                  // beside
+            (Vec3::new(0.0, 1.0, -5.0), Vec3::NEG_Z, Some(0.0)), // from inside
+            (Vec3::new(1.0, 1.0, 0.0), Vec3::NEG_Z, Some(4.0)),  // on the edge
+            (Vec3::new(1.01, 1.0, 0.0), Vec3::NEG_Z, None),      // just past it
+            (o, Vec3::new(0.0, 3.0, -4.0).normalize(), None),    // over the top
+        ];
+        for (i, (o, d, want)) in rows.into_iter().enumerate() {
+            let got = ray_hit_aabb(o, d, min, max);
+            match (got, want) {
+                (Some(g), Some(w)) => assert!((g - w).abs() < 1e-4, "row {i}: {g} vs {w}"),
+                (g, w) => assert_eq!(g, w, "row {i}"),
+            }
+        }
+    }
+
+    #[test]
+    fn ray_hits_spheres() {
+        let c = Vec3::new(0.0, 0.0, -5.0);
+        let rows: [(Vec3, Vec3, Option<f32>); 5] = [
+            (Vec3::ZERO, Vec3::NEG_Z, Some(4.0)),
+            (Vec3::ZERO, Vec3::Z, None),
+            (
+                Vec3::new(0.99, 0.0, 0.0),
+                Vec3::NEG_Z,
+                Some(5.0 - (1.0f32 - 0.99 * 0.99).sqrt()),
+            ),
+            (Vec3::new(1.01, 0.0, 0.0), Vec3::NEG_Z, None),
+            (c, Vec3::X, Some(0.0)),
+        ];
+        for (i, (o, d, want)) in rows.into_iter().enumerate() {
+            let got = ray_hit_sphere(o, d, c, 1.0);
+            match (got, want) {
+                (Some(g), Some(w)) => assert!((g - w).abs() < 1e-3, "row {i}: {g} vs {w}"),
+                (g, w) => assert_eq!(g, w, "row {i}"),
+            }
+        }
+    }
+
+    #[test]
+    fn ray_hits_placed_quads() {
+        // a 0.8 × 0.5 m screen 3 m ahead, turned 30° about y
+        let model = Mat4::from_translation(Vec3::new(0.0, 1.5, -3.0))
+            * Mat4::from_rotation_y(30f32.to_radians())
+            * Mat4::from_scale(Vec3::new(0.8, 0.5, 1.0));
+        let eye = Vec3::new(0.0, 1.5, 0.0);
+        let t = ray_hit_quad(eye, Vec3::NEG_Z, model).expect("the centre");
+        assert!((t - 3.0).abs() < 1e-4, "{t}");
+        assert_eq!(ray_hit_quad(eye, Vec3::Z, model), None, "behind");
+        let over = (Vec3::new(0.0, 1.8, -3.0) - eye).normalize();
+        assert_eq!(ray_hit_quad(eye, over, model), None, "over the top edge");
+        let low = (Vec3::new(0.0, 1.3, -3.0) - eye).normalize();
+        assert!(ray_hit_quad(eye, low, model).is_some(), "inside the bottom");
+        // from behind the screen still counts (either side)
+        let back = Vec3::new(0.0, 1.5, -6.0);
+        assert!(ray_hit_quad(back, Vec3::Z, model).is_some());
+        // edge-on: no hit
+        let side =
+            Mat4::from_translation(Vec3::new(0.0, 1.5, -3.0)) * Mat4::from_rotation_y(FRAC_PI_2);
+        assert_eq!(
+            ray_hit_quad(Vec3::new(0.0, 1.5, -1.0), Vec3::NEG_Z, side),
+            None
+        );
+        let t = ray_hit_quad(Vec3::new(0.5, 1.5, -3.0), Vec3::NEG_X, side);
+        assert!(t.is_some_and(|t| (t - 0.5).abs() < 1e-5), "face-on: {t:?}");
+    }
+
+    #[test]
+    fn params_from_config_clamp_to_the_plan() {
+        let p = WalkParams::from_config(2.8, 2.0, TurnMode::Smooth, 110.0, 30.0, 55.0, 1.5);
+        assert_eq!(p, WalkParams::default());
+        let p = WalkParams::from_config(9.0, 0.5, TurnMode::Snap, 400.0, 33.0, 120.0, 2.5);
+        assert_eq!((p.speed, p.run, p.turn_speed), (5.0, 1.0, 240.0));
+        assert_eq!(p.turn, TurnMode::Snap);
+        assert_eq!(p.snap_step, 30.0, "the nearest of 15/30/45");
+        assert_eq!(p.pitch_max, 85.0);
+        assert_eq!(p.eye_height, 1.8);
+        let p = WalkParams::from_config(0.0, 9.0, TurnMode::Smooth, 1.0, 10.0, 5.0, 0.2);
+        assert_eq!((p.speed, p.run, p.turn_speed), (1.0, 3.0, 45.0));
+        assert_eq!((p.snap_step, p.pitch_max, p.eye_height), (15.0, 10.0, 1.2));
+        let p = WalkParams::from_config(
+            f32::NAN,
+            f32::NAN,
+            TurnMode::Smooth,
+            f32::NAN,
+            44.0,
+            f32::NAN,
+            f32::NAN,
+        );
+        assert_eq!(p.speed, 2.8, "NaN keeps the default");
+        assert_eq!(p.snap_step, 45.0);
+        assert_eq!(p.eye_height, 1.5);
     }
 
     #[test]

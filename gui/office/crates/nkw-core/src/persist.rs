@@ -104,11 +104,46 @@ pub struct Place {
     pub desk: Option<DeskAt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<Width>,
+    /// in the air at a pose (pinned, dropped from the hand), or on a wall
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub air: Option<Air>,
+}
+
+/// A screen's pose in the air, in whole millimetres and millidegrees (so
+/// the file stays exact and `Eq`); `wall`: dropped against a wall.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Air {
+    pub pos_mm: [i32; 3],
+    pub yaw_mdeg: i32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wall: bool,
+}
+
+impl Air {
+    /// From metres and radians (rounded to the millimetre / millidegree).
+    pub fn new(pos: [f32; 3], yaw: f32, wall: bool) -> Air {
+        let mm = |v: f32| (v * 1000.0).round() as i32;
+        Air {
+            pos_mm: pos.map(mm),
+            yaw_mdeg: (yaw.to_degrees() * 1000.0).round() as i32,
+            wall,
+        }
+    }
+
+    /// Metres.
+    pub fn pos(&self) -> [f32; 3] {
+        self.pos_mm.map(|v| v as f32 / 1000.0)
+    }
+
+    /// Radians.
+    pub fn yaw(&self) -> f32 {
+        (self.yaw_mdeg as f32 / 1000.0).to_radians()
+    }
 }
 
 impl Place {
     pub fn is_empty(&self) -> bool {
-        self.room.is_none() && self.desk.is_none() && self.width.is_none()
+        self.room.is_none() && self.desk.is_none() && self.width.is_none() && self.air.is_none()
     }
 
     /// Field by field: `self` where set, else `other`.
@@ -117,6 +152,7 @@ impl Place {
             room: self.room.or(other.room),
             desk: self.desk.or(other.desk),
             width: self.width.or(other.width),
+            air: self.air.or(other.air),
         }
     }
 }
@@ -288,6 +324,7 @@ fn migrate_v0(map: &serde_json::Map<String, Value>) -> Result<WorldFile, Persist
                     room: Some(room.into()),
                     desk: Some(DeskAt::Index(desk)),
                     width: None,
+                    air: None,
                 },
             );
         }
@@ -399,6 +436,7 @@ mod tests {
                         room: Some("acme".into()),
                         desk: Some(DeskAt::Index(1)),
                         width: Some(Width::TwoThirds),
+                        air: None,
                     },
                 },
                 ScreenRec {
@@ -407,6 +445,7 @@ mod tests {
                         room: Some("bravo".into()),
                         desk: Some(DeskAt::Index(0)),
                         width: None,
+                        air: None,
                     },
                 },
             ],
@@ -421,6 +460,7 @@ mod tests {
                     room: Some("bravo".into()),
                     desk: Some(DeskAt::Last),
                     width: Some(Width::Third),
+                    air: None,
                 },
             )]),
         }
@@ -439,6 +479,41 @@ mod tests {
         assert_eq!(v["places"]["demo.viewer"]["desk"], "last");
         assert_eq!(v["screens"][0]["place"]["desk"], 1);
         assert_eq!(v["station"]["desk"]["room"], "acme");
+    }
+
+    #[test]
+    fn a_wall_screen_round_trips_and_old_files_still_read() {
+        let mut f = sample();
+        let air = Air::new([1.25, 1.5, -5.95], 90f32.to_radians(), true);
+        f.screens[0].place.air = Some(air);
+        f.screens[0].place.desk = None;
+        let text = to_string(&f);
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            v["screens"][0]["place"]["air"],
+            json!({"pos_mm": [1250, 1500, -5950], "yaw_mdeg": 90000, "wall": true})
+        );
+        assert_eq!(parse(&text), Ok(f.clone()));
+        let back = f.screens[0].place.air.unwrap();
+        assert!((back.yaw() - 90f32.to_radians()).abs() < 1e-5);
+        assert_eq!(back.pos(), [1.25, 1.5, -5.95]);
+        // an air screen (not a wall) keeps `wall` out of the file
+        let free = Air::new([0.0, 1.0, 0.0], 0.0, false);
+        assert_eq!(
+            serde_json::to_value(free).unwrap(),
+            json!({"pos_mm": [0, 1000, 0], "yaw_mdeg": 0})
+        );
+        assert!(
+            !Place {
+                air: Some(free),
+                ..Place::default()
+            }
+            .is_empty()
+        );
+        // a version-1 file from before: no `air` anywhere, every field kept
+        let old = to_string(&sample());
+        assert!(!old.contains("air"));
+        assert_eq!(parse(&old), Ok(sample()));
     }
 
     #[test]
@@ -463,7 +538,8 @@ mod tests {
                 Place {
                     room: Some("acme".into()),
                     desk: Some(DeskAt::Index(2)),
-                    width: None
+                    width: None,
+                    air: None,
                 }
             );
         }
@@ -527,6 +603,7 @@ mod tests {
             room: Some(r.into()),
             desk: Some(DeskAt::Index(d)),
             width: None,
+            air: None,
         };
         remember(&mut m, "acme.term", at("acme", 0));
         remember(&mut m, "acme.term", at("bravo", 2));
@@ -546,6 +623,7 @@ mod tests {
             room: Some("bravo".into()),
             desk: Some(DeskAt::Last),
             width: Some(Width::Full),
+            air: None,
         };
         let m = a.or(b);
         assert_eq!(m.room.as_deref(), Some("acme"));

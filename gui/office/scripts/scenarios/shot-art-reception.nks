@@ -1,0 +1,6 @@
+# The art pass (R5): the reception from its desk station at midday (band 3): the shell (ceiling,
+# windows, striped wallpaper), ON AIR and the calendar over the receptionist's board, the plant on
+# the right window's sill.
+wait 400
+shot ${OUT}/shot-art-reception.png
+quit

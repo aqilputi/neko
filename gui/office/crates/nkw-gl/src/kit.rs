@@ -208,7 +208,7 @@ pub fn stated_bounds(id: MeshId) -> Option<(Vec3, Vec3)> {
     use MeshId::*;
     let v = Vec3::new;
     Some(match id {
-        MonitorStand => (v(-0.025, 0.0, -0.025), v(0.025, 1.0, 0.025)),
+        MonitorStand => (v(-0.06, 0.0, -0.06), v(0.06, 1.0, 0.06)),
         MonitorFoot => (v(-0.5, 0.0, -0.5), v(0.5, 0.02, 0.5)),
         CatTorso => (v(-0.18, -0.23, -0.15), v(0.18, 0.23, 0.15)),
         CatSkull => (v(-0.19, -0.145, -0.15), v(0.19, 0.145, 0.15)),
@@ -249,6 +249,15 @@ pub fn stated_bounds(id: MeshId) -> Option<(Vec3, Vec3)> {
         Fish => (v(-0.035, -0.02, -0.008), v(0.035, 0.02, 0.008)),
         Package => (v(-0.18, 0.0, -0.152), v(0.18, 0.27, 0.154)),
         OnAir => (v(-0.24, -0.09, 0.0), v(0.24, 0.09, 0.07)),
+        FloorPlanks | FloorTiles => (v(-0.5, -0.03, -0.5), v(0.5, 0.0, 0.5)),
+        Rug => (v(-0.5, 0.0, -0.5), v(0.5, 0.012, 0.5)),
+        WallPanel | WallStripes | WallDots => (v(-0.5, 0.0, 0.0), v(0.5, 1.0, 0.02)),
+        Ceiling => (v(-0.5, -0.12, -0.5), v(0.5, 0.06, 0.5)),
+        WindowFrame => (v(-0.875, -0.6, 0.0), v(0.875, 0.66, 0.175)),
+        WindowPane => (v(-0.5, -0.5, 0.0), v(0.5, 0.5, 0.01)),
+        Lintel => (v(-0.5, -0.1, 0.0), v(0.5, 0.0, 0.08)),
+        LightPatch => (v(-0.5, 0.0, -0.5), v(0.5, 0.004, 0.5)),
+        Skirting => (v(-0.5, 0.0, 0.0), v(0.5, 0.1, 0.025)),
         _ => return None,
     })
 }
@@ -259,7 +268,7 @@ pub fn stated_bounds(id: MeshId) -> Option<(Vec3, Vec3)> {
 pub fn build(id: MeshId) -> Option<Mesh> {
     use MeshId::*;
     Some(match id {
-        MonitorStand => cylinder(0.025, 1.0, 12, CREAM).moved(Vec3::Y * 0.5),
+        MonitorStand => monitor_neck(),
         MonitorFoot => lathe(
             &[
                 (0.0, 0.0, CREAM),
@@ -376,6 +385,18 @@ pub fn build(id: MeshId) -> Option<Mesh> {
         Fish => fish(),
         Package => package(),
         OnAir => on_air(),
+        FloorPlanks => shell::planks(),
+        FloorTiles => shell::tiles(),
+        Rug => shell::rug(),
+        WallPanel => shell::wall_panel(),
+        Ceiling => shell::ceiling(),
+        WindowFrame => shell::window_frame(),
+        WindowPane => shell::window_pane(),
+        Lintel => shell::lintel(),
+        Skirting => shell::skirting(),
+        WallStripes => shell::wall_stripes(),
+        WallDots => shell::wall_dots(),
+        LightPatch => shell::light_patch(),
         _ => return None,
     })
 }
@@ -390,6 +411,34 @@ impl Moved for Mesh {
         m.append(&self, at(by));
         m
     }
+}
+
+// ---------------------------------------------------------------- monitor
+
+/// The neck's radius (Ø 7 cm) and the flare at its foot, metres.
+pub(crate) const NECK_R: f32 = 0.035;
+const FLARE_R: f32 = 0.06;
+
+/// The monitor's neck: a sturdy Ø 7 cm post on a flared foot (the flare is
+/// the bottom 8 % of the unit height, so it stays a soft skirt at any lift),
+/// a little cap ring where it meets the bezel.
+fn monitor_neck() -> Mesh {
+    let r = NECK_R;
+    lathe(
+        &[
+            (0.0, 0.0, CREAM),
+            (FLARE_R, 0.0, CREAM),
+            (FLARE_R * 0.92, 0.012, CREAM),
+            (r * 1.25, 0.045, CREAM),
+            (r, 0.08, CREAM),
+            (r, 0.9, CREAM),
+            (r * 1.15, 0.93, CREAM),
+            (r * 1.15, 0.97, CREAM),
+            (r, 1.0, CREAM),
+            (0.0, 1.0, CREAM),
+        ],
+        14,
+    )
 }
 
 // ---------------------------------------------------------------- cat parts
@@ -824,47 +873,52 @@ fn board() -> Mesh {
     m
 }
 
-fn on_air() -> Mesh {
-    let mut m = rounded_box(Vec3::new(0.48, 0.18, 0.06), 0.025, 1, SIGN_RED)
-        .moved(Vec3::new(0.0, 0.0, 0.03));
-    // "ON AIR" in a 5-row pixel font, as quads on the face ("" = a space)
-    const GLYPHS: [[&str; 5]; 6] = [
-        ["###", "#.#", "#.#", "#.#", "###"],      // O
-        ["#..#", "##.#", "#.##", "#..#", "#..#"], // N
-        ["", "", "", "", ""],                     //
-        [".#.", "#.#", "###", "#.#", "#.#"],      // A
-        ["#", "#", "#", "#", "#"],                // I
-        ["##.", "#.#", "##.", "#.#", "#.#"],      // R
-    ];
-    let px = 0.02;
+/// "ON AIR" in a 5-row pixel font, read left to right from +z ("" = a space).
+pub(crate) const ON_AIR_GLYPHS: [[&str; 5]; 6] = [
+    [".##.", "#..#", "#..#", "#..#", ".##."],      // O
+    ["#...#", "##..#", "#.#.#", "#..##", "#...#"], // N: the diagonal from top-left to bottom-right
+    ["", "", "", "", ""],                          //
+    [".##.", "#..#", "####", "#..#", "#..#"],      // A
+    ["###", ".#.", ".#.", ".#.", "###"],           // I
+    ["###.", "#..#", "###.", "#.#.", "#..#"],      // R
+];
+/// The size of one font pixel on the sign, metres.
+const ON_AIR_PX: f32 = 0.016;
+
+/// Every lit pixel of the sign's letters: (glyph, centre on the face as
+/// seen from +z: x to the right, y up).
+pub(crate) fn on_air_cells() -> Vec<(usize, Vec2)> {
+    let px = ON_AIR_PX;
     let width = |g: &[&str; 5]| g[0].len().max(1) as f32;
-    let total: f32 = GLYPHS.iter().map(width).sum::<f32>() + (GLYPHS.len() - 1) as f32;
+    let total: f32 =
+        ON_AIR_GLYPHS.iter().map(width).sum::<f32>() + (ON_AIR_GLYPHS.len() - 1) as f32;
     let mut x = -total * px / 2.0;
-    for g in &GLYPHS {
+    let mut out = Vec::new();
+    for (gi, g) in ON_AIR_GLYPHS.iter().enumerate() {
         for (row, line) in g.iter().enumerate() {
-            // merge runs of '#' into one quad
-            let bytes = line.as_bytes();
-            let mut col = 0;
-            while col < bytes.len() {
-                if bytes[col] != b'#' {
-                    col += 1;
-                    continue;
+            for (col, b) in line.bytes().enumerate() {
+                if b == b'#' {
+                    let c = Vec2::new(x + (col as f32 + 0.5) * px, (2.0 - row as f32) * px);
+                    out.push((gi, c));
                 }
-                let start = col;
-                while col < bytes.len() && bytes[col] == b'#' {
-                    col += 1;
-                }
-                let w = (col - start) as f32 * px;
-                let cx = x + start as f32 * px + w / 2.0;
-                let cy = (2.0 - row as f32) * px;
-                add(
-                    &mut m,
-                    quad(Vec2::new(cx, cy), Vec2::new(w, px), 0.0605, SNOW),
-                    Mat4::IDENTITY,
-                );
             }
         }
         x += (width(g) + 1.0) * px;
+    }
+    out
+}
+
+fn on_air() -> Mesh {
+    let mut m = rounded_box(Vec3::new(0.48, 0.18, 0.06), 0.025, 1, SIGN_RED)
+        .moved(Vec3::new(0.0, 0.0, 0.03));
+    // the letters as quads on the face, in the +z reading order (x grows to the right)
+    let px = ON_AIR_PX;
+    for (_, c) in on_air_cells() {
+        add(
+            &mut m,
+            quad(c, Vec2::splat(px), 0.0605, SNOW),
+            Mat4::IDENTITY,
+        );
     }
     // the bracket on top
     add(
@@ -874,6 +928,13 @@ fn on_air() -> Mesh {
     );
     m
 }
+
+// ---------------------------------------------------------------- room shell
+
+/// The room shell's meshes (S17): floors, wallpaper, ceiling, windows,
+/// trims (see `shell_kit.rs`).
+#[path = "shell_kit.rs"]
+pub mod shell;
 
 // ---------------------------------------------------------------- floor things
 
@@ -1360,6 +1421,52 @@ mod tests {
         assert!(
             (hi - Vec3::new(0.3, 0.2, 0.1)).abs().max_element() < 6e-3 && (lo + hi).length() < 1e-4
         );
+    }
+
+    #[test]
+    fn on_air_reads_on_air_from_the_front() {
+        let cells = on_air_cells();
+        // the N (glyph 1): its diagonal, seen from +z (x right), falls from top-left to bottom-right
+        let n: Vec<Vec2> = cells.iter().filter(|c| c.0 == 1).map(|c| c.1).collect();
+        let (x0, x1) = n
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(a, b), c| (a.min(c.x), b.max(c.x)));
+        let mut diag: Vec<Vec2> = n
+            .iter()
+            .copied()
+            .filter(|c| c.x > x0 + 1e-4 && c.x < x1 - 1e-4)
+            .collect();
+        diag.sort_by(|a, b| a.x.total_cmp(&b.x));
+        assert!(diag.len() >= 3, "{diag:?}");
+        for w in diag.windows(2) {
+            assert!(w[1].y < w[0].y, "the N is mirrored: {diag:?}");
+        }
+        // the letters come in reading order, left to right, all on the sign's face
+        let lefts: Vec<f32> = (0..6)
+            .filter_map(|g| {
+                cells
+                    .iter()
+                    .filter(|c| c.0 == g)
+                    .map(|c| c.1.x)
+                    .reduce(f32::min)
+            })
+            .collect();
+        assert_eq!(lefts.len(), 5, "O N A I R");
+        assert!(lefts.windows(2).all(|w| w[0] < w[1]));
+        let (_, hi) = stated_bounds(MeshId::OnAir).unwrap();
+        assert!(
+            cells
+                .iter()
+                .all(|(_, c)| c.x.abs() + 0.008 < hi.x && c.y.abs() + 0.008 < hi.y)
+        );
+        // and every cell is a white quad of the mesh, facing +z
+        let m = kit_build(MeshId::OnAir);
+        for (_, c) in &cells {
+            assert!(m.vertices.iter().any(|v| v.color == SNOW
+                && (v.pos[0] - (c.x - 0.008)).abs() < 1e-5
+                && (v.pos[1] - (c.y - 0.008)).abs() < 1e-5
+                && unpack_normal(v.normal).z > 0.99));
+        }
     }
 
     #[test]

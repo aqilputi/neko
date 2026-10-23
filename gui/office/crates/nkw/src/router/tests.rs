@@ -42,9 +42,9 @@ fn palette() -> Mode {
     over(Kind::Palette, Base::Nav)
 }
 
-/// The world mode a keymap mode is typed in.
-fn mode_for(keymap_mode: &str) -> Mode {
-    match keymap_mode {
+/// The world mode (and plugin sub-mode) a keymap mode is typed in.
+fn mode_for(keymap_mode: &str) -> (Mode, Option<&'static str>) {
+    let m = match keymap_mode {
         "normal.world" | "world" => nav(),
         "world.walk" => walk(),
         "world.focus" => focus(),
@@ -52,8 +52,10 @@ fn mode_for(keymap_mode: &str) -> Mode {
         "world.line" => talk(true),
         "world.hint" => hint(),
         "world.palette" => palette(),
+        "world.library" => return (nav(), Some("library")),
         m => panic!("{m}"),
-    }
+    };
+    (m, None)
 }
 
 /// A key event as the hub would name it from a canonical name.
@@ -103,6 +105,24 @@ fn cmd(n: &str) -> Route {
     }
 }
 
+fn held(n: &str, pressed: bool) -> Route {
+    Route::Command {
+        name: n.into(),
+        args: BTreeMap::from([("pressed".to_string(), pressed.to_string())]),
+    }
+}
+
+fn up(name: &str) -> KeyEv {
+    KeyEv {
+        pressed: false,
+        ..ev(name)
+    }
+}
+
+fn library() -> Option<&'static str> {
+    Some("library")
+}
+
 fn r() -> Router {
     Router::new(WorldMod::CtrlAlt, "ctrl+]")
 }
@@ -111,18 +131,18 @@ fn r() -> Router {
 fn every_s9_row_resolves_in_its_mode() {
     for (mode, key, c) in table::FALLBACK {
         let mut router = r();
-        let m = mode_for(mode);
+        let (m, sub) = mode_for(mode);
         let name = names::canonical(key, WorldMod::CtrlAlt);
         let seq = nk_cats::keys::split_seq(&name);
         let mut got = Route::Swallow;
         for (i, k) in seq.iter().enumerate() {
-            got = router.route(&m, None, &ev(k));
+            got = router.route(&m, sub, &ev(k));
             if i + 1 < seq.len() {
                 assert_eq!(got, Route::Pending, "{mode} {key}");
             }
         }
-        let want = if *mode == "world.walk" && HELD.contains(c) {
-            Route::Swallow
+        let want = if *mode == "world.walk" && HELD_CMDS.contains(c) {
+            held(c, true)
         } else {
             cmd(c)
         };
@@ -378,4 +398,218 @@ fn names_resolve_to_world_commands() {
             "{name}"
         );
     }
+}
+
+/// ANDAR's held keys resolve through the keymap: a command with `pressed`
+/// on the press and on the release; other releases are swallowed.
+#[test]
+fn held_keys_press_and_release_in_walk() {
+    let rows: &[(&str, &str)] = &[
+        ("w", "world.forward"),
+        ("s", "world.back"),
+        ("a", "world.strafe_left"),
+        ("d", "world.strafe_right"),
+        ("q", "world.turn_left"),
+        ("left", "world.turn_left"),
+        ("e", "world.turn_right"),
+        ("right", "world.turn_right"),
+        ("up", "world.look_up"),
+        ("down", "world.look_down"),
+    ];
+    for (k, c) in rows {
+        let mut router = r();
+        assert_eq!(router.route(&walk(), None, &ev(k)), held(c, true), "{k}");
+        assert_eq!(router.route(&walk(), None, &up(k)), held(c, false), "{k}");
+    }
+    let mut router = r();
+    // not held: the press is a command, the release is swallowed
+    for k in ["h", "g", "esc", "enter", "c", "[", "z"] {
+        assert_eq!(router.route(&walk(), None, &up(k)), Route::Swallow, "{k}");
+    }
+    assert_eq!(router.route(&walk(), None, &ev("h")), cmd("world.prev"));
+    // the release of a NAV key is swallowed (w enters ANDAR on the press)
+    assert_eq!(router.route(&nav(), None, &ev("w")), cmd("world.walk"));
+    assert_eq!(router.route(&nav(), None, &up("w")), Route::Swallow);
+    // held commands hold nothing outside ANDAR: FOCO's way out stays a
+    // plain command, its release is the world's
+    let mut f = Router::new(WorldMod::CtrlAlt, "s");
+    assert_eq!(f.route(&focus(), None, &ev("s")), cmd("world.back"));
+    assert_eq!(f.route(&focus(), None, &up("s")), Route::Swallow);
+    // releases of the client's keys reach the client
+    assert_eq!(f.route(&focus(), None, &up("h")), Route::Forward);
+    // a release never breaks a sequence in progress
+    assert_eq!(router.route(&nav(), None, &ev("g")), Route::Pending);
+    assert_eq!(router.route(&nav(), None, &up("g")), Route::Swallow);
+    assert_eq!(router.route(&nav(), None, &ev("g")), cmd("world.first"));
+    // a global chord's release is swallowed
+    assert_eq!(
+        router.route(&walk(), None, &up("ctrl+alt+w")),
+        Route::Swallow
+    );
+    assert_eq!(HELD_CMDS.len(), 9);
+    assert!(HELD_CMDS.contains(&"world.run"));
+}
+
+#[test]
+fn rebinding_a_walking_key_moves_with_it() {
+    let mut router = r();
+    router.set_bindings(vec![
+        binding("world.walk", &["up"], "world.forward"),
+        binding("world.walk", &["r"], "world.run"),
+        binding("world.walk", &["esc"], "world.walk_exit"),
+    ]);
+    assert_eq!(
+        router.route(&walk(), None, &ev("up")),
+        held("world.forward", true)
+    );
+    assert_eq!(
+        router.route(&walk(), None, &up("up")),
+        held("world.forward", false)
+    );
+    assert_eq!(
+        router.route(&walk(), None, &ev("r")),
+        held("world.run", true)
+    );
+    assert_eq!(
+        router.route(&walk(), None, &up("r")),
+        held("world.run", false)
+    );
+    // the old keys went with the mode's fallback
+    assert_eq!(router.route(&walk(), None, &ev("w")), Route::Swallow);
+    assert_eq!(router.route(&walk(), None, &up("w")), Route::Swallow);
+    // and the World parses the held command back
+    let Route::Command { name, args } = router.route(&walk(), None, &ev("up")) else {
+        panic!()
+    };
+    assert!(
+        crate::world::Cmd::from_name(&name, &args).is_some(),
+        "{name}"
+    );
+}
+
+/// `nk.keymap.set` with a function arrives as a `lua.key:` binding: a
+/// command like any other, in the same chain.
+#[test]
+fn lua_key_bindings_resolve_as_commands() {
+    let mut router = r();
+    router.set_bindings(vec![
+        binding("normal.world", &["n"], "lua.key:normal.world:n"),
+        binding("normal", &["x"], "lua.key:normal:x"),
+        binding("world.walk", &["v"], "lua.key:world.walk:v"),
+        binding("world.walk", &["w"], "world.forward"),
+        binding("world.talk", &["z"], "lua.key:world.talk:z"),
+        binding("normal.world", &["world+n"], "lua.key:normal.world:world+n"),
+    ]);
+    assert_eq!(
+        router.route(&nav(), None, &ev("n")),
+        cmd("lua.key:normal.world:n")
+    );
+    assert_eq!(
+        router.route(&nav(), None, &ev("x")),
+        cmd("lua.key:normal:x")
+    );
+    assert_eq!(
+        router.route(&walk(), None, &ev("v")),
+        cmd("lua.key:world.walk:v")
+    );
+    assert_eq!(router.route(&walk(), None, &up("v")), Route::Swallow);
+    assert_eq!(
+        router.route(&talk(false), None, &ev("z")),
+        cmd("lua.key:world.talk:z")
+    );
+    // CONVERSA inherits normal's Lua keys (they are not client commands)
+    assert_eq!(
+        router.route(&talk(false), None, &ev("x")),
+        cmd("lua.key:normal:x")
+    );
+    // ANDAR does not fall to normal
+    assert_eq!(router.route(&walk(), None, &ev("x")), Route::Swallow);
+    // a world+ Lua key is global, also in FOCO
+    assert_eq!(
+        router.route(&focus(), None, &ev("ctrl+alt+n")),
+        cmd("lua.key:normal.world:world+n")
+    );
+    assert_eq!(router.route(&focus(), None, &ev("n")), Route::Forward);
+    // the library inherits NAV's Lua keys
+    assert_eq!(
+        router.route(&nav(), library(), &ev("n")),
+        cmd("lua.key:normal.world:n")
+    );
+}
+
+/// The library's shelf keys (S19) and its chain:
+/// world.library → normal.world → normal → *.
+#[test]
+fn library_submode_and_chain() {
+    let mut router = r();
+    let rows: &[(&str, &str)] = &[
+        ("h", "world.book_prev"),
+        ("left", "world.book_prev"),
+        ("l", "world.book_next"),
+        ("right", "world.book_next"),
+        ("j", "world.shelf_down"),
+        ("down", "world.shelf_down"),
+        ("k", "world.shelf_up"),
+        ("up", "world.shelf_up"),
+        ("enter", "world.book_open"),
+        ("backspace", "world.shelf_back"),
+        ("/", "world.library_search"),
+        ("e", "world.book_edit"),
+        ("p", "world.book_preview"),
+        ("y", "world.book_copy_path"),
+        ("esc", "world.library_leave"),
+        // inherited from NAV
+        ("t", "world.talk"),
+        ("J", "world.room_next"),
+        (":", "world.palette"),
+        ("ctrl+alt+l", "world.focus_right"),
+    ];
+    for (k, c) in rows {
+        assert_eq!(router.route(&nav(), library(), &ev(k)), cmd(c), "{k}");
+    }
+    assert_eq!(router.dump()["mode"], "world.library");
+    assert_eq!(router.dump()["submode"], "library");
+    // printable keys are not text in the library
+    assert_eq!(router.route(&nav(), library(), &ev("z")), Route::Swallow);
+    // the core's normal mode is in the chain
+    router.set_bindings(vec![binding("normal", &["x"], "session.stop")]);
+    assert_eq!(
+        router.route(&nav(), library(), &ev("x")),
+        cmd("session.stop")
+    );
+    assert_eq!(
+        router.route(&nav(), library(), &ev("l")),
+        cmd("world.book_next"),
+        "a keymap without the library mode keeps its fallback rows"
+    );
+    // a keymap that names the mode replaces its rows
+    router.set_bindings(vec![binding("world.library", &["n"], "world.book_next")]);
+    assert_eq!(
+        router.route(&nav(), library(), &ev("n")),
+        cmd("world.book_next")
+    );
+    assert_eq!(
+        router.route(&nav(), library(), &ev("l")),
+        cmd("world.right")
+    );
+    // the sub-mode means nothing under an overlay mode (FOCO, CONVERSA …)
+    assert_eq!(router.route(&focus(), library(), &ev("h")), Route::Forward);
+    assert_eq!(
+        router.route(&talk(false), library(), &ev("j")),
+        cmd("world.choice_down")
+    );
+    assert_eq!(router.dump()["submode"], serde_json::Value::Null);
+    // and back in plain NAV: NAV's keys
+    assert_eq!(router.route(&nav(), None, &ev("l")), cmd("world.right"));
+}
+
+#[test]
+fn dump_names_the_submode() {
+    let mut router = r();
+    assert_eq!(router.dump()["submode"], serde_json::Value::Null);
+    router.route(&nav(), Some("map"), &ev("h"));
+    assert_eq!(router.dump()["submode"], "map");
+    assert_eq!(router.dump()["mode"], "world.map");
+    router.route(&nav(), None, &ev("h"));
+    assert_eq!(router.dump()["submode"], serde_json::Value::Null);
 }

@@ -6,6 +6,7 @@
 //! (`Want::Once`), toasts end on `Want::At`, and only short slides use
 //! `Want::Continuous` (none under reduced motion). No `Rate` wish, ever.
 
+pub mod andar;
 pub mod cache;
 pub mod draw;
 pub mod hud;
@@ -27,7 +28,7 @@ use crate::ext::{
 };
 use crate::router::{KeyEv, table};
 use cache::Cache;
-use draw::{Fonts, Row, Spec};
+use draw::{Fonts, Px, Row, Spec};
 use hud::Toast;
 use map::MapState;
 use project::View;
@@ -43,6 +44,9 @@ const CHOICES_ID: u64 = 201;
 const PALETTE_ID: u64 = 300;
 const MAP_ID: u64 = 400;
 const RING_ID: u64 = 401;
+const HAND_ID: u64 = 500;
+const CROSS_ID: u64 = 501;
+const VIGNETTE_ID: u64 = 502;
 const HINT_ID: u64 = 1 << 20;
 const TAG_ID: u64 = 2 << 20;
 
@@ -85,7 +89,21 @@ pub struct Overlay {
     dirty: bool,
     /// the ▼'s next blink, while a dialogue with more waits
     blink_at: Option<Time>,
+    /// ANDAR's crosshair (dot ↔ ring)
+    cross: andar::Cross,
+    /// the 2D tags' fades
+    fades: andar::Fades,
+    /// `inject overlay {"aimed"|"carrying"|"vignette": …}` (tests, shots)
+    forced: Forced,
     stats: Stats,
+}
+
+/// What a script forces over the hub's/World's values (`null` releases).
+#[derive(Default, Clone, Copy, Debug, PartialEq)]
+struct Forced {
+    aimed: Option<bool>,
+    carrying: Option<bool>,
+    vignette: Option<f32>,
 }
 
 #[derive(Default)]
@@ -95,8 +113,18 @@ struct Stats {
     badges: usize,
     tags: usize,
     hints: BTreeMap<u64, String>,
+    /// the dialogue's chars and choices as drawn (S16 counters)
     dialog_chars: usize,
+    dialog_choices: usize,
+    crosshair: Option<&'static str>,
+    vignette: f32,
+    hand: bool,
+    /// the map's library shelves
+    shelves: usize,
 }
+
+/// The keys while a screen is in hand (ANDAR), bottom-centre.
+pub const HAND_HINT: &str = "g solta · [ ] distância · - = tamanho";
 
 impl Overlay {
     pub fn new(cli: &crate::cli::Cli) -> Overlay {
@@ -121,8 +149,25 @@ impl Overlay {
             blips_total: 0,
             dirty: false,
             blink_at: None,
+            cross: andar::Cross::default(),
+            fades: andar::Fades::default(),
+            forced: Forced::default(),
             stats: Stats::default(),
         }
+    }
+
+    /// A screen is in hand (S15 `World::carrying`), or a script says so.
+    fn carrying(&self, ctx: &Ctx) -> bool {
+        self.forced
+            .carrying
+            .unwrap_or_else(|| ctx.world.carrying().is_some())
+    }
+
+    /// The comfort vignette's alpha 0..1 (S15 `World::comfort_vignette`).
+    fn vignette(&self, ctx: &Ctx) -> f32 {
+        self.forced
+            .vignette
+            .unwrap_or_else(|| ctx.world.comfort_vignette(ctx.now))
     }
 
     /// The palette's items besides the world's own (the hub's Σ
@@ -360,12 +405,15 @@ impl Overlay {
         let out = view.size;
         let now = ctx.now;
         let reduced = ctx.reduced_motion;
+        let walking = ctx.world.mode().walking();
+        let carrying = walking && self.carrying(ctx);
+        let vignette = if walking { self.vignette(ctx) } else { 0.0 };
         let mut fonts = self.fonts.take().unwrap_or_default();
         let mut stats = Stats::default();
         let mut f = Frame {
             cache: &mut self.cache,
             fonts: &mut fonts,
-            s: ctx.scale.round().max(1.0) as i32,
+            s: raster_scale(ctx.scale),
             out,
             focus: hud.focus_rect,
             els: Vec::new(),
@@ -373,7 +421,21 @@ impl Overlay {
 
         // the map (a sub-view of NAV: it covers the world)
         if let Some(m) = self.map {
-            let (spec, targets) = map::layout(ctx.world, m.floor, out);
+            // the library's shelves, from its books (pickables)
+            let books: Vec<glam::Vec3> = hud
+                .pickables
+                .iter()
+                .chain(&self.extra_pickables)
+                .filter(|p| matches!(p.pick, Pick::Book(_)))
+                .map(|p| p.pos)
+                .collect();
+            let (spec, targets) = map::layout_with(ctx.world, m.floor, out, &books);
+            if let Spec::Map { boxes, .. } = &spec {
+                stats.shelves = boxes
+                    .iter()
+                    .filter(|b| b.kind == draw::MapKind::Shelf)
+                    .count();
+            }
             if let Some(t) = targets.get(m.sel) {
                 let ring = Spec::Ring {
                     w: t.rect.2,
@@ -453,6 +515,7 @@ impl Overlay {
         }
 
         // the dialogue
+        let mut dialog_top: Option<i32> = None;
         let dialog = hud.dialog.clone().or_else(|| self.injected_dialog.clone());
         match &dialog {
             Some(d) => {
@@ -469,7 +532,6 @@ impl Overlay {
                     self.blips.extend(b);
                 }
                 self.last_dialog = Some((d.name.clone(), d.text.clone()));
-                stats.dialog_chars = d.text.chars().count();
                 let rise = match self.dialog_since {
                     Some(t0) if !reduced && now - t0 < RISE_S => {
                         let p = ((now - t0) / RISE_S).clamp(0.0, 1.0);
@@ -478,14 +540,13 @@ impl Overlay {
                     _ => 0,
                 };
                 let width = (out.x as i32 - 128).min(760);
-                let cw = f.fonts.face(draw::PX_DIALOG).cw as i32;
-                let cols = ((width - 48) / cw.max(1)).max(10) as usize;
+                // columns in the raster's own px (the face is the scaled one)
+                let cw = f.fonts.face(f.s.font(draw::PX_DIALOG)).cw as i32;
+                let cols = ((f.s.p(width) - f.s.p(48)) / cw.max(1)).max(10) as usize;
                 let all = draw::wrap(&d.text, cols);
-                let lines: Vec<String> = all
-                    .iter()
-                    .skip(all.len().saturating_sub(draw::DIALOG_LINES))
-                    .cloned()
-                    .collect();
+                let skip = all.len().saturating_sub(draw::DIALOG_LINES);
+                let lines: Vec<String> = all.iter().skip(skip).cloned().collect();
+                stats.dialog_chars = drawn_chars(&d.text, &all, skip);
                 let mode = ctx.world.mode();
                 let line = if matches!(mode.kind(), Some(Kind::Talk { line: true, .. })) {
                     let shown = if mode.purpose() == Some(TalkPurpose::VaultUnlock) {
@@ -518,17 +579,21 @@ impl Overlay {
                 let size = f.size(&spec);
                 let y = out.y as i32 - size.1 - 28 + rise;
                 f.put(DIALOG_ID, &spec, Placer::Raw(x, y));
+                dialog_top = Some(y);
                 if !d.choices.is_empty() {
                     let ch = Spec::Choices {
                         items: d.choices.clone(),
                         selected: d.selected,
                     };
                     let cs = f.size(&ch);
-                    f.put(
+                    let r = f.put(
                         CHOICES_ID,
                         &ch,
                         Placer::At(x + width - cs.0 - 24, y - cs.1 + 4),
                     );
+                    if r.2 > 0 {
+                        stats.dialog_choices = d.choices.len();
+                    }
                 }
             }
             None => {
@@ -539,7 +604,8 @@ impl Overlay {
         }
 
         // toasts, bottom-left, the newest at the bottom
-        let mut y = out.y as i32 - 16;
+        // (above the dialogue box while one is open)
+        let mut y = dialog_top.map_or(out.y as i32 - 16, |t| t - 8);
         for (i, t) in self.toasts.iter().enumerate().rev() {
             let spec = Spec::Toast {
                 text: t.text.clone(),
@@ -576,23 +642,72 @@ impl Overlay {
             x += w + 6;
         }
 
-        // name tags (not in FOCO, not over the map)
+        // name tags (not in FOCO, not over the map): 80 ms in, 120 ms out
+        // once they leave their reading radius (addendum §3.1)
         if f.focus.is_none() && self.map.is_none() {
-            for (i, q, _) in project::visible_tags(&view, &hud.tags) {
-                let t = &hud.tags[i];
-                let spec = Spec::Tag {
-                    text: t.text.clone(),
-                    rgb: t.rgb,
+            let vis = project::visible_tags(&view, &hud.tags);
+            stats.tags = vis.len();
+            let shown = self.fades.update(
+                now,
+                reduced,
+                vis.iter().map(|(i, q, _)| {
+                    let t = &hud.tags[*i];
+                    (t.id, t.text.clone(), t.rgb, *q)
+                }),
+            );
+            for s in shown {
+                let tag = Spec::Tag {
+                    text: s.text,
+                    rgb: s.rgb,
                 };
-                let size = f.size(&spec);
+                let size = f.size(&tag);
+                let spec = draw::faded(tag, s.level);
                 let at = (
-                    q.x.round() as i32 - size.0 / 2,
-                    q.y.round() as i32 - size.1 - 6,
+                    s.at.x.round() as i32 - size.0 / 2,
+                    s.at.y.round() as i32 - size.1 - 6,
                 );
-                f.put(TAG_ID + (t.id & 0xf_ffff), &spec, Placer::At(at.0, at.1));
-                stats.tags += 1;
+                f.put(TAG_ID + (s.id & 0xf_ffff), &spec, Placer::At(at.0, at.1));
             }
+        } else {
+            // they fade in again afterwards
+            self.fades = andar::Fades::default();
         }
+
+        // ANDAR: the keys while carrying, the crosshair, and under
+        // everything the comfort vignette
+        if walking && carrying {
+            let spec = Spec::Bar {
+                text: HAND_HINT.into(),
+            };
+            let size = f.size(&spec);
+            let at = ((out.x as i32 - size.0) / 2, out.y as i32 - size.1 - 28);
+            stats.hand = f.put(HAND_ID, &spec, Placer::At(at.0, at.1)).2 > 0;
+        }
+        let aimed = self.forced.aimed.unwrap_or(hud.aimed);
+        self.cross.update(walking && aimed, now, reduced);
+        if walking {
+            let c = draw::CROSS_BOX;
+            let spec = Spec::Crosshair {
+                t: self.cross.step(now, reduced),
+            };
+            let at = ((out.x as i32 - c) / 2, (out.y as i32 - c) / 2);
+            f.put(CROSS_ID, &spec, Placer::Raw(at.0, at.1));
+            stats.crosshair = Some(if self.cross.aimed() { "ring" } else { "dot" });
+        }
+        let a16 = if walking {
+            andar::vignette_a16(vignette)
+        } else {
+            0
+        };
+        if a16 > 0 {
+            let spec = Spec::Vignette {
+                w: out.x.ceil() as i32,
+                h: out.y.ceil() as i32,
+                a16,
+            };
+            f.put(VIGNETTE_ID, &spec, Placer::Raw(0, 0));
+        }
+        stats.vignette = a16 as f32 / 16.0;
 
         let els = f.els;
         stats.elements = els.len();
@@ -607,8 +722,8 @@ impl Overlay {
 struct Frame<'a> {
     cache: &'a mut Cache,
     fonts: &'a mut Fonts,
-    /// the integer buffer scale
-    s: i32,
+    /// the raster scale ([`raster_scale`])
+    s: Px,
     /// logical px
     out: Vec2,
     /// FOCO: nothing may cover the window
@@ -619,22 +734,50 @@ struct Frame<'a> {
 impl Frame<'_> {
     /// The logical size `spec` draws at (rasterised once, then cached).
     fn size(&mut self, spec: &Spec) -> (i32, i32) {
-        self.cache.get(spec, self.s, self.fonts).1
+        self.cache.get(spec, self.s, self.fonts).size
     }
 
     /// Add `spec` as element `id`; returns its rect (w, h 0 when it would
     /// cover the FOCO window and was left out).
     fn put(&mut self, id: u64, spec: &Spec, at: Placer) -> (i32, i32, i32, i32) {
-        let (buf, size) = self.cache.get(spec, self.s, self.fonts);
+        let g = self.cache.get(spec, self.s, self.fonts);
+        let size = g.size;
         let pos = at.place(size, self.out);
         if let Some(r) = self.focus
             && intersects(r, (pos.0, pos.1, size.0, size.1))
         {
             return (pos.0, pos.1, 0, 0);
         }
-        self.els.push(OverlayElem { id, pos, buf });
+        self.els.push(OverlayElem {
+            id,
+            pos,
+            buf: g.buf,
+            buf_scale: g.buf_scale,
+        });
         (pos.0, pos.1, size.0, size.1)
     }
+}
+
+/// The overlay's raster scale for an output scale: the integer scale at 1×,
+/// 2× …; the scale itself when it is fractional (physical px, S16:
+/// `(scale·120).round() % 120 != 0`).
+pub fn raster_scale(scale: f64) -> Px {
+    let k = (scale * 120.0).round() as i64;
+    if k % 120 != 0 && k > 0 {
+        Px(scale as f32)
+    } else {
+        Px(scale.round().max(1.0) as f32)
+    }
+}
+
+/// How many of `text`'s chars the dialogue box draws when its wrapped
+/// lines `all` lose their first `skip` (the box shows the last
+/// [`draw::DIALOG_LINES`]): each skipped line and the space or newline it
+/// was cut at.
+pub fn drawn_chars(text: &str, all: &[String], skip: usize) -> usize {
+    let total = text.chars().count();
+    let gone: usize = all.iter().take(skip).map(|l| l.chars().count() + 1).sum();
+    total.saturating_sub(gone)
 }
 
 /// How an element's top-left is chosen.
@@ -743,7 +886,18 @@ impl Plugin for Overlay {
         if let Some(t) = self.blink_at {
             w.push(Wish::compose(Want::At(t)));
         }
+        // the crosshair's 80 ms (a short slide); the tags' fade steps
+        if self.cross.moving(now, reduced) {
+            w.push(Wish::compose(Want::Continuous));
+        }
+        if let Some(t) = self.fades.next_at(now, reduced) {
+            w.push(Wish::compose(Want::At(t)));
+        }
         w
+    }
+
+    fn submode(&self) -> Option<&'static str> {
+        Overlay::submode(self)
     }
 
     fn command(
@@ -812,14 +966,8 @@ impl Plugin for Overlay {
                 }
                 Some(Vec::new())
             }
-            "world.library" => {
-                self.toast("a biblioteca chega na fase 4", ToastKind::Info, 0, ctx.now);
-                Some(Vec::new())
-            }
-            "world.grab" | "world.nearer" | "world.farther" => {
-                self.toast("pegar a tela chega na fase 3", ToastKind::Info, 0, ctx.now);
-                Some(Vec::new())
-            }
+            // `world.library`, `grab`, `nearer`, `farther`: the World's now
+            // (S15), not toasts
             _ => {
                 self.dirty = false;
                 None
@@ -865,6 +1013,15 @@ impl Plugin for Overlay {
         }
         if let Some(p) = json.get("palette_items") {
             self.extra_items = inject::palette_items(p);
+        }
+        if let Some(v) = json.get("aimed") {
+            self.forced.aimed = v.as_bool();
+        }
+        if let Some(v) = json.get("carrying") {
+            self.forced.carrying = v.as_bool();
+        }
+        if let Some(v) = json.get("vignette") {
+            self.forced.vignette = v.as_f64().map(|a| a as f32);
         }
         Vec::new()
     }
@@ -912,13 +1069,20 @@ impl Plugin for Overlay {
             "badges": self.stats.badges,
             "tags": self.stats.tags,
             "toasts": self.toasts.len(),
-            "dialog": self.last_dialog.as_ref().map(|_| serde_json::json!({"chars": self.stats.dialog_chars})),
+            // as drawn (S16): R4's regression test waits on these
+            "dialog": self.last_dialog.as_ref().map(|_| serde_json::json!({
+                "chars": self.stats.dialog_chars,
+                "choices": self.stats.dialog_choices,
+            })),
+            "crosshair": self.stats.crosshair,
+            "vignette": self.stats.vignette,
+            "hand": self.stats.hand,
             "blips": self.blips_total,
             // never the text: the vault's phrase goes through this line
             "line": {"open": self.line_open, "chars": self.line.text.chars().count()},
             "hints": hints,
             "palette": palette,
-            "map": self.map.map(|m| serde_json::json!({"floor": m.floor, "sel": m.sel})),
+            "map": self.map.map(|m| serde_json::json!({"floor": m.floor, "sel": m.sel, "shelves": self.stats.shelves})),
         })
     }
 }

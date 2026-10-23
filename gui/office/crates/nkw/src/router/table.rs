@@ -90,6 +90,9 @@ pub const FALLBACK: &[(&str, &str, &str)] = &[
     ("world.walk", "h", "world.prev"),
     ("world.walk", "l", "world.next"),
     ("world.walk", "f", "world.hint"),
+    // a screen in hand: its width (R7's second-mode rows, the "na mão" hint)
+    ("world.walk", "-", "world.narrower"),
+    ("world.walk", "=", "world.wider"),
     ("world.walk", "esc", "world.walk_exit"),
     ("world.focus", "ctrl+]", "world.back"),
     ("world.talk", "space", "world.talk_next"),
@@ -130,6 +133,22 @@ pub const FALLBACK: &[(&str, &str, &str)] = &[
     ("world.line", "esc", "world.line_cancel"),
     ("world.line", "enter", "world.line_send"),
     ("world.line", "shift+enter", "world.line_newline"),
+    // S19: browsing a shelf (`Plugin::submode` = "library")
+    ("world.library", "h", "world.book_prev"),
+    ("world.library", "left", "world.book_prev"),
+    ("world.library", "l", "world.book_next"),
+    ("world.library", "right", "world.book_next"),
+    ("world.library", "j", "world.shelf_down"),
+    ("world.library", "down", "world.shelf_down"),
+    ("world.library", "k", "world.shelf_up"),
+    ("world.library", "up", "world.shelf_up"),
+    ("world.library", "enter", "world.book_open"),
+    ("world.library", "backspace", "world.shelf_back"),
+    ("world.library", "/", "world.library_search"),
+    ("world.library", "e", "world.book_edit"),
+    ("world.library", "p", "world.book_preview"),
+    ("world.library", "y", "world.book_copy_path"),
+    ("world.library", "esc", "world.library_leave"),
 ];
 
 /// (command, pt-BR title), in the table's order; also the palette-only
@@ -158,7 +177,7 @@ pub const TITLES: &[(&str, &str)] = &[
     ("world.hint", "SALTO"),
     ("world.hint_focus", "SALTO direto para o FOCO"),
     ("world.overview", "mapa"),
-    ("world.library", "biblioteca (fase 4: toast)"),
+    ("world.library", "biblioteca"),
     ("world.move_left", "tela para a mesa à esquerda"),
     ("world.move_right", "tela para a mesa à direita"),
     ("world.consume", "junta na pilha à esquerda"),
@@ -200,9 +219,9 @@ pub const TITLES: &[(&str, &str)] = &[
     ("world.look_down", "olhar"),
     ("world.recenter", "horizonte"),
     ("world.interact", "usar o que está na mira"),
-    ("world.grab", "pegar/soltar a tela (fase 3: toast)"),
-    ("world.nearer", "tela na mão (fase 3: toast)"),
-    ("world.farther", "tela na mão (fase 3: toast)"),
+    ("world.grab", "pegar/soltar a tela"),
+    ("world.nearer", "tela na mão: mais perto"),
+    ("world.farther", "tela na mão: mais longe"),
     ("world.adjust_down", "ajustar o objeto na mira"),
     ("world.adjust_up", "ajustar o objeto na mira"),
     ("world.prev", "anterior/próximo no objeto na mira"),
@@ -237,6 +256,19 @@ pub const TITLES: &[(&str, &str)] = &[
     ("world.line_cancel", "linha"),
     ("world.line_send", "linha"),
     ("world.line_newline", "linha"),
+    ("world.book_prev", "livro anterior"),
+    ("world.book_next", "próximo livro"),
+    ("world.shelf_down", "prateleira de baixo"),
+    ("world.shelf_up", "prateleira de cima"),
+    ("world.book_open", "abre o livro ou entra na pasta"),
+    ("world.shelf_back", "sobe um nível"),
+    ("world.library_search", "busca na estante"),
+    ("world.book_edit", "abre no editor"),
+    ("world.book_preview", "prévia no atril"),
+    ("world.book_copy_path", "copia o caminho"),
+    ("world.library_leave", "sai da estante"),
+    ("world.open", "abre um arquivo no mundo"),
+    ("world.vault_lock", "tranca o cofre"),
 ];
 
 /// (command, arg, prompt): the arguments the palette asks, in order.
@@ -245,6 +277,8 @@ pub const ARGS: &[(&str, &str, &str)] = &[
     ("world.room_new", "name", "nome da sala"),
     ("world.goto_room", "room", "qual sala?"),
     ("world.goto_object", "name", "qual objeto?"),
+    ("world.open", "path", "qual arquivo?"),
+    ("world.library_search", "q", "buscar o quê?"),
 ];
 
 /// Where a command is listed in COMANDOS: NAV's and the global ones and the

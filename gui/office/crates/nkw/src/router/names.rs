@@ -82,10 +82,14 @@ pub fn is_global(key: &str) -> bool {
 }
 
 /// The keymap mode the router resolves keys in, for this world mode and
-/// overlay sub-view (`sub`: `Some("map")` while the map is open).
+/// plugin sub-mode (`Plugin::submode`: `Some("map")` while the map is open,
+/// `Some("library")` while a shelf is browsed; the library only counts
+/// with no overlay mode on, FOCO/CONVERSA/SALTO/COMANDOS win).
 pub fn mode_of(mode: &Mode, sub: Option<&str>) -> &'static str {
-    if sub == Some("map") {
-        return "world.map";
+    match sub {
+        Some("map") => return "world.map",
+        Some("library") if mode.overlay.is_none() => return "world.library",
+        _ => {}
     }
     match (mode.kind(), mode.base) {
         (Some(Kind::Focus(_)), _) => "world.focus",
@@ -98,8 +102,17 @@ pub fn mode_of(mode: &Mode, sub: Option<&str>) -> &'static str {
     }
 }
 
+/// The sub-mode a keymap mode comes from (for the dump).
+pub fn submode_of(keymap_mode: &str) -> Option<&'static str> {
+    match keymap_mode {
+        "world.map" => Some("map"),
+        "world.library" => Some("library"),
+        _ => None,
+    }
+}
+
 /// The world modes the router knows.
-pub const MODES: [&str; 8] = [
+pub const MODES: [&str; 9] = [
     "normal.world",
     "world.walk",
     "world.focus",
@@ -108,6 +121,7 @@ pub const MODES: [&str; 8] = [
     "world.palette",
     "world.line",
     "world.map",
+    "world.library",
 ];
 
 /// Modes whose printable keys are text.
@@ -121,10 +135,12 @@ pub fn is_text_mode(mode: &str) -> bool {
 /// The resolution order of a mode (§3.12, S9): `world` first everywhere;
 /// NAV falls to `normal` then `*`; ANDAR to `*`; FOCO has no fallback;
 /// CONVERSA falls to `normal` (the caller keeps only core commands from
-/// there); the text modes and the map are only themselves.
+/// there); the library falls to NAV's chain; the text modes and the map are
+/// only themselves.
 pub fn chain(mode: &str) -> Vec<String> {
     let c: &[&str] = match mode {
         "normal.world" => &["world", "normal.world", "normal", "*"],
+        "world.library" => &["world", "world.library", "normal.world", "normal", "*"],
         "world.walk" => &["world", "world.walk", "*"],
         "world.talk" => &["world", "world.talk", "normal"],
         "world" => &["world"],
@@ -264,6 +280,20 @@ mod tests {
             ["world", "normal.world", "normal", "*"]
         );
         assert_eq!(chain("world.walk"), ["world", "world.walk", "*"]);
+        assert_eq!(
+            chain("world.library"),
+            ["world", "world.library", "normal.world", "normal", "*"]
+        );
+        assert_eq!(mode_of(&nav, Some("library")), "world.library");
+        assert_eq!(
+            mode_of(&Mode::base(Base::Walk), Some("library")),
+            "world.library"
+        );
+        assert_eq!(mode_of(&nav, Some("other")), "normal.world");
+        assert_eq!(submode_of("world.library"), Some("library"));
+        assert_eq!(submode_of("world.map"), Some("map"));
+        assert_eq!(submode_of("world.walk"), None);
+        assert!(!is_text_mode("world.library"));
         assert_eq!(chain("world.focus"), ["world", "world.focus"]);
         assert_eq!(chain("world.talk"), ["world", "world.talk", "normal"]);
         assert_eq!(chain("world.hint"), ["world", "world.hint"]);

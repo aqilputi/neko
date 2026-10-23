@@ -3,9 +3,9 @@
 //! consults (`submode() == Some("map")`). `h/j/k/l` move a highlight over
 //! the desks (or the rooms), `enter` goes there, `esc` closes.
 
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 use nkw_core::layout::{CHAIR_FROM_WALL, DESK_DEPTH, DESK_FROM_WALL, SCREEN_FROM_WALL};
-use nkw_core::strip::{self, Side};
+use nkw_core::strip::{self, RoomSlot, Side};
 use nkw_core::{Dir, Pose, layout};
 
 use super::draw::{MapBox, MapKind, Spec};
@@ -32,6 +32,12 @@ pub struct Target {
 
 /// The sheet and its targets for an output of `size` logical px.
 pub fn layout(world: &World, floor: bool, size: Vec2) -> (Spec, Vec<Target>) {
+    layout_with(world, floor, size, &[])
+}
+
+/// The same, with the library's books (`Pick::Book` targets' points): the room
+/// sheet draws the shelves they stand on as thin boxes along the walls.
+pub fn layout_with(world: &World, floor: bool, size: Vec2, books: &[Vec3]) -> (Spec, Vec<Target>) {
     let (w, h) = (size.x as i32, size.y as i32);
     let mut boxes = Vec::new();
     let mut targets = Vec::new();
@@ -43,6 +49,7 @@ pub fn layout(world: &World, floor: bool, size: Vec2) -> (Spec, Vec<Target>) {
         let r = world.current_room();
         title = format!("mapa — {}", world.rooms[r].name);
         room_sheet(world, r, size, &mut boxes, &mut targets);
+        shelves(world, r, size, books, &mut boxes);
     }
     let help = if floor {
         "h j k l escolhe · enter vai · o a sala · esc volta"
@@ -87,11 +94,8 @@ fn room_sheet(
     targets: &mut Vec<Target>,
 ) {
     let slot = world.slots()[r];
-    let (mx, top, bottom) = (80.0, 90.0, 90.0);
-    let k = ((size.x - 2.0 * mx) / slot.len).min((size.y - top - bottom) / ROOM_DEPTH);
+    let (x0, y0, k) = room_px(&slot, size);
     let rw = slot.len * k;
-    let x0 = (size.x - rw) / 2.0;
-    let y0 = top;
     let px = |v: f32| v.round() as i32;
     boxes.push(MapBox {
         x: px(x0),
@@ -167,6 +171,75 @@ fn room_sheet(
             ),
             go,
             label: label_of(world, r, d),
+        });
+    }
+}
+
+/// The room sheet's frame: its top-left (logical px) and px per metre.
+fn room_px(slot: &RoomSlot, size: Vec2) -> (f32, f32, f32) {
+    let (mx, top, bottom) = (80.0, 90.0, 90.0);
+    let k = ((size.x - 2.0 * mx) / slot.len).min((size.y - top - bottom) / ROOM_DEPTH);
+    ((size.x - slot.len * k) / 2.0, top, k)
+}
+
+/// A world point in a room's local frame: x along the back wall from its
+/// left end, z out from the back wall (`layout::to_world`'s inverse).
+pub fn to_local(slot: &RoomSlot, p: Vec3) -> Vec2 {
+    let f = layout::room_frame(slot);
+    let pose = Pose::new(Vec3::ZERO, f.yaw, 0.0);
+    let d = p - f.origin;
+    Vec2::new(d.dot(pose.right()), -d.dot(pose.forward()))
+}
+
+/// How deep a shelf is drawn on the map, metres.
+const SHELF_DEPTH: f32 = 0.3;
+/// Off the room's outline, logical px.
+const INSET: f32 = 3.0;
+
+/// The shelves of room `r` from the books on them: each book goes to its
+/// nearest wall (back, left, right); a wall's books make one thin box
+/// spanning them.
+fn shelves(world: &World, r: usize, size: Vec2, books: &[Vec3], boxes: &mut Vec<MapBox>) {
+    let slot = world.slots()[r];
+    let (x0, y0, k) = room_px(&slot, size);
+    // per wall: (min, max) along it
+    let mut walls: [Option<(f32, f32)>; 3] = [None; 3];
+    for p in books {
+        let l = to_local(&slot, *p);
+        if l.x < -0.05 || l.x > slot.len + 0.05 || l.y < -0.05 || l.y > ROOM_DEPTH + 0.05 {
+            continue;
+        }
+        let d = [l.y, l.x, slot.len - l.x];
+        let (wall, along) = match (0..3).min_by(|a, b| d[*a].total_cmp(&d[*b])) {
+            Some(0) | None => (0, l.x),
+            Some(w) => (w, l.y),
+        };
+        let e = walls[wall].get_or_insert((along, along));
+        e.0 = e.0.min(along);
+        e.1 = e.1.max(along);
+    }
+    let px = |v: f32| v.round() as i32;
+    let pad = 0.15;
+    for (wall, span) in walls.iter().enumerate() {
+        let Some((a, b)) = *span else { continue };
+        let (a, b) = (a - pad, b + pad);
+        let (x, y, w, h) = match wall {
+            0 => (x0 + a * k, y0 + INSET, (b - a) * k, SHELF_DEPTH * k),
+            1 => (x0 + INSET, y0 + a * k, SHELF_DEPTH * k, (b - a) * k),
+            _ => (
+                x0 + (slot.len - SHELF_DEPTH) * k - INSET,
+                y0 + a * k,
+                SHELF_DEPTH * k,
+                (b - a) * k,
+            ),
+        };
+        boxes.push(MapBox {
+            x: px(x),
+            y: px(y),
+            w: px(w).max(3),
+            h: px(h).max(3),
+            kind: MapKind::Shelf,
+            label: String::new(),
         });
     }
 }
@@ -334,6 +407,58 @@ mod tests {
                 w.desk_pose(w.rooms[0].id, t.iter().position(|y| y == x).unwrap())
             );
         }
+    }
+
+    /// Books against the back and the left wall → two thin shelf boxes
+    /// there; a book outside the room is not drawn; no books, no shelves.
+    #[test]
+    fn library_shelves_from_books() {
+        let w = world();
+        let size = Vec2::new(1280.0, 720.0);
+        let slot = w.slots()[w.current_room()];
+        let at = |x: f32, z: f32| layout::to_world(&slot, Vec3::new(x, 1.0, z));
+        for (x, z) in [(1.0, 0.1), (2.5, 0.1), (3.0, 0.15)] {
+            let l = to_local(&slot, at(x, z));
+            assert!((l.x - x).abs() < 1e-4 && (l.y - z).abs() < 1e-4, "{l}");
+        }
+        let books = [
+            at(1.0, 0.1),
+            at(2.0, 0.12),
+            at(3.0, 0.1),
+            at(0.1, 2.0),
+            at(0.12, 3.0),
+            at(slot.len + 5.0, 1.0),
+        ];
+        let shelf = |b: &[Vec3]| -> Vec<MapBox> {
+            let Spec::Map { boxes, .. } = layout_with(&w, false, size, b).0 else {
+                panic!()
+            };
+            boxes
+                .into_iter()
+                .filter(|b| b.kind == MapKind::Shelf)
+                .collect()
+        };
+        let s = shelf(&books);
+        assert_eq!(s.len(), 2, "{s:?}");
+        let (x0, y0, k) = room_px(&slot, size);
+        let back = &s[0];
+        assert_eq!(back.y, (y0 + INSET).round() as i32, "against the back wall");
+        assert!(back.w > back.h, "along it");
+        assert_eq!(back.x, (x0 + 0.85 * k).round() as i32);
+        assert_eq!(back.w, ((2.3) * k).round() as i32);
+        let left = &s[1];
+        assert_eq!(left.x, (x0 + INSET).round() as i32);
+        assert!(left.h > left.w);
+        assert!(shelf(&[]).is_empty());
+        // the floor sheet has no shelves; the targets do not change
+        let Spec::Map { boxes, .. } = layout_with(&w, true, size, &books).0 else {
+            panic!()
+        };
+        assert!(boxes.iter().all(|b| b.kind != MapKind::Shelf));
+        assert_eq!(
+            layout_with(&w, false, size, &books).1,
+            layout(&w, false, size).1
+        );
     }
 
     #[test]

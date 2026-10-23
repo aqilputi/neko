@@ -52,6 +52,8 @@ pub enum Choice {
     /// a confirmation: "Sim" / "Não"
     Yes,
     No,
+    /// "Ver o cofre" (the librarian)
+    SeeVault,
 }
 
 impl Choice {
@@ -74,6 +76,7 @@ impl Choice {
             Choice::Ok => "Ok".into(),
             Choice::Yes => "Sim".into(),
             Choice::No => "Não".into(),
+            Choice::SeeVault => "Ver o cofre".into(),
         }
     }
 }
@@ -91,6 +94,8 @@ pub enum Who {
     Confirm(String, String),
     /// the receptionist, nothing to bring
     Receptionist,
+    /// the librarian, outside the vault's own conversation
+    Librarian,
     /// a session that left during the conversation (its label)
     Gone(String),
 }
@@ -108,6 +113,7 @@ pub enum Row {
     Postman,
     Confirm,
     Receptionist,
+    Librarian,
     Gone,
 }
 
@@ -168,6 +174,11 @@ pub fn opening(who: &Who) -> (Row, String, Vec<Choice>) {
             Row::Receptionist,
             "Olá! Os avisos e as confirmações passam por mim.".into(),
             vec![Choice::Ok],
+        ),
+        Who::Librarian => (
+            Row::Librarian,
+            "A biblioteca é sua. O cofre, só com a frase.".into(),
+            vec![Choice::SeeVault],
         ),
         Who::Gone(label) => (Row::Gone, format!("{label} foi embora."), Vec::new()),
         Who::Session(s) => {
@@ -281,6 +292,9 @@ pub enum Step {
     Open(String),
     /// glide to a session's desk (the postman's recipient), then end
     GoTo(String),
+    /// end the conversation, then run a command by name (the vault's
+    /// stand, `world.goto_object {name}`)
+    Command(String, Vec<(String, String)>),
     /// end the conversation (`Action::Back`)
     End,
 }
@@ -319,6 +333,10 @@ pub fn on_choice(who: &Who, c: &Choice, pending: Option<&str>) -> Step {
             }),
             None => Step::End,
         },
+        Choice::SeeVault => Step::Command(
+            "world.goto_object".into(),
+            vec![("name".into(), "cofre".into())],
+        ),
         Choice::Later | Choice::Back | Choice::Ok => Step::End,
     }
 }
@@ -516,6 +534,12 @@ mod tests {
                 vec!["Ok"],
             ),
             (
+                Who::Librarian,
+                Row::Librarian,
+                "A biblioteca é sua. O cofre, só com a frase.",
+                vec!["Ver o cofre"],
+            ),
+            (
                 Who::Gone("bravo".into()),
                 Row::Gone,
                 "bravo foi embora.",
@@ -633,6 +657,14 @@ mod tests {
             (Choice::Later, None, Step::End),
             (Choice::Back, None, Step::End),
             (Choice::Ok, None, Step::End),
+            (
+                Choice::SeeVault,
+                None,
+                Step::Command(
+                    "world.goto_object".into(),
+                    vec![("name".into(), "cofre".into())],
+                ),
+            ),
         ];
         for (c, pending, want) in rows {
             assert_eq!(on_choice(&gw, &c, pending), want, "{c:?}");

@@ -187,7 +187,14 @@ impl Nkw {
         // the world's display only: no X11 fallback to the host (no xwayland yet)
         c.args(rest)
             .env("WAYLAND_DISPLAY", &self.socket)
-            .env_remove("DISPLAY");
+            .env_remove("DISPLAY")
+            .env_remove("XDG_ACTIVATION_TOKEN");
+        // a fresh xdg-activation token: the child's first window may take
+        // the focus (launchers, `world.open`); `request_activation` checks it
+        if let Some(a) = self.ext.wm.activation.as_mut() {
+            let (token, _) = a.create_external_token(None);
+            c.env("XDG_ACTIVATION_TOKEN", token.as_str());
+        }
         // SAFETY: the closure only calls async-signal-safe functions.
         unsafe {
             std::os::unix::process::CommandExt::pre_exec(&mut c, || {
@@ -274,7 +281,16 @@ impl Nkw {
                     self.poll_window_wait();
                     return;
                 }
+                Cmd::Pointer(dx, dy) => {
+                    self.stats.inject("pointer");
+                    self.process_input(crate::backend::script_input::motion(dx, dy));
+                }
+                Cmd::Button(b, down) => {
+                    self.stats.inject("button");
+                    self.process_input(crate::backend::script_input::button(b.code(), down));
+                }
                 Cmd::Shot(p) => {
+                    self.before_shot();
                     self.script.as_mut().unwrap().wait = Wait::Settle;
                     self.shot_when_settled(p);
                     return;
@@ -343,6 +359,26 @@ impl Nkw {
         }
     }
 
+    /// A shot never shows what only the user may see: the objects lock the
+    /// vault (`{"Shot":true}`), the pointer is released.
+    pub fn before_shot(&mut self) {
+        self.inject_into("objects", &serde_json::json!({"Shot": true}));
+        self.set_pointer_lock(false);
+    }
+
+    /// `inject <plugin> <json>` from the hub itself (the shot, focus loss).
+    pub fn inject_into(&mut self, plugin: &str, json: &serde_json::Value) {
+        let now = self.now();
+        let reqs = {
+            let ctx = crate::hook_ctx!(self, now);
+            crate::ext::inject(&mut self.ext.plugins(), plugin, json, &ctx)
+        };
+        if let Ok(r) = reqs {
+            self.apply_reqs(r);
+            self.wake();
+        }
+    }
+
     fn script_fail(&mut self, no: usize, msg: &str) {
         eprintln!("nkw: script line {no}: {msg}");
         self.quit(exit::EXPECT);
@@ -352,6 +388,7 @@ impl Nkw {
     /// `--seconds` keeps the world up (no script: winit keeps running).
     fn finish(&mut self) {
         if let Some(p) = self.cli.shot.take() {
+            self.before_shot();
             self.script = Some(Script {
                 lines: vec![Line {
                     no: 0,
@@ -663,6 +700,10 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
         },
         intercepted: HashSet::new(),
         stats: Stats::from_env(std::env::var("NKW_STATS").ok().as_deref())
+            .with_warmup(
+                std::env::var("NKW_STATS_WARMUP_MS").ok().as_deref(),
+                crate::stats::mono_s(),
+            )
             .with_mem(std::env::var_os("NKW_MEM").is_some_and(|v| v == "1")),
         exit: None,
         shots: Vec::new(),
@@ -673,9 +714,16 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
         ext: Ext::new(&cli),
         pids: Default::default(),
         visible: Vec::new(),
+        pointer_locked: false,
+        hud_hash: None,
+        hud_busy: false,
         cli: cli.clone(),
     };
     st.visible = st.world.visible_rooms(&[]);
+    // `[walk]`/`[camera]` of world.toml (S15); `--mouse-look` wins
+    let mut walk = st.ext.wm.config().walk;
+    walk.mouse_look = cli.mouse_look_or(walk.mouse_look);
+    st.world.set_walk_config(walk);
 
     // the plugins' wakeups: their threads ping the loop
     let (ping, ping_source) =
@@ -736,7 +784,12 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
                 st.after_frame();
             }
             WinitEvent::CloseRequested => st.quit(exit::OK),
-            WinitEvent::Focus(_) => {}
+            WinitEvent::Focus(false) => {
+                // the host took the keyboard: lock the vault, free the pointer
+                st.inject_into("objects", &serde_json::json!({"FocusLost": true}));
+                st.set_pointer_lock(false);
+            }
+            WinitEvent::Focus(true) => st.sync_pointer_lock(),
         })
         .map_err(|e| (exit::GL, format!("winit source: {e}")))?;
     }
@@ -805,6 +858,7 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
         })
         .map_err(|e| (exit::SOCKET, format!("event loop: {e}")))?;
 
+    st.set_pointer_lock(false);
     st.stats.print_summary();
     for p in st.ext.plugins() {
         let t = Instant::now();

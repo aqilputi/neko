@@ -25,3 +25,9 @@ inherits = "release"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Smithay's winit backend never emits `InputEvent::PointerMotion` at rev 24647fc8 (ANDAR's mouse-look needs
+# it). The fork is that rev plus patches/smithay-winit-relative-pointer.patch (scripts/smithay-fork.sh rebuilds
+# it); the nkw manifest keeps the upstream rev and only this section points at the fork, until upstream has it.
+[patch."https://github.com/Smithay/smithay.git"]
+smithay = { git = "https://github.com/aqilputi/smithay.git", rev = "ed6639e8fcd91d09b44598538b2bd13397a0b906" }

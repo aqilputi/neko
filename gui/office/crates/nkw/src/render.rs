@@ -112,10 +112,15 @@ pub fn layers(w: &World, fading: bool) -> Vec<Layer> {
     if fading {
         l.push(Layer::Fade);
     }
-    match w.focus_2d_target().map(|(t, _)| t) {
-        Some(Target::Screen(id)) => l.extend([Layer::Focus(id), Layer::Dim]),
-        Some(Target::CatTerm(c)) => l.extend([Layer::FocusCat(c), Layer::Dim]),
-        None => {}
+    if let Some(t) = w.focus_2d_target().map(|(t, _)| t) {
+        l.push(match t {
+            Target::Screen(id) => Layer::Focus(id),
+            Target::CatTerm(c) => Layer::FocusCat(c),
+        });
+        // a fullscreen FOCO covers the output: nothing to darken
+        if !w.covers_output(t) {
+            l.push(Layer::Dim);
+        }
     }
     l.push(Layer::World);
     l
@@ -302,6 +307,19 @@ pub(crate) mod tests {
                 Layer::Dim,
                 Layer::World
             ]
+        );
+    }
+
+    #[test]
+    fn no_dim_under_a_fullscreen_focus() {
+        let mut w = world(&[&[1]]);
+        w.set_fullscreen(ScreenId(1), true, 0.0);
+        w.command(Cmd::Focus, 0.0);
+        w.tick(1e9);
+        assert!(w.covers_output(Target::Screen(ScreenId(1))));
+        assert_eq!(
+            layers(&w, false),
+            [Layer::Hud, Layer::Focus(ScreenId(1)), Layer::World]
         );
     }
 

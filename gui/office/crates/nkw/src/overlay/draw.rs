@@ -1,7 +1,8 @@
 //! The overlay's rasters (§5.4): every 2D piece is a [`Spec`] (plain data,
 //! hashed for the cache) turned into premultiplied RGBA with `nk-cats`'
 //! fontdue text and anti-aliased rounded boxes. Sizes are logical px times
-//! the integer buffer scale `s`. Pure CPU, no Smithay.
+//! the raster scale `s` ([`Px`]: integer, or the output's fractional scale
+//! so the text is drawn at physical px). Pure CPU, no Smithay.
 
 use std::collections::HashMap;
 
@@ -23,6 +24,7 @@ pub const MAP_ROOM: Rgb = [0xfb, 0xf6, 0xea];
 pub const MAP_DESK: Rgb = [0xc9, 0xa2, 0x7c];
 pub const MAP_CAT: Rgb = [0xf0, 0xa8, 0x5a];
 pub const MAP_SCREEN: Rgb = [0x7f, 0xa8, 0xc9];
+pub const MAP_SHELF: Rgb = [0x9c, 0x6b, 0x45];
 pub const RING: Rgb = [0xff, 0x9f, 0x43];
 
 /// Font sizes, logical px.
@@ -32,6 +34,44 @@ pub const PX_DIALOG: u32 = 20;
 
 /// The dialogue box's text lines.
 pub const DIALOG_LINES: usize = 3;
+
+/// The raster scale: buffer px per logical px. Integer at 1× and 2× (the
+/// buffer carries that scale), the output's own at fractional scales (the
+/// overlay rasters at physical px, `OverlayElem.buf_scale`), ¼ for the
+/// vignette (smooth: the compositor upsamples it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Px(pub f32);
+
+impl Px {
+    /// `n` logical px in buffer px.
+    pub fn p(self, n: i32) -> i32 {
+        (n as f32 * self.0).round() as i32
+    }
+
+    /// A font size in buffer px (`round(px·scale)`).
+    pub fn font(self, px: u32) -> u32 {
+        (px as f32 * self.0).round().max(1.0) as u32
+    }
+
+    /// The cache's key for it (two scales that round to the same 1/120
+    /// are the same raster).
+    pub fn key(self) -> i32 {
+        (self.0 * 120.0).round() as i32
+    }
+}
+
+/// The crosshair's box, logical px (the dot/ring is centred in it).
+pub const CROSS_BOX: i32 = 20;
+/// Dot → ring in this many raster steps (80 ms).
+pub const CROSS_STEPS: u8 = 4;
+/// The ring's radius and stroke, the dot's diameter, logical px.
+pub const RING_R: f32 = 6.0;
+pub const RING_W: f32 = 2.0;
+pub const DOT_D: f32 = 5.0;
+/// The vignette's raster scale and its darkest alpha at the corners.
+pub const VIGNETTE_SCALE: f32 = 0.25;
+pub const VIGNETTE_MAX: f32 = 0.7;
+pub const VIGNETTE_INK: Rgb = [0x1c, 0x12, 0x0b];
 
 /// A raster: size in buffer px and premultiplied RGBA.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +138,8 @@ pub enum MapKind {
     Desk,
     Screen,
     Cat,
+    /// a library shelf against a wall
+    Shelf,
 }
 
 /// What to rasterise. Equal specs give equal pixels (the cache's key).
@@ -143,6 +185,41 @@ pub enum Spec {
     },
     /// the map's highlight ring
     Ring { w: i32, h: i32 },
+    /// ANDAR's crosshair: `t` = 0 the dot … [`CROSS_STEPS`] the ring
+    Crosshair { t: u8 },
+    /// the comfort vignette over the whole output (logical px), alpha in
+    /// sixteenths (1..=16)
+    Vignette { w: i32, h: i32, a16: u8 },
+    /// a cream hint bar (the "na mão" keys)
+    Bar { text: String },
+    /// `of` at `level`/[`FADE_STEPS`] opacity (tags fading in and out)
+    Faded { level: u8, of: Box<Spec> },
+}
+
+/// A fade is drawn in this many opacity steps (rasters cached per step).
+pub const FADE_STEPS: u8 = 4;
+
+/// `spec` at `level` of [`FADE_STEPS`]: itself when opaque.
+pub fn faded(spec: Spec, level: u8) -> Spec {
+    if level >= FADE_STEPS {
+        spec
+    } else {
+        Spec::Faded {
+            level,
+            of: Box::new(spec),
+        }
+    }
+}
+
+impl Spec {
+    /// The raster scale this spec draws at, given the output's.
+    pub fn scale(&self, s: Px) -> Px {
+        match self {
+            Spec::Vignette { .. } => Px(VIGNETTE_SCALE),
+            Spec::Faded { of, .. } => of.scale(s),
+            _ => s,
+        }
+    }
 }
 
 /// The text colour that reads on `bg` (contrast ≥ 4.5:1 for the palette).
@@ -206,7 +283,7 @@ fn done(c: Canvas) -> Raster {
 #[allow(clippy::too_many_arguments)]
 fn pill(
     fonts: &mut Fonts,
-    s: i32,
+    s: Px,
     text: &str,
     px: u32,
     bg: Rgb,
@@ -214,18 +291,17 @@ fn pill(
     pad: (i32, i32),
     r: i32,
 ) -> Raster {
-    let face = fonts.face(px * s as u32);
+    let face = fonts.face(s.font(px));
     let tw = Canvas::text_width(face, text);
-    let (w, h) = (tw + 2 * pad.0 * s, face.ch as i32 + 2 * pad.1 * s);
+    let (w, h) = (tw + 2 * s.p(pad.0), face.ch as i32 + 2 * s.p(pad.1));
     let mut c = Canvas::transparent(w.max(1) as usize, h.max(1) as usize);
-    c.rounded_rect(0, 0, w, h, r * s, bg);
-    c.text_px(face, pad.0 * s, pad.1 * s, text, fg, false);
+    c.rounded_rect(0, 0, w, h, s.p(r), bg);
+    c.text_px(face, s.p(pad.0), s.p(pad.1), text, fg, false);
     done(c)
 }
 
 /// Rasterise `spec` at integer scale `s`.
-pub fn raster(spec: &Spec, fonts: &mut Fonts, s: i32) -> Raster {
-    let s = s.max(1);
+pub fn raster(spec: &Spec, fonts: &mut Fonts, s: Px) -> Raster {
     match spec {
         Spec::Label { text } => pill(fonts, s, text, PX_UI, CREAM, INK, (10, 4), 6),
         Spec::Chip { text, bg, fg } => pill(fonts, s, text, PX_SMALL, *bg, *fg, (8, 3), 10),
@@ -239,16 +315,16 @@ pub fn raster(spec: &Spec, fonts: &mut Fonts, s: i32) -> Raster {
             pill(fonts, s, &ellipsize(text, 60), PX_UI, bg, fg, (14, 8), 14)
         }
         Spec::Hint { label, typed } => {
-            let face = fonts.face(PX_UI * s as u32);
+            let face = fonts.face(s.font(PX_UI));
             let tw = Canvas::text_width(face, label);
-            let (w, h) = (tw + 8 * s, face.ch as i32 + 2 * s);
+            let (w, h) = (tw + s.p(8), face.ch as i32 + s.p(2));
             let mut c = Canvas::transparent(w as usize, h as usize);
-            c.rounded_rect(0, 0, w, h, 5 * s, INK);
-            c.rounded_rect(s, s, w - 2 * s, h - 2 * s, 4 * s, HINT_BG);
-            let mut x = 4 * s;
+            c.rounded_rect(0, 0, w, h, s.p(5), INK);
+            c.rounded_rect(s.p(1), s.p(1), w - s.p(2), h - s.p(2), s.p(4), HINT_BG);
+            let mut x = s.p(4);
             for (i, ch) in label.chars().enumerate() {
                 let fg = if i < *typed { HINT_TYPED } else { INK };
-                x += c.text_px(face, x, s, &ch.to_string(), fg, true);
+                x += c.text_px(face, x, s.p(1), &ch.to_string(), fg, true);
             }
             done(c)
         }
@@ -261,23 +337,23 @@ pub fn raster(spec: &Spec, fonts: &mut Fonts, s: i32) -> Raster {
             line,
         } => dialog(fonts, s, *width, name, *rgb, lines, *arrow, line.as_ref()),
         Spec::Choices { items, selected } => {
-            let face = fonts.face(PX_DIALOG * s as u32);
+            let face = fonts.face(s.font(PX_DIALOG));
             let (cw, ch) = (face.cw as i32, face.ch as i32);
             let cols = items
                 .iter()
                 .map(|i| i.chars().count() + 4)
                 .max()
                 .unwrap_or(4) as i32;
-            let (pad, row) = (14 * s, ch + 6 * s);
+            let (pad, row) = (s.p(14), ch + s.p(6));
             let w = cols * cw + 2 * pad;
-            let h = items.len() as i32 * row + 2 * pad - 6 * s;
+            let h = items.len() as i32 * row + 2 * pad - s.p(6);
             let mut c = Canvas::transparent(w.max(1) as usize, h.max(1) as usize);
-            c.rounded_rect(0, 0, w, h, 18 * s, CREAM);
+            c.rounded_rect(0, 0, w, h, s.p(18), CREAM);
             for (i, it) in items.iter().enumerate() {
                 let y = pad + i as i32 * row;
                 let sel = i == *selected;
                 if sel {
-                    c.rounded_rect(pad / 2, y - 2 * s, w - pad, ch + 4 * s, 8 * s, SELECT);
+                    c.rounded_rect(pad / 2, y - s.p(2), w - pad, ch + s.p(4), s.p(8), SELECT);
                 }
                 let mark = if sel { "▶" } else { " " };
                 let txt = format!("{mark} {} {it}", i + 1);
@@ -310,11 +386,11 @@ pub fn raster(spec: &Spec, fonts: &mut Fonts, s: i32) -> Raster {
             boxes,
         } => map(fonts, s, *w, *h, title, help, boxes),
         Spec::Ring { w, h } => {
-            let (w, h) = (w * s, h * s);
+            let (w, h) = (s.p(*w), s.p(*h));
             let mut c = Canvas::transparent(w.max(1) as usize, h.max(1) as usize);
-            c.rounded_rect(0, 0, w, h, 8 * s, RING);
+            c.rounded_rect(0, 0, w, h, s.p(8), RING);
             // hollow it: clear the inside
-            let t = 3 * s;
+            let t = s.p(3);
             for y in t..(h - t).max(t) {
                 for x in t..(w - t).max(t) {
                     let i = ((y * w + x) * 4) as usize;
@@ -323,13 +399,46 @@ pub fn raster(spec: &Spec, fonts: &mut Fonts, s: i32) -> Raster {
             }
             done(c)
         }
+        Spec::Crosshair { t } => {
+            let side = s.p(CROSS_BOX).max(1);
+            let k = (*t).min(CROSS_STEPS) as f32 / CROSS_STEPS as f32;
+            let r = RING_R * k * s.0;
+            let w = (DOT_D + (RING_W - DOT_D) * k) * s.0;
+            let mut c = Canvas::transparent(side as usize, side as usize);
+            let m = side as f32 / 2.0;
+            // an ink halo so it reads on cream walls and on dark screens
+            c.ring(m, m, r, w + 2.0 * s.0, INK);
+            c.ring(m, m, r, w, CREAM);
+            done(c)
+        }
+        Spec::Vignette { w, h, a16 } => {
+            let (bw, bh) = (
+                (*w as f32 * s.0).ceil().max(1.0) as usize,
+                (*h as f32 * s.0).ceil().max(1.0) as usize,
+            );
+            let mut c = Canvas::transparent(bw, bh);
+            let a = (*a16).min(16) as f32 / 16.0 * VIGNETTE_MAX * 255.0;
+            c.radial_alpha(VIGNETTE_INK, a.round() as u8, 0.55, 1.35);
+            done(c)
+        }
+        Spec::Bar { text } => pill(fonts, s, text, PX_UI, CREAM, INK, (14, 8), 14),
+        Spec::Faded { level, of } => {
+            let mut r = raster(of, fonts, s);
+            // premultiplied: opacity scales every channel alike
+            let k = (*level).min(FADE_STEPS) as u32;
+            let n = FADE_STEPS as u32;
+            for v in &mut r.px {
+                *v = ((*v as u32 * k + n / 2) / n) as u8;
+            }
+            r
+        }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn dialog(
     fonts: &mut Fonts,
-    s: i32,
+    s: Px,
     width: i32,
     name: &str,
     rgb: Rgb,
@@ -338,33 +447,33 @@ fn dialog(
     line: Option<&(String, usize)>,
 ) -> Raster {
     let (pcw, pch) = {
-        let f = fonts.face(PX_UI * s as u32);
+        let f = fonts.face(s.font(PX_UI));
         (f.cw as i32, f.ch as i32)
     };
-    let face = fonts.face(PX_DIALOG * s as u32);
+    let face = fonts.face(s.font(PX_DIALOG));
     let (ch, cw) = (face.ch as i32, face.cw as i32);
-    let plate_h = pch + 10 * s;
+    let plate_h = pch + s.p(10);
     let over = plate_h / 2;
-    let pad = 24 * s;
+    let pad = s.p(24);
     let rows = DIALOG_LINES as i32 + i32::from(line.is_some());
-    let w = width * s;
+    let w = s.p(width);
     let bh = rows * ch + 2 * pad;
     let h = bh + over;
     let mut c = Canvas::transparent(w.max(1) as usize, h.max(1) as usize);
     // a soft shadow, then the cream box
-    c.rounded_rect_alpha(0, over + 4 * s, w, bh - 4 * s, 28 * s, INK, 40);
-    c.rounded_rect(0, over, w, bh - 4 * s, 28 * s, CREAM);
+    c.rounded_rect_alpha(0, over + s.p(4), w, bh - s.p(4), s.p(28), INK, 40);
+    c.rounded_rect(0, over, w, bh - s.p(4), s.p(28), CREAM);
     for (i, l) in lines.iter().take(DIALOG_LINES).enumerate() {
         c.text_px(face, pad, over + pad + i as i32 * ch, l, INK, false);
     }
     if let Some((text, cursor)) = line {
         let y = over + pad + DIALOG_LINES as i32 * ch;
         c.rounded_rect(
-            pad - 8 * s,
-            y - 2 * s,
-            w - 2 * pad + 16 * s,
-            ch + 4 * s,
-            8 * s,
+            pad - s.p(8),
+            y - s.p(2),
+            w - 2 * pad + s.p(16),
+            ch + s.p(4),
+            s.p(8),
             SELECT,
         );
         let cols = ((w - 2 * pad) / cw - 3).max(1) as usize;
@@ -380,7 +489,7 @@ fn dialog(
         c.text_px(face, x, y, &shown, INK, false);
         let skipped = text.chars().count() - shown.chars().count();
         let at = cursor.saturating_sub(skipped) as i32;
-        c.rect(x + at * cw, y + 2 * s, 2 * s, ch - 4 * s, INK);
+        c.rect(x + at * cw, y + s.p(2), s.p(2), ch - s.p(4), INK);
     }
     if arrow {
         let ax = w - pad - cw;
@@ -389,16 +498,16 @@ fn dialog(
     }
     // the name plate, astride the box's top edge
     let pw = (name.chars().count() as i32 + 2) * pcw;
-    let pf = fonts.face(PX_UI * s as u32);
+    let pf = fonts.face(s.font(PX_UI));
     c.rounded_rect(pad, 0, pw, plate_h, plate_h / 2, rgb);
-    c.text_px(pf, pad + pcw, 5 * s, name, ink_on(rgb), true);
+    c.text_px(pf, pad + pcw, s.p(5), name, ink_on(rgb), true);
     done(c)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn palette(
     fonts: &mut Fonts,
-    s: i32,
+    s: Px,
     width: i32,
     prompt: Option<&str>,
     query: &str,
@@ -406,22 +515,22 @@ fn palette(
     rows: &[Row],
     selected: usize,
 ) -> Raster {
-    let face = fonts.face(PX_UI * s as u32);
+    let face = fonts.face(s.font(PX_UI));
     let (cw, ch) = (face.cw as i32, face.ch as i32);
-    let pad = 14 * s;
-    let row = ch + 6 * s;
-    let w = width * s;
+    let pad = s.p(14);
+    let row = ch + s.p(6);
+    let w = s.p(width);
     let list = if rows.is_empty() {
         row
     } else {
         rows.len() as i32 * row
     };
-    let h = pad + row + 8 * s + list + pad;
+    let h = pad + row + s.p(8) + list + pad;
     let mut c = Canvas::transparent(w.max(1) as usize, h.max(1) as usize);
-    c.rounded_rect_alpha(0, 4 * s, w, h - 4 * s, 18 * s, INK, 40);
-    c.rounded_rect(0, 0, w, h - 4 * s, 18 * s, CREAM);
+    c.rounded_rect_alpha(0, s.p(4), w, h - s.p(4), s.p(18), INK, 40);
+    c.rounded_rect(0, 0, w, h - s.p(4), s.p(18), CREAM);
     // the line
-    c.rounded_rect(pad / 2, pad - 3 * s, w - pad, row, 9 * s, SELECT);
+    c.rounded_rect(pad / 2, pad - s.p(3), w - pad, row, s.p(9), SELECT);
     let lead = match prompt {
         Some(p) => format!("{p}: "),
         None => ": ".to_string(),
@@ -429,8 +538,8 @@ fn palette(
     let x = pad + c.text_px(face, pad, pad, &lead, SOFT, false);
     c.text_px(face, x, pad, query, INK, false);
     let at = query.chars().take(cursor).count() as i32;
-    c.rect(x + at * cw, pad + s, 2 * s, ch - 2 * s, INK);
-    let top = pad + row + 8 * s;
+    c.rect(x + at * cw, pad + s.p(1), s.p(2), ch - s.p(2), INK);
+    let top = pad + row + s.p(8);
     if rows.is_empty() {
         c.text_px(face, pad, top, "nada encontrado", SOFT, false);
     }
@@ -439,7 +548,7 @@ fn palette(
         let y = top + i as i32 * row;
         let sel = i == selected;
         if sel {
-            c.rounded_rect(pad / 2, y - 3 * s, w - pad, row, 8 * s, SELECT);
+            c.rounded_rect(pad / 2, y - s.p(3), w - pad, row, s.p(8), SELECT);
         }
         let keys_cols = r.keys.chars().count();
         let name = ellipsize(&r.name, cols / 2);
@@ -465,52 +574,60 @@ fn palette(
 
 fn map(
     fonts: &mut Fonts,
-    s: i32,
+    s: Px,
     w: i32,
     h: i32,
     title: &str,
     help: &str,
     boxes: &[MapBox],
 ) -> Raster {
-    let (w, h) = (w * s, h * s);
+    let (w, h) = (s.p(w), s.p(h));
     let mut c = Canvas::transparent(w.max(1) as usize, h.max(1) as usize);
     c.rounded_rect_alpha(0, 0, w, h, 0, MAP_BG, 240);
     for b in boxes {
-        let (x, y, bw, bh) = (b.x * s, b.y * s, b.w * s, b.h * s);
+        let (x, y, bw, bh) = (s.p(b.x), s.p(b.y), s.p(b.w), s.p(b.h));
         match b.kind {
-            MapKind::Hall => c.rounded_rect(x, y, bw, bh, 4 * s, [0xd8, 0xcc, 0xb0]),
+            MapKind::Hall => c.rounded_rect(x, y, bw, bh, s.p(4), [0xd8, 0xcc, 0xb0]),
             MapKind::Room | MapKind::Here => {
-                c.rounded_rect(x, y, bw, bh, 12 * s, INK);
+                c.rounded_rect(x, y, bw, bh, s.p(12), INK);
                 let fill = if b.kind == MapKind::Here {
                     [0xff, 0xf0, 0xc8]
                 } else {
                     MAP_ROOM
                 };
-                c.rounded_rect(x + 2 * s, y + 2 * s, bw - 4 * s, bh - 4 * s, 10 * s, fill);
+                c.rounded_rect(
+                    x + s.p(2),
+                    y + s.p(2),
+                    bw - s.p(4),
+                    bh - s.p(4),
+                    s.p(10),
+                    fill,
+                );
             }
-            MapKind::Desk => c.rounded_rect(x, y, bw, bh, 6 * s, MAP_DESK),
-            MapKind::Screen => c.rounded_rect(x, y, bw, bh, 2 * s, MAP_SCREEN),
+            MapKind::Desk => c.rounded_rect(x, y, bw, bh, s.p(6), MAP_DESK),
+            MapKind::Screen => c.rounded_rect(x, y, bw, bh, s.p(2), MAP_SCREEN),
             MapKind::Cat => c.rounded_rect(x, y, bw, bh, bw.min(bh) / 2, MAP_CAT),
+            MapKind::Shelf => c.rounded_rect(x, y, bw, bh, s.p(2), MAP_SHELF),
         }
     }
-    let face = fonts.face(PX_SMALL * s as u32);
+    let face = fonts.face(s.font(PX_SMALL));
     let (cw, ch) = (face.cw as i32, face.ch as i32);
     for b in boxes.iter().filter(|b| !b.label.is_empty()) {
-        let cols = ((b.w * s) / cw).max(4) as usize;
+        let cols = ((s.p(b.w)) / cw).max(4) as usize;
         let t = ellipsize(&b.label, cols.max(8));
         let tw = Canvas::text_width(face, &t);
         let (tx, ty) = match b.kind {
-            MapKind::Room | MapKind::Here => (b.x * s + 10 * s, b.y * s + 8 * s),
-            _ => (b.x * s + (b.w * s - tw) / 2, (b.y + b.h) * s + 3 * s),
+            MapKind::Room | MapKind::Here => (s.p(b.x) + s.p(10), s.p(b.y) + s.p(8)),
+            _ => (s.p(b.x) + (s.p(b.w) - tw) / 2, s.p(b.y + b.h) + s.p(3)),
         };
         c.text_px(face, tx, ty, &t, INK, b.kind == MapKind::Here);
     }
-    let big = fonts.face(PX_DIALOG * s as u32);
+    let big = fonts.face(s.font(PX_DIALOG));
     let tw = Canvas::text_width(big, title);
-    c.text_px(big, (w - tw) / 2, 24 * s, title, INK, true);
-    let small = fonts.face(PX_SMALL * s as u32);
+    c.text_px(big, (w - tw) / 2, s.p(24), title, INK, true);
+    let small = fonts.face(s.font(PX_SMALL));
     let hw = Canvas::text_width(small, help);
-    c.text_px(small, (w - hw) / 2, h - 24 * s - ch, help, SOFT, false);
+    c.text_px(small, (w - hw) / 2, h - s.p(24) - ch, help, SOFT, false);
     done(c)
 }
 
@@ -531,7 +648,7 @@ mod tests {
                 text: "NAVEGAR".into(),
             },
             &mut f,
-            1,
+            Px(1.0),
         );
         assert!(r.w > 60 && r.h > 16, "{}x{}", r.w, r.h);
         assert_eq!(at(&r, 0, 0)[3], 0, "corner cut");
@@ -543,7 +660,7 @@ mod tests {
                 text: "NAVEGAR".into(),
             },
             &mut f,
-            2,
+            Px(2.0),
         );
         assert!(
             (r2.w as i32 - 2 * r.w as i32).abs() <= 16,
@@ -564,8 +681,8 @@ mod tests {
             arrow: true,
             line: Some(("sim".into(), 3)),
         };
-        let a = raster(&spec, &mut f, 1);
-        let b = raster(&spec, &mut Fonts::new(), 1);
+        let a = raster(&spec, &mut f, Px(1.0));
+        let b = raster(&spec, &mut Fonts::new(), Px(1.0));
         assert_eq!(a, b);
         assert_eq!(a.w, 600);
     }
@@ -634,9 +751,18 @@ mod tests {
                 }],
             },
             Spec::Ring { w: 40, h: 30 },
+            Spec::Crosshair { t: 1 },
+            Spec::Vignette {
+                w: 64,
+                h: 36,
+                a16: 3,
+            },
+            Spec::Bar {
+                text: "g solta · [ ] distância · - = tamanho".into(),
+            },
         ];
         for s in &specs {
-            let r = raster(s, &mut f, 1);
+            let r = raster(s, &mut f, Px(1.0));
             assert!(r.w > 0 && r.h > 0, "{s:?}");
             assert_eq!(r.px.len(), (r.w * r.h * 4) as usize);
             assert!(
@@ -646,9 +772,130 @@ mod tests {
             );
         }
         // the ring is hollow
-        let ring = raster(&Spec::Ring { w: 40, h: 30 }, &mut f, 1);
+        let ring = raster(&Spec::Ring { w: 40, h: 30 }, &mut f, Px(1.0));
         assert_eq!(at(&ring, 20, 15)[3], 0);
         assert_eq!(at(&ring, 20, 1)[3], 255);
+    }
+
+    fn label(t: &str) -> Spec {
+        Spec::Label { text: t.into() }
+    }
+
+    /// At 1.25 the label is drawn at physical px: a 20 px font (round(16 ·
+    /// 1.25)), the box 1.25× the 1× one, every glyph edge on the buffer's
+    /// own grid (nothing to resample).
+    #[test]
+    fn fractional_scale_rasters_at_physical_px() {
+        let mut f = Fonts::new();
+        let one = raster(&label("NAVEGAR"), &mut f, Px(1.0));
+        let q = raster(&label("NAVEGAR"), &mut f, Px(1.25));
+        let face20 = f.face(20).cw as i32;
+        assert_eq!(Px(1.25).font(PX_UI), 20);
+        assert_eq!(Px(1.5).font(PX_SMALL), 21);
+        assert_eq!(Px(1.25).p(10), 13, "12.5 rounds up");
+        assert_eq!(q.w as i32, 7 * face20 + 2 * Px(1.25).p(10));
+        assert!(
+            (q.w as f32 - one.w as f32 * 1.25).abs() <= 8.0,
+            "{} vs {}",
+            q.w,
+            one.w
+        );
+        assert!((q.h as f32 - one.h as f32 * 1.25).abs() <= 4.0);
+        // the same input twice: the same pixels
+        assert_eq!(q, raster(&label("NAVEGAR"), &mut Fonts::new(), Px(1.25)));
+        assert_ne!(Px(1.25).key(), Px(1.0).key());
+        assert_eq!(Px(1.25).key(), Px(1.250_001).key());
+    }
+
+    fn alpha(r: &Raster, x: u32, y: u32) -> u8 {
+        at(r, x, y)[3]
+    }
+
+    #[test]
+    fn faded_scales_opacity_and_keeps_size() {
+        let mut f = Fonts::new();
+        let tag = Spec::Tag {
+            text: "notas.md".into(),
+            rgb: [0x6a, 0x9f, 0xd8],
+        };
+        let full = raster(&tag, &mut f, Px(1.0));
+        assert_eq!(faded(tag.clone(), FADE_STEPS), tag, "opaque: itself");
+        assert_eq!(faded(tag.clone(), 9), tag);
+        let half = raster(&faded(tag.clone(), 2), &mut f, Px(1.0));
+        assert_eq!((half.w, half.h), (full.w, full.h));
+        let (cx, cy) = (full.w / 2, full.h / 2);
+        assert_eq!(alpha(&full, 3, cy), 255);
+        assert_eq!(alpha(&half, 3, cy), 128);
+        assert!(half.px.chunks(4).all(|p| p[0] <= p[3]), "premultiplied");
+        let _ = cx;
+        let none = raster(&faded(tag.clone(), 0), &mut f, Px(1.0));
+        assert!(none.px.iter().all(|v| *v == 0));
+        assert_eq!(faded(tag, 1).scale(Px(1.25)), Px(1.25));
+    }
+
+    #[test]
+    fn crosshair_dot_grows_into_a_ring() {
+        let mut f = Fonts::new();
+        let dot = raster(&Spec::Crosshair { t: 0 }, &mut f, Px(1.0));
+        let ring = raster(&Spec::Crosshair { t: CROSS_STEPS }, &mut f, Px(1.0));
+        assert_eq!((dot.w, dot.h), (CROSS_BOX as u32, CROSS_BOX as u32));
+        let m = CROSS_BOX as u32 / 2;
+        assert_eq!(alpha(&dot, m, m), 255, "the dot is solid");
+        assert_eq!(at(&dot, m, m)[..3], CREAM);
+        assert_eq!(alpha(&dot, m + 5, m), 0, "and small");
+        assert_eq!(alpha(&ring, m, m), 0, "the ring is hollow");
+        assert_eq!(alpha(&ring, m + 6, m), 255, "6 px out");
+        assert_eq!(alpha(&ring, m, m - 7), 255);
+        assert_eq!(alpha(&ring, 0, 0), 0);
+        // the steps between are distinct rasters, all premultiplied
+        let mid = raster(&Spec::Crosshair { t: 2 }, &mut f, Px(1.0));
+        assert_ne!(mid, dot);
+        assert_ne!(mid, ring);
+        assert!(mid.px.chunks(4).all(|p| p[0] <= p[3]));
+        // at 2×: twice the box
+        let r2 = raster(&Spec::Crosshair { t: CROSS_STEPS }, &mut f, Px(2.0));
+        assert_eq!(r2.w, 2 * CROSS_BOX as u32);
+    }
+
+    #[test]
+    fn vignette_is_quarter_res_clear_middle_dark_corners() {
+        let mut f = Fonts::new();
+        let spec = Spec::Vignette {
+            w: 1280,
+            h: 720,
+            a16: 16,
+        };
+        let s = spec.scale(Px(1.25));
+        assert_eq!(s, Px(VIGNETTE_SCALE), "whatever the output scale");
+        let v = raster(&spec, &mut f, s);
+        assert_eq!((v.w, v.h), (320, 180));
+        assert_eq!(alpha(&v, 160, 90), 0);
+        let corner = alpha(&v, 0, 0);
+        let max = (VIGNETTE_MAX * 255.0).round() as u8;
+        assert!(corner > max - 20 && corner <= max, "{corner}");
+        let half = raster(
+            &Spec::Vignette {
+                w: 1280,
+                h: 720,
+                a16: 8,
+            },
+            &mut f,
+            s,
+        );
+        let hc = alpha(&half, 0, 0);
+        assert!((hc as i32 - corner as i32 / 2).abs() <= 2, "{hc} {corner}");
+        // odd sizes round up (the element covers the whole output)
+        let odd = raster(
+            &Spec::Vignette {
+                w: 1366,
+                h: 767,
+                a16: 4,
+            },
+            &mut f,
+            s,
+        );
+        assert_eq!((odd.w, odd.h), (342, 192));
+        assert_eq!(label("x").scale(Px(1.25)), Px(1.25));
     }
 
     #[test]

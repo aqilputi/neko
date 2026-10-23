@@ -1,0 +1,15 @@
+# R6: the library (fixture tree, never the home). `b` walks into it, the camera glides to the
+# left wall's bookcase; one level down into "projeto".
+wait 100
+key b
+wait json /ext/objects/library/browsing true 2000
+inject objects {"Command":{"name":"world.book_next","args":{}}}
+inject objects {"Command":{"name":"world.book_next","args":{}}}
+inject objects {"Command":{"name":"world.book_next","args":{}}}
+key Return
+wait json /ext/objects/library/rel "projeto" 2000
+expect json /ext/objects/library/rel "projeto"
+wait 500
+shot ${OUT}/shot-lib-shelves.png
+dump ${OUT}/dump-lib-shelves.json
+quit

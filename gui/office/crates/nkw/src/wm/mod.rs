@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use glam::Vec3;
 use nkw_core::persist::{DeskAt, Place, Plan, RoomKind, WorldFile};
 use nkw_core::rules::{self, Config};
-use nkw_core::{Action, Pick, Time, Want, Wish, onetoone};
+use nkw_core::{Action, Pick, TalkPurpose, Target, Time, Want, Wish, onetoone};
 use serde_json::{Value, json};
 use smithay::wayland::selection::data_device::{
     clear_data_device_selection, request_data_device_client_selection, set_data_device_selection,
@@ -37,7 +37,7 @@ use crate::ext::{
     ArgKind, ArgSpec, Badge, Ctx, PaletteItem, Pickable, Plugin, Req, Source, Tag, ToastKind,
 };
 use crate::state::Nkw;
-use crate::world::{COMMANDS, Cmd, HALL_W, RoomRef, ShortName, World};
+use crate::world::{Aim, COMMANDS, Cmd, HALL_W, RoomRef, ShortName, World};
 use clipboard::{Bridge, FromHost, Status, ToHost};
 use launcher::App;
 use persist_io::{Load, Store};
@@ -57,15 +57,24 @@ const ATTENTION_RGB: [u8; 3] = [255, 170, 90];
 pub const WM_COMMANDS: &[(&str, &str, &[&str])] = &[
     ("world.terminal", "terminal novo", &["T", "world+enter"]),
     ("world.launcher", "apps", &["world+d"]),
-    ("world.library", "biblioteca (fase 4: toast)", &["b"]),
     ("world.quit", "sair do mundo (confirma)", &["world+shift+e"]),
-    ("world.grab", "pegar/soltar a tela (fase 3: toast)", &["g"]),
-    ("world.nearer", "tela na mão (fase 3: toast)", &["["]),
-    ("world.farther", "tela na mão (fase 3: toast)", &["]"]),
 ];
 
 /// `world.launch {exec}` / `world.launch:<desktop id>`: run an app.
 pub const LAUNCH: &str = "world.launch";
+/// `world.place_next`'s intent lasts this long without `ttl_s`.
+pub const INTENT_TTL_S: f64 = 5.0;
+/// How many parent links a window's pid may be from a process we spawned.
+pub const INTENT_HOPS: usize = 6;
+/// The mimes `world.copy` offers.
+pub const COPY_MIMES: [&str; 3] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"];
+
+/// The placement intent of `world.place_next`.
+#[derive(Clone, Debug, PartialEq)]
+struct Intent {
+    place: Place,
+    until: Time,
+}
 
 pub struct Wm {
     demo: bool,
@@ -92,6 +101,12 @@ pub struct Wm {
     pub clip: Status,
     /// the rooms as of the last change (`dump`)
     rooms: Vec<Value>,
+    /// `world.place_next`: where the next window goes
+    next: Option<Intent>,
+    /// what `world.copy` put on the seat (never logged, never dumped)
+    copied: Option<String>,
+    /// the loop, for what must touch the seat (`world.copy`)
+    lh: Option<calloop::LoopHandle<'static, Nkw>>,
 }
 
 impl Wm {
@@ -116,8 +131,14 @@ impl Wm {
             bridge: None,
             clip: Status::default(),
             rooms: Vec::new(),
+            next: None,
+            copied: None,
+            lh: None,
         };
         if cli.demo {
+            if cli.reduced_motion {
+                wm.config.reduced_motion();
+            }
             return wm;
         }
         let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
@@ -129,6 +150,12 @@ impl Wm {
             let (c, err) = persist_io::read_config(&p);
             wm.config = c;
             wm.errors.extend(err);
+            for n in &wm.config.notes {
+                tracing::warn!("{n}");
+            }
+        }
+        if cli.reduced_motion {
+            wm.config.reduced_motion();
         }
         if let Some(dir) = cli.state_root() {
             let store = Store::new(dir);
@@ -179,6 +206,130 @@ impl Wm {
         self.config.terminal()
     }
 
+    /// `world.terminal {cmd}`: the terminal running `sh -c cmd` (as is
+    /// without one, or with a blank one).
+    pub fn terminal_with(&self, cmd: Option<&str>) -> Vec<String> {
+        let mut v = self.terminal();
+        if let Some(c) = cmd.filter(|c| !c.trim().is_empty()) {
+            v.extend(["-e", "sh", "-c", c].map(String::from));
+        }
+        v
+    }
+
+    /// `world.interact`, the fallback after objects/cats declined (S15):
+    /// the World's aim — a screen goes FOCO, a cat talks, a doorway leads
+    /// to its room.
+    fn interact(&mut self, ctx: &Ctx) -> Option<Vec<Req>> {
+        let r = match ctx.world.aim()? {
+            Aim::Screen(s) => {
+                let t = ctx.world.modal_child(s).unwrap_or(s);
+                Req::Action(Action::Focus(Target::Screen(t)))
+            }
+            Aim::Cat(cat) => Req::Action(Action::Talk {
+                cat,
+                purpose: TalkPurpose::Session,
+            }),
+            Aim::Door(r) => Req::Cmd(Cmd::GotoRoom(RoomRef::Id(r))),
+        };
+        Some(vec![r])
+    }
+
+    /// `world.place_next {room, desk?, ttl_s?}`: the next new toplevel
+    /// that descends from a process we spawned (any, under `--demo`) lands
+    /// on that room/desk; one at a time, `ttl_s` (5) at most.
+    fn place_next(&mut self, args: &BTreeMap<String, String>, ctx: &Ctx) -> Option<Vec<Req>> {
+        let room = RoomRef::parse(args.get("room")?)?;
+        let name = match room {
+            RoomRef::Id(id) => ctx.world.rooms.iter().find(|r| r.id == id)?.name.clone(),
+            RoomRef::Name(n) => match ctx.world.find_room(&room) {
+                Some(i) => ctx.world.rooms[i].name.clone(),
+                None => n.as_str().to_string(),
+            },
+        };
+        let desk = match args.get("desk").map(|d| d.trim()) {
+            None | Some("") => None,
+            Some("last") => Some(DeskAt::Last),
+            Some(d) => Some(DeskAt::Index(d.parse().ok()?)),
+        };
+        let ttl = args
+            .get("ttl_s")
+            .and_then(|t| t.trim().parse::<f64>().ok())
+            .filter(|t| t.is_finite() && *t > 0.0)
+            .unwrap_or(INTENT_TTL_S)
+            .min(60.0);
+        self.next = Some(Intent {
+            place: Place {
+                room: Some(name),
+                desk,
+                ..Place::default()
+            },
+            until: ctx.now + ttl,
+        });
+        Some(Vec::new())
+    }
+
+    /// The placement intent a new window of `pid` takes, if any (taken).
+    /// `ours`: a pid we spawned. Under `--demo` any window takes it.
+    pub fn take_intent(
+        &mut self,
+        pid: Option<u32>,
+        ours: &dyn Fn(u32) -> bool,
+        now: Time,
+    ) -> Option<Place> {
+        let i = self.next.as_ref()?;
+        if now > i.until {
+            self.next = None;
+            return None;
+        }
+        let fits = self.demo
+            || pid.is_some_and(|p| {
+                nkw_sys::pidmap::anchor(p, ours, &nkw_sys::pidmap::ProcFs, INTENT_HOPS).is_some()
+            });
+        if !fits {
+            return None;
+        }
+        self.next.take().map(|i| i.place)
+    }
+
+    /// `world.copy {text}`: the seat's selection becomes `text` (and the
+    /// host's, through the bridge). Never logged, never in `dump`.
+    fn copy(&mut self, args: &BTreeMap<String, String>) -> Option<Vec<Req>> {
+        let text = args.get("text")?.clone();
+        self.copied = Some(text);
+        let Some(lh) = &self.lh else {
+            return Some(Vec::new());
+        };
+        lh.insert_idle(|st: &mut Nkw| {
+            let mimes: Vec<String> = COPY_MIMES.iter().map(|m| m.to_string()).collect();
+            set_data_device_selection(&st.dh, &st.seat, mimes.clone(), ());
+            let wm = &mut st.ext.wm;
+            wm.clip.mirrored = false;
+            wm.clip.mimes = mimes.len();
+            if let Some(b) = &wm.bridge {
+                b.send(ToHost::Offer(mimes));
+            }
+        });
+        Some(Vec::new())
+    }
+
+    /// Write what `world.copy` set into `fd` (a paste of ours); the fd
+    /// back when the selection is not ours (a client's or the host's).
+    pub fn send_copied(&self, mime: &str, fd: OwnedFd) -> Result<(), OwnedFd> {
+        let Some(text) = self.copied.clone() else {
+            return Err(fd);
+        };
+        if !COPY_MIMES.contains(&mime) {
+            return Ok(()); // dropping the fd ends the paste
+        }
+        // off the loop: a slow reader must not stall the compositor
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let mut f = std::fs::File::from(fd);
+            let _ = f.write_all(text.as_bytes());
+        });
+        Ok(())
+    }
+
     fn apps(&self) -> &[App] {
         self.apps.get_or_init(|| {
             if self.demo {
@@ -199,6 +350,7 @@ impl Wm {
 
     /// A client of ours set the clipboard (mimes only).
     pub fn our_selection(&mut self, mimes: Vec<String>) {
+        self.copied = None;
         self.clip.mirrored = false;
         self.clip.mimes = mimes.len();
         if let Some(b) = &self.bridge {
@@ -258,12 +410,14 @@ impl Wm {
             .plan
             .rooms
             .iter()
-            .map(|(name, kind)| {
-                Req::Cmd(Cmd::RoomNew {
+            .map(|(name, kind)| match kind {
+                // the library comes back with its counter (the librarian's desk)
+                RoomKind::Library => Req::Cmd(Cmd::Library { go: false }),
+                _ => Req::Cmd(Cmd::RoomNew {
                     name: ShortName::new(name),
                     context: matches!(kind, RoomKind::Context(_)),
                     go: false,
-                })
+                }),
             })
             .collect();
         if let Some(st) = &self.plan.station {
@@ -280,6 +434,7 @@ fn on_host(st: &mut Nkw, m: FromHost) {
     match m {
         FromHost::Up(b) => st.ext.wm.clip.host = b,
         FromHost::Selection(mimes) => {
+            st.ext.wm.copied = None;
             st.ext.wm.clip.mimes = mimes.len();
             st.ext.wm.clip.mirrored = true;
             set_data_device_selection(&st.dh, &st.seat, mimes, ());
@@ -292,8 +447,11 @@ fn on_host(st: &mut Nkw, m: FromHost) {
             }
         }
         FromHost::Send { mime, fd } => {
-            // our client writes into the host app's fd (dropped on error)
-            let _ = request_data_device_client_selection(&st.seat, mime, fd);
+            // `world.copy`'s text, else our client writes into the host
+            // app's fd (dropped on error)
+            if let Err(fd) = st.ext.wm.send_copied(&mime, fd) {
+                let _ = request_data_device_client_selection(&st.seat, mime, fd);
+            }
         }
     }
 }
@@ -317,14 +475,6 @@ fn keys(k: &[&str]) -> Vec<String> {
     k.iter().map(|s| s.to_string()).collect()
 }
 
-fn toast(text: &str) -> Req {
-    Req::Toast {
-        text: text.into(),
-        kind: ToastKind::Info,
-        ms: 3000,
-    }
-}
-
 impl Plugin for Wm {
     fn name(&self) -> &'static str {
         "wm"
@@ -337,6 +487,7 @@ impl Plugin for Wm {
         ping: calloop::ping::Ping,
     ) {
         let _ = ping;
+        self.lh = Some(lh.clone());
         lh.insert_idle(|st: &mut Nkw| {
             let dh = st.dh.clone();
             st.ext.wm.globals(&dh);
@@ -402,14 +553,15 @@ impl Plugin for Wm {
         let r = match name {
             "world.terminal" => {
                 self.intent_until = Some(ctx.now + INTENT_S);
-                vec![Req::Spawn(self.terminal())]
+                vec![Req::Spawn(
+                    self.terminal_with(args.get("cmd").map(String::as_str)),
+                )]
             }
             "world.launcher" => vec![Req::Action(Action::Palette)],
-            "world.library" => vec![toast("biblioteca: chega na fase 4")],
-            "world.grab" | "world.nearer" | "world.farther" => {
-                vec![toast("tela na mão: chega na fase 3")]
-            }
             "world.quit" => vec![Req::Quit(0)],
+            "world.interact" => self.interact(ctx)?,
+            "world.place_next" => self.place_next(args, ctx)?,
+            "world.copy" => self.copy(args)?,
             LAUNCH => {
                 let argv = launcher::split_exec(args.get("exec")?);
                 if argv.is_empty() {
@@ -860,10 +1012,9 @@ mod tests {
                 wm.command("world.launcher", &no, c),
                 Some(vec![Req::Action(Action::Palette)])
             );
-            assert!(matches!(
-                wm.command("world.library", &no, c).unwrap()[0],
-                Req::Toast { .. }
-            ));
+            // the World's now (`Cmd::from_name` runs first)
+            assert_eq!(wm.command("world.library", &no, c), None);
+            assert_eq!(wm.command("world.grab", &no, c), None);
             assert_eq!(
                 wm.command("world.terminal", &no, c),
                 Some(vec![Req::Spawn(vec![
@@ -971,6 +1122,203 @@ mod tests {
         assert!(
             per < std::time::Duration::from_micros(500),
             "{per:?} per tick"
+        );
+    }
+
+    #[test]
+    fn a_saved_library_is_restored_as_the_library() {
+        let t = tempfile::tempdir().unwrap();
+        let mut w = World::new(world().out, world().opts);
+        w.sync_contexts(&[], 0.0);
+        w.ensure_room(RoomKind::Library, crate::world::LIBRARY, 0.0);
+        std::fs::write(
+            t.path().join("world.json"),
+            nkw_core::persist::to_string(&w.snapshot()),
+        )
+        .unwrap();
+        let mut wm = Wm::new(&cli_in(t.path()));
+        let mut fresh = World::new(w.out, w.opts);
+        fresh.sync_contexts(&[], 0.0);
+        let reqs = with_ctx(&fresh, 0.0, |c| wm.tick(c));
+        assert!(
+            reqs.contains(&Req::Cmd(Cmd::Library { go: false })),
+            "{reqs:?}"
+        );
+        for r in reqs {
+            if let Req::Cmd(c) = r {
+                fresh.command(c, 0.0);
+            }
+        }
+        assert_eq!(fresh.room_kind(fresh.rooms[1].id), RoomKind::Library);
+        assert_eq!(fresh.rooms[1].desks[0].cat, Some(crate::world::LIBRARIAN));
+    }
+
+    #[test]
+    fn terminal_with_a_command() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(
+            t.path().join("world.toml"),
+            "[launch]\nterminal = \"foot -o x=1\"\n",
+        )
+        .unwrap();
+        let mut wm = Wm::new(&cli_in(t.path()));
+        let w = world();
+        let args = BTreeMap::from([("cmd".to_string(), "$EDITOR notas.md".to_string())]);
+        let r = with_ctx(&w, 0.0, |c| wm.command("world.terminal", &args, c)).unwrap();
+        assert_eq!(
+            r,
+            [Req::Spawn(
+                ["foot", "-o", "x=1", "-e", "sh", "-c", "$EDITOR notas.md"]
+                    .map(String::from)
+                    .to_vec()
+            )]
+        );
+        let blank = BTreeMap::from([("cmd".to_string(), "  ".to_string())]);
+        let r = with_ctx(&w, 0.0, |c| wm.command("world.terminal", &blank, c)).unwrap();
+        assert_eq!(
+            r,
+            [Req::Spawn(["foot", "-o", "x=1"].map(String::from).to_vec())]
+        );
+    }
+
+    #[test]
+    fn interact_falls_back_on_the_worlds_aim() {
+        let mut wm = Wm::new(&Cli {
+            demo: true,
+            ..Cli::default()
+        });
+        let mut w = world();
+        let no = BTreeMap::new();
+        assert_eq!(
+            with_ctx(&w, 0.0, |c| wm.command("world.interact", &no, c)),
+            None,
+            "NAV: nothing in the aim, nobody takes it"
+        );
+        w.command(Cmd::Walk, 0.0);
+        assert_eq!(w.aim(), Some(Aim::Screen(ScreenId(1))));
+        assert_eq!(
+            with_ctx(&w, 0.0, |c| wm.command("world.interact", &no, c)),
+            Some(vec![Req::Action(Action::Focus(Target::Screen(ScreenId(
+                1
+            ))))])
+        );
+    }
+
+    #[test]
+    fn the_placement_intent() {
+        let mut wm = Wm::new(&Cli {
+            demo: true,
+            ..Cli::default()
+        });
+        let mut w = world();
+        let (lib, _) = w.ensure_room(RoomKind::Library, "biblioteca", 0.0);
+        let args = BTreeMap::from([
+            ("room".to_string(), lib.0.to_string()),
+            ("desk".to_string(), "0".to_string()),
+        ]);
+        let r = with_ctx(&w, 10.0, |c| wm.command("world.place_next", &args, c));
+        assert_eq!(r, Some(vec![]));
+        let no = |_: u32| false;
+        let p = wm
+            .take_intent(None, &no, 11.0)
+            .expect("demo: the next window");
+        assert_eq!(p.room.as_deref(), Some("biblioteca"));
+        assert_eq!(p.desk, Some(DeskAt::Index(0)));
+        assert_eq!(wm.take_intent(None, &no, 11.0), None, "once");
+        // it expires; a newer one replaces the older
+        let by_name = BTreeMap::from([
+            ("room".to_string(), "acme".to_string()),
+            ("ttl_s".to_string(), "1".to_string()),
+        ]);
+        with_ctx(&w, 20.0, |c| wm.command("world.place_next", &args, c));
+        with_ctx(&w, 20.0, |c| wm.command("world.place_next", &by_name, c));
+        assert_eq!(wm.take_intent(None, &no, 21.5), None, "expired");
+        with_ctx(&w, 30.0, |c| wm.command("world.place_next", &by_name, c));
+        let p = wm.take_intent(None, &no, 30.5).unwrap();
+        assert_eq!((p.room.as_deref(), p.desk), (Some("acme"), None));
+        assert_eq!(
+            with_ctx(&w, 0.0, |c| wm.command(
+                "world.place_next",
+                &BTreeMap::new(),
+                c
+            )),
+            None,
+            "needs a room"
+        );
+        // not under --demo: only a window of a process we spawned (or its child)
+        let t = tempfile::tempdir().unwrap();
+        let mut real = Wm::new(&cli_in(t.path()));
+        with_ctx(&w, 0.0, |c| real.command("world.place_next", &args, c));
+        let me = std::process::id();
+        assert_eq!(
+            real.take_intent(Some(me), &|p| p == 1, 0.5),
+            None,
+            "not ours"
+        );
+        assert_eq!(real.take_intent(None, &|_| true, 0.5), None, "no pid");
+        let mine = real.take_intent(Some(me), &|p| p == me, 0.5);
+        assert!(mine.is_some(), "ours");
+    }
+
+    #[test]
+    fn copy_keeps_the_text_out_of_the_dump() {
+        let mut wm = Wm::new(&Cli {
+            demo: true,
+            ..Cli::default()
+        });
+        let w = world();
+        let args = BTreeMap::from([("text".to_string(), "/srv/projeto/notas.md".to_string())]);
+        let r = with_ctx(&w, 0.0, |c| wm.command("world.copy", &args, c));
+        assert_eq!(r, Some(vec![]));
+        assert!(!wm.dump().to_string().contains("notas"));
+        assert_eq!(wm.copied.as_deref(), Some("/srv/projeto/notas.md"));
+        // a paste of ours gets the bytes
+        let (rd, wr) = std::io::pipe().unwrap();
+        assert!(wm.send_copied("text/plain", wr.into()).is_ok());
+        let mut got = String::new();
+        std::io::Read::read_to_string(&mut std::fs::File::from(OwnedFd::from(rd)), &mut got)
+            .unwrap();
+        assert_eq!(got, "/srv/projeto/notas.md");
+        // a client's selection takes over
+        wm.our_selection(vec!["text/plain".into()]);
+        let (_rd, wr) = std::io::pipe().unwrap();
+        assert!(wm.send_copied("text/plain", wr.into()).is_err());
+        assert_eq!(
+            with_ctx(&w, 0.0, |c| wm.command("world.copy", &BTreeMap::new(), c)),
+            None
+        );
+    }
+
+    #[test]
+    fn walk_config_from_the_file_and_reduced_motion() {
+        let t = tempfile::tempdir().unwrap();
+        std::fs::write(
+            t.path().join("world.toml"),
+            "[walk]\nspeed = 9\n[camera]\neye_height = 1.6\n",
+        )
+        .unwrap();
+        let wm = Wm::new(&cli_in(t.path()));
+        assert_eq!(wm.config().walk.speed, 5.0, "clamped");
+        assert_eq!(wm.config().walk.eye_height, 1.6);
+        assert_eq!(wm.config().walk.turn, nkw_core::TurnMode::Smooth);
+        let wm = Wm::new(&Cli {
+            reduced_motion: true,
+            ..cli_in(t.path())
+        });
+        assert_eq!(
+            wm.config().walk.turn,
+            nkw_core::TurnMode::Snap,
+            "reduced motion snaps"
+        );
+        std::fs::write(t.path().join("world.toml"), "[walk]\nturn = \"smooth\"\n").unwrap();
+        let wm = Wm::new(&Cli {
+            reduced_motion: true,
+            ..cli_in(t.path())
+        });
+        assert_eq!(
+            wm.config().walk.turn,
+            nkw_core::TurnMode::Smooth,
+            "unless the file says so"
         );
     }
 

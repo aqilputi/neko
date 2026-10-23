@@ -167,6 +167,20 @@ pub fn palette() -> Vec<PaletteItem> {
         kind: ArgKind::Text,
         required: true,
     });
+    // the library (S19): palette-only, plus the shelf search
+    let text = |name: &str, prompt: &str| ArgSpec {
+        name: name.into(),
+        prompt: prompt.into(),
+        kind: ArgKind::Text,
+        required: true,
+    };
+    let mut open = item("world.open", "abre um arquivo no mundo", &[]);
+    open.args.push(text("path", "caminho"));
+    let mut search = item("world.library_search", "busca na estante", &["/"]);
+    search.args.push(text("q", "procurar"));
+    v.push(open);
+    v.push(search);
+    v.push(item("world.vault_lock", "tranca o cofre", &[]));
     v
 }
 
@@ -409,8 +423,18 @@ mod tests {
                 "volume.up",
                 "volume.down",
                 "volume.mute",
-                "world.goto_object"
+                "world.goto_object",
+                "world.open",
+                "world.library_search",
+                "world.vault_lock"
             ]
+        );
+        let open = p.iter().find(|i| i.name == "world.open").unwrap();
+        assert_eq!(open.args[0].name, "path");
+        let search = p.iter().find(|i| i.name == "world.library_search").unwrap();
+        assert_eq!(
+            (search.args[0].name.as_str(), search.keys[0].as_str()),
+            ("q", "/")
         );
         assert!(
             p.iter()

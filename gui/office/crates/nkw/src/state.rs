@@ -133,6 +133,13 @@ pub struct Nkw {
     pub pids: BTreeMap<ScreenId, u32>,
     /// the rooms the last world pass drew (current + what plugins opened)
     pub visible: Vec<RoomId>,
+    /// ANDAR's mouse-look holds the host pointer (headless: recorded only)
+    pub pointer_locked: bool,
+    /// the hash of the last composed HUD (`ext::hud_hash`): a different
+    /// one composes even with no wish (S14)
+    pub hud_hash: Option<u64>,
+    /// the last composed HUD had a dialog, badges or labels
+    pub hud_busy: bool,
 }
 
 impl Nkw {
@@ -235,6 +242,41 @@ impl Nkw {
                 }
             }
         }
+        self.sync_pointer_lock();
+    }
+
+    /// Lock the host pointer while walking with mouse-look, release it
+    /// otherwise (S14: on `WalkStart`/`WalkStop`, whatever ended the walk).
+    pub fn sync_pointer_lock(&mut self) {
+        let want = self.world.walking.is_some()
+            && self.world.focus_2d().is_none()
+            && self.world.walk_config().mouse_look;
+        self.set_pointer_lock(want);
+    }
+
+    /// `Host::Winit`: `CursorGrabMode::Locked` (falling back to `Confined`)
+    /// and a hidden cursor; released and visible again. Headless: only the
+    /// flag (`dump()["host"]["pointer_locked"]`).
+    pub fn set_pointer_lock(&mut self, on: bool) {
+        if self.pointer_locked == on {
+            return;
+        }
+        self.pointer_locked = on;
+        if let crate::frame::Host::Winit(b) = &self.gfx.host {
+            use smithay::reexports::winit::window::CursorGrabMode;
+            let w = b.window();
+            if on {
+                if let Err(e) = w
+                    .set_cursor_grab(CursorGrabMode::Locked)
+                    .or_else(|_| w.set_cursor_grab(CursorGrabMode::Confined))
+                {
+                    tracing::warn!("pointer lock: {e}");
+                }
+            } else {
+                let _ = w.set_cursor_grab(CursorGrabMode::None);
+            }
+            w.set_cursor_visible(!on);
+        }
     }
 
     /// An effect the World passed through, to its plugin (S7 table).
@@ -245,6 +287,19 @@ impl Nkw {
             _ => None,
         };
         let to = ext::route_effect(&e, self.world.purpose());
+        if matches!(e, Effect::OpenPalette) {
+            // every plugin's items (wm, objects, cats, overlay), before the
+            // overlay opens COMANDOS
+            let items = {
+                let ctx = crate::hook_ctx!(self, now);
+                self.ext
+                    .plugins_ref()
+                    .iter()
+                    .flat_map(|p| p.palette_items(&ctx))
+                    .collect()
+            };
+            self.ext.overlay.set_palette_items(items);
+        }
         let reqs = {
             let ctx = crate::hook_ctx!(self, now, line.as_deref());
             match to {
@@ -288,6 +343,10 @@ impl Nkw {
                 }
                 Req::Keymap(b) => self.ext.router.set_bindings(b),
                 Req::Quit(code) => self.quit(code),
+                Req::SyncContexts(c) => {
+                    let outs = self.world.sync_contexts(&c, now);
+                    self.apply(outs);
+                }
             }
         }
     }
@@ -316,19 +375,31 @@ impl Nkw {
 
     /// The plugins' wakeup: drain, tick, their obstacles into the World.
     pub fn ext_step(&mut self, now: Time) {
-        for i in 0..4 {
+        // `NKW_STATS=ext`: each plugin's drain + tick (its own hook time,
+        // not what its requests then cost the hub)
+        let mut us = [0u64; 4];
+        for (i, u) in us.iter_mut().enumerate() {
+            let t = Instant::now();
             let reqs = {
                 let ctx = crate::hook_ctx!(self, now);
                 self.ext.plugins()[i].drain(&ctx)
             };
+            *u += t.elapsed().as_micros() as u64;
             self.apply_reqs(reqs);
         }
-        for i in 0..4 {
+        for (i, u) in us.iter_mut().enumerate() {
+            let t = Instant::now();
             let reqs = {
                 let ctx = crate::hook_ctx!(self, now);
                 self.ext.plugins()[i].tick(&ctx)
             };
+            *u += t.elapsed().as_micros() as u64;
             self.apply_reqs(reqs);
+        }
+        if self.stats.ext_detail {
+            for (i, u) in us.into_iter().enumerate() {
+                self.stats.ext_plugin(i, u, now);
+            }
         }
         let room = self.world.current_room_id();
         let extra = {
@@ -360,6 +431,12 @@ impl Nkw {
     pub fn dump(&self) -> Value {
         let mut v = self.world.dump(&self.all_wishes());
         v["ext"] = self.ext.dump();
+        v["host"] = serde_json::json!({
+            "pointer_locked": self.pointer_locked,
+            "compose_hud_changes": self.stats.compose_hud_changes,
+            "look_events": self.stats.look_events,
+            "hud": self.gfx.hud_placed,
+        });
         v
     }
 

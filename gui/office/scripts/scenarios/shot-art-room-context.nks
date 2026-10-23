@@ -1,0 +1,7 @@
+# The art pass (R5): acme's room (a context room: planks, a rug in its hue, dotted wallpaper,
+# one window per 3 m of back wall) from its first desk station.
+wait 300
+key J
+wait 600
+shot ${OUT}/shot-art-room-context.png
+quit

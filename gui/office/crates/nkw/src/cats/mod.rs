@@ -7,8 +7,8 @@
 //! `--demo`) is the fixture of [`demo`], whose core calls are recorded in
 //! `dump()["calls"]`; the others are the [`core_link`] thread. Either way
 //! they go through [`office::Office`], whose contexts lay out the rooms
-//! through `World::sync_contexts` (applied on the loop, see
-//! [`Cats::take_sync`]).
+//! through `World::sync_contexts` (`Req::SyncContexts`, once per change,
+//! see [`Cats::take_sync`]).
 //!
 //! `inject cats` shapes: `{"fixture":"demo"|"busy"}`; `{"sessions":[…]}`
 //! (core `Session` JSON, tree order = array order); `{"event":{"name":…,
@@ -24,6 +24,7 @@ pub mod body;
 pub mod conv;
 pub mod core_link;
 pub mod demo;
+pub mod feel;
 pub mod inbox;
 pub mod monitor;
 pub mod office;
@@ -45,7 +46,7 @@ use crate::ext::{Badge, Ctx, DialogView, Pickable, Plugin, Req, Tag, ToastKind};
 use crate::router::KeyEv;
 use body::{CAT_CENTRE, Coat, FACE_Y, SEAT_TOP};
 use core_link::{FromCore, Link, ToCore};
-use office::{Office, RECEPTIONIST};
+use office::{LIBRARIAN, Office, RECEPTIONIST};
 use talk::Call;
 
 /// Ambient motion rate (§6.2: 12–15 fps).
@@ -54,8 +55,12 @@ pub const AMBIENT_HZ: f32 = 15.0;
 pub const ANIMATE_M: f32 = 12.0;
 /// Name badges are hidden beyond this distance.
 pub const BADGE_M: f32 = 7.0;
+/// The command names of keys bound to Lua functions (S19).
+pub const LUA_KEY: &str = "lua.key:";
 /// The receptionist's coat seed.
 const RECEPTIONIST_SEED: &str = "recepção";
+/// The librarian's coat seed and name tag.
+const LIBRARIAN_SEED: &str = "bibliotecária";
 /// The fixture's clock: the world's second 0 is this ms (a little after the
 /// fixture's last activity).
 fn fixture_epoch_ms() -> i64 {
@@ -82,7 +87,6 @@ pub struct Cats {
     status: &'static str,
     /// the contexts the World must be brought in line with
     sync: Option<Contexts>,
-    lh: Option<calloop::LoopHandle<'static, crate::state::Nkw>>,
     /// fixture mode: the core calls that would have been made
     pub calls: Vec<Value>,
     /// the fixture's snapshot (events patch it)
@@ -97,6 +101,9 @@ pub struct Cats {
     fonts: screens::Fonts,
     link: Option<Link>,
     next_tag: u64,
+    pub feel: feel::Feel,
+    /// the library room (its desk 0 is the librarian's), as of the last tick
+    library: Option<RoomId>,
 }
 
 impl Cats {
@@ -115,7 +122,6 @@ impl Cats {
             reduced_motion: cli.reduced_motion,
             office: Office::new(),
             sync: None,
-            lh: None,
             calls: Vec::new(),
             fixture: None,
             now: 0.0,
@@ -127,6 +133,8 @@ impl Cats {
             fonts: screens::Fonts::default(),
             link: None,
             next_tag: 1,
+            feel: feel::Feel::default(),
+            library: None,
         };
         if c.source == Source::Fixture {
             c.walks.offset_ms = fixture_epoch_ms();
@@ -205,7 +213,8 @@ impl Cats {
     }
 
     /// The contexts the World still has to take (`World::sync_contexts`),
-    /// once. The plugin hands them to the loop itself; tests apply them.
+    /// once. `tick`/`drain` hand them to the hub as `Req::SyncContexts`;
+    /// tests apply them.
     pub fn take_sync(&mut self) -> Option<Contexts> {
         self.sync.take()
     }
@@ -334,6 +343,16 @@ impl Cats {
                 String::new(),
             );
         }
+        if cat == LIBRARIAN {
+            let seed = office::fnv1a(LIBRARIAN_SEED);
+            return (
+                Coat::from_seed(seed),
+                CatPose::Idle,
+                0.0,
+                None,
+                String::new(),
+            );
+        }
         if cat.0 >= walk::POSTMAN_BASE {
             let seed = office::fnv1a(walk::POSTMAN_SEED);
             return (
@@ -367,7 +386,7 @@ impl Cats {
     /// in FOCO, close enough, busy or alert always, calm ones in their
     /// bouts, a puff while it lasts. The receptionist sits still.
     fn animates(&self, cat: CatId, ctx: &Ctx, cam: Vec3, at: Vec3) -> bool {
-        if self.still(ctx) || cat == RECEPTIONIST || cam.distance(at) > ANIMATE_M {
+        if self.still(ctx) || ours(cat) || cam.distance(at) > ANIMATE_M {
             return false;
         }
         // seen: in the camera's room (the others are behind walls, an open
@@ -415,6 +434,116 @@ impl Cats {
         j
     }
 
+    /// A key bound to a Lua function (`lua.key:<mode>:<key>`, from
+    /// `/v1/keymap`): run on the core with the cat you talk to, else the
+    /// station's, as the session (`--core none`: recorded in `calls`). The
+    /// result comes back as `FromCore::Done`: its toast, errors included.
+    pub(crate) fn lua_key(&mut self, name: &str, ctx: &Ctx) -> Vec<Req> {
+        let cat = self
+            .talk
+            .as_ref()
+            .map(|t| t.cat)
+            .or_else(|| self.station_cat(ctx));
+        let session = cat
+            .and_then(|c| self.office.get(c))
+            .map(|v| v.sess.session_id.clone())
+            .unwrap_or_default();
+        self.core_call(
+            Call::Run {
+                name: name.to_string(),
+                session,
+            },
+            ctx,
+        );
+        Vec::new()
+    }
+
+    /// A camera `m` metres (floor distance) behind the face of a seated
+    /// `cat`, at eye height, looking at the face.
+    fn near_pose(&self, ctx: &Ctx, cat: CatId, m: f32) -> Option<nkw_core::Pose> {
+        let (room, desk) = self.desk_of(ctx, cat)?;
+        let seat = ctx.world.cat_seat(room, desk)?;
+        let face = seat.pos + Vec3::Y * (SEAT_TOP + FACE_Y);
+        let level = layout::stand_before(face, seat.yaw, m);
+        let pitch = ((face.y - level.pos.y) / m.max(0.1)).atan();
+        Some(nkw_core::Pose::new(level.pos, seat.yaw, pitch))
+    }
+
+    /// The desk a cat sits at (the World's, or the librarian's counter).
+    pub(super) fn desk_of(&self, ctx: &Ctx, cat: CatId) -> Option<(RoomId, usize)> {
+        match cat {
+            LIBRARIAN => ctx
+                .world
+                .cat_desk(cat)
+                .or_else(|| self.librarian_seat(ctx).map(|(r, _)| (r, 0))),
+            _ => ctx.world.cat_desk(cat),
+        }
+    }
+
+    /// The feel's step (§3.5 of the objects plan): the seated cats near the
+    /// camera notice you, sway their tails, a blocked one purrs.
+    fn feel_tick(&mut self, ctx: &Ctx) -> Vec<Req> {
+        let w = ctx.world;
+        let active = w.mode().focus().is_none() && !w.frozen;
+        let cam = w.camera;
+        let talking = self.talk.as_ref().map(|t| t.cat);
+        let seen: Vec<feel::Seen> = match active {
+            false => Vec::new(),
+            true => self
+                .seated(ctx)
+                .into_iter()
+                .filter(|(_, _, cat, _)| Some(*cat) != talking)
+                .map(|(_, _, cat, seat)| feel::Seen {
+                    cat,
+                    face: seat.pos + Vec3::Y * (SEAT_TOP + FACE_Y),
+                    blocked: self
+                        .office
+                        .get(cat)
+                        .is_some_and(|v| v.pose == CatPose::Alert),
+                })
+                .filter(|s| s.face.distance(cam.pos) <= feel::NOTICE_M * 2.0)
+                .collect(),
+        };
+        self.feel
+            .step(&cam, &seen, ctx.now, active)
+            .into_iter()
+            .map(|face| Req::Cue {
+                cue: nkw_objects::sound::Cue::Purr,
+                at: Some(face),
+            })
+            .collect()
+    }
+
+    /// The feel on top of a seated cat's joints: the head and ears turned
+    /// to the camera while it notices you, the tail swaying while you stay.
+    fn felt(
+        &self,
+        mut j: CatParams,
+        cat: CatId,
+        seat: &nkw_core::Pose,
+        cam: Vec3,
+        now: Time,
+        still: bool,
+    ) -> CatParams {
+        match self.feel.state(cat, now) {
+            feel::State::Work => {}
+            feel::State::Notice => {
+                let k = self.feel.turn(cat, now, still);
+                let to = feel::head_yaw_to(seat.pos, seat.yaw, cam);
+                j.head_rot_y += (to - j.head_rot_y) * k;
+                j.head_rot_x += (0.12 - j.head_rot_x) * k;
+                j.ears_back *= 1.0 - k;
+            }
+            feel::State::Tail => {
+                j.tail_sway += match still {
+                    true => 0.3,
+                    false => 0.55 * ((now * 5.0) as f32).sin(),
+                };
+            }
+        }
+        j
+    }
+
     /// Every desk cat of the visible rooms with its seat, except those out
     /// walking.
     fn seated(&self, ctx: &Ctx) -> Vec<(RoomId, usize, CatId, nkw_core::Pose)> {
@@ -429,7 +558,26 @@ impl Cats {
                 }
             }
         }
+        // the librarian at the library's counter (unless the World seats her)
+        if let Some((room, seat)) = self.librarian_seat(ctx)
+            && ctx.visible_rooms.contains(&room)
+            && !v.iter().any(|x| x.2 == LIBRARIAN)
+        {
+            v.push((room, 0, LIBRARIAN, seat));
+        }
         v
+    }
+
+    /// The librarian's room and seat: desk 0 of the library room, when
+    /// that desk has no other cat.
+    fn librarian_seat(&self, ctx: &Ctx) -> Option<(RoomId, nkw_core::Pose)> {
+        let room = self.library?;
+        let r = ctx.world.rooms.iter().find(|r| r.id == room)?;
+        let desk = r.desks.first()?;
+        if desk.cat.is_some_and(|c| c != LIBRARIAN) {
+            return None;
+        }
+        Some((room, ctx.world.cat_seat(room, 0)?))
     }
 
     /// A core event (from the link, or injected).
@@ -673,31 +821,40 @@ impl Cats {
     fn draw_walkers(&self, ctx: &Ctx, cam: Vec3, list: &mut DrawList) {
         for x in &self.walks.walks {
             let (p, yaw, moving) = x.at3(ctx.now);
-            let mut j = catpose::SIT;
-            let mut lift = 0.0;
-            if moving && !self.still(ctx) {
-                let (legs, bob) = catpose::walk_cycle(ctx.now as f32);
-                j.leg_l = 0.6 + legs[0];
-                j.leg_r = 0.6 + legs[1];
-                j.body_rot_x = -0.35;
-                lift = bob;
-            } else if self.talk.as_ref().is_some_and(|t| t.cat == x.cat) {
-                j = self.joints(x.cat, ctx.now, false);
-                j.head_rot_y = 0.0; // already facing you
-            }
-            let at = p + Vec3::Y * lift;
-            let fade = layout::fade_for(cam, at + Vec3::Y * CAT_CENTRE);
+            let fade = layout::fade_for(cam, p + Vec3::Y * CAT_CENTRE);
             let coat = Coat::from_seed(x.seed);
-            body::cat_instances(
-                &body::joints(&j),
-                &coat,
-                body::root(at, yaw),
-                None,
-                fade,
-                &mut list.instances,
-            );
+            let root = body::root(p, yaw);
+            let carry = if moving {
+                // on four legs, the stride from the distance walked (a
+                // frozen world holds the stance)
+                let g = match self.still(ctx) {
+                    true => nkw_gl::rig::Gait::NEUTRAL,
+                    false => x.gait(ctx.now),
+                };
+                let j = body::joints(&catpose::SIT);
+                nkw_gl::rig::cat_walking(&j, &g, &coat, root, None, fade, &mut list.instances);
+                // the letter in its mouth
+                nkw_gl::rig::cat_walking_frames(&j, &g, root).head
+                    * Mat4::from_translation(Vec3::new(0.0, -0.08, -0.17))
+            } else {
+                // sitting before you (or on its perch)
+                let mut j = catpose::SIT;
+                if self.talk.as_ref().is_some_and(|t| t.cat == x.cat) {
+                    j = self.joints(x.cat, ctx.now, false);
+                    j.head_rot_y = 0.0; // already facing you
+                }
+                body::cat_instances(
+                    &body::joints(&j),
+                    &coat,
+                    root,
+                    None,
+                    fade,
+                    &mut list.instances,
+                );
+                root * Mat4::from_translation(Vec3::new(0.0, 0.3, -0.2))
+            };
             if x.postman {
-                let m = body::root(at, yaw) * Mat4::from_translation(Vec3::new(0.0, 0.3, -0.2));
+                let m = carry;
                 list.instances.push(Instance {
                     mesh: MeshId::Envelope,
                     model: m,
@@ -714,19 +871,36 @@ impl Cats {
         }
     }
 
-    fn draw_kittens(&self, cat: CatId, seat: &nkw_core::Pose, cam: Vec3, list: &mut DrawList) {
+    /// A cat's kittens on its desk; while their cat notices you or sways
+    /// its tail they look at you too, but keep typing (FEEL §3.5).
+    fn draw_kittens(
+        &self,
+        cat: CatId,
+        seat: &nkw_core::Pose,
+        cam: Vec3,
+        now: Time,
+        still: bool,
+        list: &mut DrawList,
+    ) {
         let Some(v) = self.office.get(cat) else {
             return;
+        };
+        let look = match self.feel.state(cat, now) {
+            feel::State::Work => 0.0,
+            feel::State::Notice => self.feel.turn(cat, now, still),
+            feel::State::Tail => 1.0,
         };
         let (kittens, _) = v.kittens();
         for (i, k) in kittens.iter().enumerate() {
             let p = kitten_spot(seat, i);
             let coat = Coat::from_seed(office::fnv1a(&k.id));
             let fade = layout::fade_for(cam, p + Vec3::Y * 0.1);
-            body::kitten_instances(
+            let turn = look * feel::head_yaw_to(p, seat.yaw, cam);
+            nkw_gl::rig::kitten_instances_looking(
                 &coat,
                 body::root(p, seat.yaw),
                 !k.done,
+                turn,
                 fade,
                 &mut list.instances,
             );
@@ -746,6 +920,19 @@ fn in_frustum(ctx: &Ctx, p: Vec3) -> bool {
     };
     let c = cam.proj() * cam.view() * p.extend(1.0);
     c.w > 0.0 && (c.x / c.w).abs() < 1.15 && (c.y / c.w).abs() < 1.15
+}
+
+/// The world's own cats (the receptionist, the librarian): they sit still.
+fn ours(cat: CatId) -> bool {
+    cat == RECEPTIONIST || cat == LIBRARIAN
+}
+
+/// The library room with a counter (desk 0), if the world has one.
+fn library_room(w: &crate::world::World) -> Option<RoomId> {
+    w.rooms
+        .iter()
+        .find(|r| !r.desks.is_empty() && w.room_kind(r.id) == nkw_core::persist::RoomKind::Library)
+        .map(|r| r.id)
 }
 
 fn toast(text: &str, err: bool) -> Vec<Req> {
@@ -797,7 +984,7 @@ impl Plugin for Cats {
         ping: calloop::ping::Ping,
     ) {
         let _ = cli;
-        self.lh = Some(lh.clone());
+        let _ = lh;
         self.fonts.warm();
         if let Source::Core(c) = &self.source
             && let Some(opts) = core_link::opts_for(c)
@@ -820,26 +1007,24 @@ impl Plugin for Cats {
         for m in msgs {
             reqs.extend(self.on_core(m, ctx));
         }
+        reqs.extend(self.take_sync().map(Req::SyncContexts));
         reqs
     }
 
     fn tick(&mut self, ctx: &Ctx) -> Vec<Req> {
         self.now = ctx.now;
+        self.library = library_room(ctx.world);
         if self.walks.offset_ms == 0 {
             self.walks.offset_ms = nk_cats::model::now_ms() - (ctx.now * 1000.0) as i64;
         }
-        if let Some(lh) = &self.lh
-            && let Some(c) = self.sync.take()
-        {
-            // the World is the hub's: apply on the loop, right after this
-            lh.insert_idle(move |st| {
-                let now = st.now();
-                let outs = st.world.sync_contexts(&c, now);
-                st.apply(outs);
-                st.wake();
-            });
-        }
-        let mut reqs = self.talk_tick(ctx);
+        // the World is the hub's: it lays the rooms out (S14)
+        let mut reqs: Vec<Req> = self
+            .take_sync()
+            .map(Req::SyncContexts)
+            .into_iter()
+            .collect();
+        reqs.extend(self.talk_tick(ctx));
+        reqs.extend(self.feel_tick(ctx));
         let now_ms = self.clock_ms(ctx.now);
         self.walks.step_due(&self.office, now_ms);
         self.walks.plan(ctx, &self.office, now_ms);
@@ -865,12 +1050,21 @@ impl Plugin for Cats {
             out.push(Wish::world(Want::At(t)));
         }
         let still = self.still(ctx);
+        // one motion rate for everything that moves in the world (walkers,
+        // ambient, the feel): the fastest wins
+        let mut motion: Option<f32> = None;
+        let mut rate = |hz: f32| motion = Some(motion.map_or(hz, |m: f32| m.max(hz)));
         if self.walks.moving(ctx.now) && !still {
-            out.push(Wish::world(Want::Rate(inbox::WALK_HZ)));
+            rate(inbox::WALK_HZ);
         }
         if let Some(t) = self.walks.next_wake_ms(self.clock_ms(ctx.now)) {
             let at = (t - self.walks.offset_ms) as f64 / 1000.0;
             out.push(Wish::world(Want::At(at)));
+        }
+        match self.feel.want(ctx.now, still) {
+            Some(Want::Rate(hz)) => rate(hz),
+            Some(w) => out.push(Wish::world(w)),
+            None => {}
         }
         if still {
             return out;
@@ -879,11 +1073,12 @@ impl Plugin for Cats {
         let mut next: Option<Time> = None;
         for (_, _, cat, seat) in self.seated(ctx) {
             if self.animates(cat, ctx, cam, seat.pos) {
-                out.push(Wish::world(Want::Rate(AMBIENT_HZ)));
-                return out;
+                rate(AMBIENT_HZ);
+                next = None;
+                break;
             }
             let (_, pose, _, _, id) = self.look(cat);
-            if cat == RECEPTIONIST
+            if ours(cat)
                 || cam.distance(seat.pos) > ANIMATE_M
                 || !matches!(pose, CatPose::Idle | CatPose::Sleeping)
             {
@@ -900,6 +1095,9 @@ impl Plugin for Cats {
         if let Some(t) = next {
             out.push(Wish::world(Want::At(t)));
         }
+        if let Some(hz) = motion {
+            out.push(Wish::world(Want::Rate(hz)));
+        }
         out
     }
 
@@ -914,6 +1112,7 @@ impl Plugin for Cats {
             let fade = layout::fade_for(cam, seat.pos + Vec3::Y * CAT_CENTRE);
             let animate = self.animates(cat, ctx, cam, seat.pos);
             let j = self.joints(cat, ctx.now, animate);
+            let j = self.felt(j, cat, &seat, cam, ctx.now, self.still(ctx));
             let (coat, _, _, collar, _) = self.look(cat);
             body::cat_instances(
                 &body::joints(&j),
@@ -928,7 +1127,7 @@ impl Plugin for Cats {
                 radius: 0.32,
                 alpha: 0.35,
             });
-            self.draw_kittens(cat, &seat, cam, list);
+            self.draw_kittens(cat, &seat, cam, ctx.now, self.still(ctx), list);
         }
         self.draw_walkers(ctx, cam, list);
         self.draw_monitors(ctx, list);
@@ -941,6 +1140,9 @@ impl Plugin for Cats {
         ctx: &Ctx,
     ) -> Option<Vec<Req>> {
         self.now = ctx.now;
+        if name.starts_with(LUA_KEY) {
+            return Some(self.lua_key(name, ctx));
+        }
         self.talk_command(name, args, ctx)
     }
 
@@ -967,6 +1169,15 @@ impl Plugin for Cats {
             let Some(v) = self.office.get(cat) else {
                 if cat == RECEPTIONIST && self.walks.confirm.is_some() {
                     tags.push(question_tag(over));
+                }
+                if cat == LIBRARIAN {
+                    tags.push(Tag {
+                        id: tag_id(cat, 0),
+                        pos: over,
+                        text: LIBRARIAN_SEED.into(),
+                        rgb: [0xe8, 0x9a, 0x6a],
+                        max_m: BADGE_M,
+                    });
                 }
                 continue;
             };
@@ -1107,6 +1318,28 @@ impl Plugin for Cats {
                 None => tracing::warn!("inject cats: no cat {label:?}"),
             }
         }
+        if json.get("librarian").and_then(Value::as_bool) == Some(true) {
+            // the librarian on duty: the library room (and its counter)
+            // comes from the World's `world.library`
+            self.library = library_room(ctx.world);
+            if self.library.is_none() {
+                reqs.push(Req::Command {
+                    name: "world.library".into(),
+                    args: BTreeMap::new(),
+                });
+            }
+            reqs.push(Req::Wish(Wish::world(Want::Once)));
+        }
+        if let Some(near) = json.get("near") {
+            // tests: the camera `m` metres (on the floor) behind a seated
+            // cat's face, looking at it
+            let cat = CatId(near.get("cat").and_then(Value::as_u64).unwrap_or(0) as u32);
+            let m = near.get("m").and_then(Value::as_f64).unwrap_or(1.2) as f32;
+            match self.near_pose(ctx, cat, m) {
+                Some(p) => reqs.push(Req::GlideTo(p)),
+                None => tracing::warn!("inject cats: no seated cat {}", cat.0),
+            }
+        }
         if let Some(name) = json.get("cmd").and_then(Value::as_str) {
             let args = json
                 .get("args")
@@ -1170,6 +1403,16 @@ impl Plugin for Cats {
             "by_label": by_label,
             "confirm": self.walks.confirm.as_ref().map(|c| c.0.clone()),
             "monitors": self.mons.values().filter(|m| m.tex.is_some() || m.raster.is_some()).count(),
+            "feel": self.feel.dump(self.now),
+            "librarian": self.library.map(|_| LIBRARIAN.0),
+            "walkers": self.walks.walks.iter().map(|x| {
+                let (p, yaw, moving) = x.at3(self.now);
+                json!({"cat": x.cat.0, "key": x.key, "pos": [p.x, p.y, p.z], "yaw": yaw,
+                       "moving": moving, "perch": x.perch.is_some() && !moving, "home": x.home})
+            }).collect::<Vec<_>>(),
+            "gait": self.walks.walks.iter().map(|x| {
+                json!({"cat": x.cat.0, "phase": x.gait(self.now).phase})
+            }).collect::<Vec<_>>(),
         })
     }
 
@@ -1766,6 +2009,322 @@ pub(crate) mod tests {
             cats.effect(&Effect::KeyboardLeave, ctx)
         });
         assert!(cats.focus.is_none() && cats.panes.contains_key(&demo::id_of("acme")));
+    }
+
+    /// The fixture world with a library room (R2's `ensure_room`) and its
+    /// counter.
+    fn library_world() -> (World, Cats, RoomId) {
+        let (mut w, cats) = fixture_world();
+        let (lib, _) = w.ensure_room(crate::world::RoomKind::Library, "biblioteca", 0.0);
+        let i = w.rooms.iter().position(|r| r.id == lib).unwrap();
+        if w.rooms[i].desks.is_empty() {
+            w.rooms[i].desks.push(nkw_core::Desk {
+                width: nkw_core::Width::default(),
+                screens: Vec::new(),
+                cat: None,
+            });
+        }
+        (w, cats, lib)
+    }
+
+    #[test]
+    fn the_librarian_sits_at_the_librarys_counter() {
+        let (mut w, mut cats, lib) = library_world();
+        assert_eq!(w.room_kind(lib), crate::world::RoomKind::Library);
+        with_ctx(&w, &[lib], 1.0, |ctx| cats.tick(ctx));
+        assert_eq!(cats.dump()["librarian"], LIBRARIAN.0);
+        // seated at desk 0, named, pickable, her monitor dark
+        let seated = with_ctx(&w, &[lib], 1.0, |ctx| cats.seated(ctx));
+        let seat = w.cat_seat(lib, 0).unwrap();
+        assert!(seated.contains(&(lib, 0, LIBRARIAN, seat)), "{seated:?}");
+        assert_eq!(heads(&draw(&w, &cats, &[lib], 1.0)).len(), 1);
+        let tags = with_ctx(&w, &[lib], 1.0, |ctx| cats.tags(ctx));
+        assert!(tags.iter().any(|t| t.text == "bibliotecária"));
+        let picks = with_ctx(&w, &[lib], 1.0, |ctx| cats.pickables(ctx));
+        assert!(picks.iter().any(|p| p.pick == Pick::Cat(LIBRARIAN)));
+        assert!(
+            !with_ctx(&w, &[lib], 1.0, |ctx| cats.paint_monitors(ctx)),
+            "no session, no tail"
+        );
+        assert!(!cats.mons.contains_key(&LIBRARIAN));
+        // `t` at her counter: the short dialogue, "Ver o cofre" → the vault
+        w.command(
+            crate::world::Cmd::GotoRoom(crate::world::RoomRef::Id(lib)),
+            2.0,
+        );
+        w.tick(10.0);
+        assert_eq!(
+            w.station,
+            nkw_core::Station::Desk {
+                room: lib,
+                desk: 0,
+                slot: 0
+            }
+        );
+        let rooms = w.visible_rooms(&[]);
+        let r = with_ctx(&w, &rooms, 10.0, |ctx| {
+            cats.command("world.talk", &BTreeMap::new(), ctx)
+        });
+        assert_eq!(
+            r,
+            Some(vec![Req::Action(nkw_core::Action::Talk {
+                cat: LIBRARIAN,
+                purpose: nkw_core::TalkPurpose::Session
+            })])
+        );
+        cats.open_talk(LIBRARIAN, 10.0);
+        cats.now = 20.0;
+        let d = cats.dialog_view().unwrap();
+        assert_eq!(d.name, "bibliotecária");
+        assert_eq!(d.text, "A biblioteca é sua. O cofre, só com a frase.");
+        assert_eq!(d.choices, ["Ver o cofre"]);
+        let r = with_ctx(&w, &rooms, 20.0, |ctx| {
+            cats.command("world.choice_1", &BTreeMap::new(), ctx)
+        });
+        assert_eq!(
+            r,
+            Some(vec![
+                Req::Action(nkw_core::Action::Back),
+                Req::Command {
+                    name: "world.goto_object".into(),
+                    args: BTreeMap::from([("name".to_string(), "cofre".to_string())]),
+                }
+            ])
+        );
+        // no library room: no librarian
+        let (w0, mut c0) = fixture_world();
+        with_ctx(&w0, &[RoomId(0)], 1.0, |ctx| c0.tick(ctx));
+        assert_eq!(c0.dump()["librarian"], Value::Null);
+        let r = with_ctx(&w0, &[RoomId(0)], 1.0, |ctx| {
+            c0.inject(&json!({"librarian": true}), ctx)
+        });
+        assert!(r.contains(&Req::Command {
+            name: "world.library".into(),
+            args: BTreeMap::new()
+        }));
+    }
+
+    #[test]
+    fn the_vaults_conversation_is_not_ours_we_only_frame_her() {
+        let (mut w, mut cats, lib) = library_world();
+        with_ctx(&w, &[lib], 1.0, |ctx| cats.tick(ctx));
+        w.action(
+            nkw_core::Action::Talk {
+                cat: LIBRARIAN,
+                purpose: nkw_core::TalkPurpose::VaultUnlock,
+            },
+            2.0,
+        );
+        assert_eq!(w.mode().purpose(), Some(nkw_core::TalkPurpose::VaultUnlock));
+        let r = with_ctx(&w, &[lib], 2.0, |ctx| {
+            cats.effect(&Effect::FrameFace(LIBRARIAN), ctx)
+        });
+        assert!(matches!(r.as_slice(), [Req::GlideTo(_)]), "{r:?}");
+        assert!(cats.talk.is_none() && cats.dialog_view().is_none());
+        let r = with_ctx(&w, &[lib], 2.0, |ctx| cats.effect(&Effect::TalkNext, ctx));
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn the_rooms_go_to_the_hub_as_one_sync_contexts_per_change() {
+        let w = demo_world();
+        let mut cats = Cats::new(&demo_cli());
+        let syncs = |r: &[Req]| {
+            r.iter()
+                .filter_map(|x| match x {
+                    Req::SyncContexts(c) => Some(c.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let r = with_ctx(&w, &[RoomId(0)], 0.0, |ctx| cats.tick(ctx));
+        let got = syncs(&r);
+        assert_eq!(got.len(), 1, "{r:?}");
+        assert_eq!(got[0][0].0, "acme");
+        assert_eq!(
+            got[0][1],
+            ("demo".to_string(), vec![CatId(4), CatId(5), CatId(6)])
+        );
+        for i in 1..5 {
+            let r = with_ctx(&w, &[RoomId(0)], i as f64, |ctx| cats.tick(ctx));
+            assert!(syncs(&r).is_empty(), "nothing changed");
+        }
+        // a state change keeps the rooms: no sync; a new session: one
+        let gw = demo::id_of("api-gateway");
+        let ev = json!({"event": {"name": "session.state", "data": {"session_id": gw, "state": "busy"}}});
+        with_ctx(&w, &[RoomId(0)], 6.0, |ctx| cats.inject(&ev, ctx));
+        let r = with_ctx(&w, &[RoomId(0)], 6.0, |ctx| cats.tick(ctx));
+        assert!(syncs(&r).is_empty());
+        with_ctx(&w, &[RoomId(0)], 7.0, |ctx| {
+            cats.inject(&json!({"fixture": "busy"}), ctx)
+        });
+        let r = with_ctx(&w, &[RoomId(0)], 7.0, |ctx| cats.tick(ctx));
+        assert_eq!(syncs(&r).len(), 1);
+        let r = with_ctx(&w, &[RoomId(0)], 8.0, |ctx| cats.tick(ctx));
+        assert!(syncs(&r).is_empty());
+    }
+
+    #[test]
+    fn lua_keys_run_on_the_core_with_the_stations_session() {
+        let (mut w, mut cats) = fixture_world();
+        let acme = to_acme(&mut w);
+        let r = with_ctx(&w, &[acme], 10.0, |ctx| {
+            cats.command("lua.key:normal.world:n", &BTreeMap::new(), ctx)
+        });
+        assert_eq!(r, Some(vec![]), "taken");
+        assert_eq!(
+            cats.calls,
+            [
+                json!({"call": "run", "name": "lua.key:normal.world:n", "session": demo::id_of("acme")})
+            ]
+        );
+        // at the reception (no session at the desk): no context
+        let w0 = demo_world();
+        with_ctx(&w0, &[RoomId(0)], 1.0, |ctx| {
+            cats.command("lua.key:normal:f5", &BTreeMap::new(), ctx)
+        });
+        assert_eq!(cats.calls[1]["session"], "");
+        // anything else that is not ours stays not ours
+        let r = with_ctx(&w, &[acme], 10.0, |ctx| {
+            cats.command("lua.other", &BTreeMap::new(), ctx)
+        });
+        assert!(r.is_none());
+    }
+
+    #[test]
+    fn a_keymap_with_lua_rows_reaches_the_router_unchanged() {
+        let (w, mut cats) = fixture_world();
+        let rows: Vec<nk_client::Binding> = serde_json::from_value(json!([
+            {"command": "lua.key:normal.world:n", "keys": ["n"], "mode": "normal.world", "help": {"desc": "lua"}},
+            {"command": "world.talk", "keys": ["t"], "mode": "normal.world", "help": {"desc": "conversar"}}
+        ]))
+        .unwrap();
+        let r = with_ctx(&w, &[RoomId(0)], 1.0, |ctx| {
+            cats.on_core(FromCore::Keymap(rows.clone()), ctx)
+        });
+        assert_eq!(r, [Req::Keymap(rows)]);
+    }
+
+    #[test]
+    fn coming_close_a_cat_notices_you_then_sways_its_tail() {
+        let (mut w, mut cats) = fixture_world();
+        // the first step (at the reception, the acme cats far) only seeds
+        let acme = room(&w, "acme");
+        with_ctx(&w, &[acme], 0.0, |ctx| cats.tick(ctx));
+        assert_eq!(cats.dump()["feel"], json!([]));
+        let acme = to_acme(&mut w);
+        // the desk station is out of the tail's reach
+        let seat = w.cat_seat(acme, 0).unwrap();
+        let face = seat.pos + Vec3::Y * FACE_Y;
+        let d = glam::Vec2::new(face.x - w.camera.pos.x, face.z - w.camera.pos.z).length();
+        assert!(d > feel::TAIL_M && d <= feel::NOTICE_M, "{d}");
+        // api-gateway (blocked) 1.2 m behind its face
+        let gw = CatId(3);
+        let r = with_ctx(&w, &[acme], 11.0, |ctx| {
+            cats.inject(&json!({"near": {"cat": 3, "m": 1.2}}), ctx)
+        });
+        let [Req::GlideTo(p)] = r.as_slice() else {
+            panic!("{r:?}")
+        };
+        w.camera = *p;
+        let r = with_ctx(&w, &[acme], 11.0, |ctx| cats.tick(ctx));
+        assert!(
+            r.iter().any(|x| matches!(
+                x,
+                Req::Cue {
+                    cue: nkw_objects::sound::Cue::Purr,
+                    at: Some(_)
+                }
+            )),
+            "a blocked cat purrs: {r:?}"
+        );
+        assert_eq!(cats.feel.state(gw, 11.1), feel::State::Notice);
+        let wishes = with_ctx(&w, &[acme], 11.1, |ctx| cats.wishes(ctx));
+        let rates = wishes
+            .iter()
+            .filter(|x| matches!(x.want, Want::Rate(_)))
+            .count();
+        assert_eq!(rates, 1, "one motion rate: {wishes:?}");
+        // the head turns to you
+        let l = draw(&w, &cats, &[acme], 11.2);
+        let gw_seat = w.cat_seat(acme, 1).unwrap();
+        let head = heads(&l)
+            .into_iter()
+            .min_by(|a, b| {
+                let d = |i: &&Instance| i.model.transform_point3(Vec3::ZERO).distance(gw_seat.pos);
+                d(a).total_cmp(&d(b))
+            })
+            .unwrap();
+        let nose = head.model.transform_vector3(Vec3::NEG_Z);
+        let to_you = (p.pos - head.model.transform_point3(Vec3::ZERO)) * Vec3::new(1.0, 0.0, 1.0);
+        assert!(
+            nose.normalize().dot(to_you.normalize()) > 0.0,
+            "looking back at you"
+        );
+        with_ctx(&w, &[acme], 11.6, |ctx| cats.tick(ctx));
+        assert_eq!(cats.dump()["feel"][0]["state"], "tail");
+        assert_eq!(cats.dump()["feel"][0]["cat"], 3);
+        // FOCO: nothing
+        w.action(nkw_core::Action::Focus(Target::CatTerm(gw)), 12.0);
+        with_ctx(&w, &[acme], 12.0, |ctx| cats.tick(ctx));
+        assert_eq!(cats.feel.state(gw, 12.0), feel::State::Work);
+    }
+
+    #[test]
+    fn kittens_look_at_you_but_keep_typing() {
+        let (mut w, mut cats) = fixture_world();
+        let acme = room(&w, "acme");
+        with_ctx(&w, &[acme], 0.0, |ctx| cats.tick(ctx)); // seeds
+        let before = draw(&w, &cats, &[acme], 5.0);
+        let acme = to_acme(&mut w);
+        // arriving at acme's desk: acme (and its kittens) notice you
+        with_ctx(&w, &[acme], 10.0, |ctx| cats.tick(ctx));
+        assert_eq!(cats.feel.state(CatId(2), 10.2), feel::State::Notice);
+        let during = draw(&w, &cats, &[acme], 10.2);
+        let laptops = |l: &DrawList| {
+            l.instances
+                .iter()
+                .filter(|i| i.mesh == MeshId::CatLaptop)
+                .count()
+        };
+        assert_eq!(laptops(&before), laptops(&during), "still typing");
+        let skulls = |l: &DrawList| -> Vec<Mat4> {
+            l.instances
+                .iter()
+                .filter(|i| {
+                    i.mesh == MeshId::CatSkull && i.model.transform_point3(Vec3::ZERO).y > 0.7
+                })
+                .map(|i| i.model)
+                .collect()
+        };
+        let after = draw(&w, &cats, &[acme], 11.0);
+        assert_ne!(skulls(&during), skulls(&after), "heads turned, then back");
+    }
+
+    #[test]
+    fn the_busy_office_asks_for_at_most_two_rates() {
+        let (mut w, mut cats) = fixture_world();
+        let acme = to_acme(&mut w);
+        with_ctx(&w, &[acme], 10.0, |ctx| {
+            cats.inject(&json!({"fixture": "busy"}), ctx)
+        });
+        w.sync_contexts(&cats.take_sync().unwrap(), 10.0);
+        let rooms = w.visible_rooms(&[]);
+        let mut talked = false;
+        for i in 0..120 {
+            let now = 10.0 + i as f64 * 0.1;
+            with_ctx(&w, &rooms, now, |ctx| cats.tick(ctx));
+            if i == 30 && !talked {
+                talked = true;
+                cats.open_talk(CatId(3), now);
+            }
+            let wishes = with_ctx(&w, &rooms, now, |ctx| cats.wishes(ctx));
+            let rates = wishes
+                .iter()
+                .filter(|x| matches!(x.want, Want::Rate(_)))
+                .count();
+            assert!(rates <= 2, "at {now}: {wishes:?}");
+        }
     }
 
     #[test]

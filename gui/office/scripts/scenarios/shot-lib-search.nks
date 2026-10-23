@@ -1,0 +1,11 @@
+# R6: the search table — the librarian brings the hits (1.5 s), then the table stands before you.
+wait 100
+key b
+wait json /ext/objects/library/browsing true 2000
+wait 400
+inject objects {"Command":{"name":"world.library_search","args":{"q":"md"}}}
+wait json /ext/objects/library/mode "search" 3000
+wait 1800
+shot ${OUT}/shot-lib-search.png
+dump ${OUT}/dump-lib-search.json
+quit

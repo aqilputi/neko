@@ -16,11 +16,14 @@
 //! - wave 2b stubs: [`persist`], [`rules`] (P2); [`palette`], [`line`],
 //!   [`dialog`] (P3)
 
+pub mod aim;
+pub mod carry;
 pub mod collide;
 pub mod dialog;
 pub mod hints;
 pub mod ids;
 pub mod layout;
+pub mod library;
 pub mod line;
 pub mod mode;
 pub mod onetoone;

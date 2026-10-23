@@ -110,6 +110,7 @@ pub enum Hold {
     TurnRight,
     LookUp,
     LookDown,
+    Run,
 }
 
 /// What the WM knows of a screen beyond [`super::Screen`].
@@ -129,6 +130,8 @@ pub struct ScreenState {
     pub attention: Option<Time>,
     /// its app_id arrived and the rules/memory placed it
     pub placed: bool,
+    /// in the air against a wall (dropped from the hand)
+    pub wall: bool,
 }
 
 /// One `world.*` command the World runs: name, title (pt-BR), the S9 keys,
@@ -236,7 +239,12 @@ pub const COMMANDS: &[CmdInfo] = &[
     m("world.turn_right", "girar", &["e", "right"]),
     m("world.look_up", "olhar", &["up"]),
     m("world.look_down", "olhar", &["down"]),
+    m("world.run", "correr", &["shift"]),
     m("world.recenter", "horizonte", &["c"]),
+    m("world.grab", "pegar/soltar a tela", &["g"]),
+    m("world.nearer", "tela na mão: mais perto", &["["]),
+    m("world.farther", "tela na mão: mais longe", &["]"]),
+    c("world.library", "biblioteca", &["b"]),
     m("world.walk_exit", "volta ao NAV", &["esc"]),
     m("world.talk_next", "avança", &["space", "enter"]),
     m("world.talk_reply", "responder (linha)", &["i", "r"]),
@@ -318,9 +326,11 @@ impl World {
 
     /// A dialog or a screen in the air: not part of its desk's stack.
     pub fn is_loose(&self, id: ScreenId) -> bool {
-        self.wm
-            .get(&id)
-            .is_some_and(|s| s.parent.is_some() || s.air.is_some())
+        self.carrying() == Some(id)
+            || self
+                .wm
+                .get(&id)
+                .is_some_and(|s| s.parent.is_some() || s.air.is_some())
     }
 
     /// How many screens of a desk form its stack (loose ones excluded).
@@ -398,10 +408,14 @@ impl World {
     /// Where a screen is now, as a place (the place memory).
     pub fn place_of(&self, id: ScreenId) -> Option<Place> {
         let (r, d, _) = self.locate(id)?;
+        let st = self.screen_state(id);
         Some(Place {
             room: Some(self.rooms[r].name.clone()),
             desk: Some(DeskAt::Index(d)),
             width: Some(self.rooms[r].desks[d].width),
+            air: st
+                .air
+                .map(|p| nkw_core::persist::Air::new(p.center.to_array(), p.yaw, st.wall)),
         })
     }
 
@@ -482,6 +496,13 @@ impl World {
     }
 
     fn place_depth(&self, room: usize, desk: usize, k: usize, depth: u8) -> ScreenPlace {
+        if let Some(p) = self.rooms[room].desks[desk]
+            .screens
+            .get(k)
+            .and_then(|id| self.hand_place(*id))
+        {
+            return p;
+        }
         let s = self.slots()[room];
         let x = self.desk_local_xs(room)[desk];
         let d = &self.rooms[room].desks[desk];
@@ -548,6 +569,9 @@ impl World {
     /// The logical size of a loose screen (dialog/air) or a fullscreen one,
     /// when it differs from the stack's.
     pub(super) fn loose_logical(&self, id: ScreenId) -> Option<Vec2> {
+        if let Some(v) = self.hand_logical(id) {
+            return Some(v);
+        }
         let st = self.screen_state(id);
         let committed = self
             .screens
@@ -571,7 +595,7 @@ impl World {
         match cmd {
             Cmd::BackOrStep => {
                 if self.mode().walking() {
-                    self.hold(Hold::Back);
+                    self.hold(Hold::Back, true);
                     Vec::new()
                 } else {
                     self.action(Action::Back, now)
@@ -603,7 +627,7 @@ impl World {
                 }
                 Vec::new()
             }
-            Cmd::Talk => match self.station_cat() {
+            Cmd::Talk => match self.station_cat().or_else(|| self.cat_in_view()) {
                 Some(cat) => self.action(
                     Action::Talk {
                         cat,
@@ -666,10 +690,14 @@ impl World {
                 }
                 Vec::new()
             }
-            Cmd::Hold(h) => {
-                self.hold(h);
+            Cmd::Hold(h, down) => {
+                self.hold(h, down);
                 Vec::new()
             }
+            Cmd::Grab => self.grab(now),
+            Cmd::Nearer => self.hand_step(-1.0, now),
+            Cmd::Farther => self.hand_step(1.0, now),
+            Cmd::Library { go } => self.library(go, now),
             Cmd::Recenter => {
                 if let Some(w) = self.walking.as_mut() {
                     w.walker.pitch = 0.0;
@@ -681,7 +709,18 @@ impl World {
         }
     }
 
-    fn hold(&mut self, h: Hold) {
+    fn hold(&mut self, h: Hold, down: bool) {
+        if self.walking.is_none() {
+            return;
+        }
+        if matches!(h, Hold::TurnLeft | Hold::TurnRight)
+            && self.walk_params.turn == nkw_core::TurnMode::Snap
+        {
+            if down {
+                self.turn_press(if h == Hold::TurnLeft { -1.0 } else { 1.0 });
+            }
+            return;
+        }
         let Some(w) = self.walking.as_mut() else {
             return;
         };
@@ -695,7 +734,8 @@ impl World {
             Hold::TurnRight => &mut k.turn_right,
             Hold::LookUp => &mut k.look_up,
             Hold::LookDown => &mut k.look_down,
-        } = true;
+            Hold::Run => &mut k.run,
+        } = down;
     }
 
     /// The cat of the station's desk.
@@ -732,7 +772,7 @@ impl World {
     }
 
     /// Take `id` and its dialogs out of desk (r, d); the desk stays.
-    fn detach(&mut self, r: usize, d: usize, id: ScreenId) -> Vec<ScreenId> {
+    pub(super) fn detach(&mut self, r: usize, d: usize, id: ScreenId) -> Vec<ScreenId> {
         let kids: Vec<ScreenId> = self.rooms[r].desks[d]
             .screens
             .iter()
@@ -761,7 +801,7 @@ impl World {
 
     /// Put `moved` (a screen, then its dialogs) into desk (r, d): the first
     /// at the end of the stack (or loose when it is), the rest loose.
-    fn attach(&mut self, r: usize, d: usize, moved: &[ScreenId]) -> usize {
+    pub(super) fn attach(&mut self, r: usize, d: usize, moved: &[ScreenId]) -> usize {
         let n = self.stack_len(r, d);
         let first_loose = self.is_loose(moved[0]);
         let desk = &mut self.rooms[r].desks[d];
@@ -777,7 +817,7 @@ impl World {
     }
 
     /// Remove desk (r, d) when nothing is left on it; returns whether it went.
-    fn drop_if_empty(&mut self, r: usize, d: usize) -> bool {
+    pub(super) fn drop_if_empty(&mut self, r: usize, d: usize) -> bool {
         let desk = &self.rooms[r].desks[d];
         if desk.screens.is_empty() && desk.cat.is_none() {
             self.rooms[r].desks.remove(d);
@@ -788,7 +828,7 @@ impl World {
     }
 
     /// Configure every stack screen of a desk to its preset size.
-    fn configure_desk(&self, r: usize, d: usize) -> Vec<Out> {
+    pub(super) fn configure_desk(&self, r: usize, d: usize) -> Vec<Out> {
         let n = self.stack_len(r, d);
         let desk = &self.rooms[r].desks[d];
         let size = self.configure_size(desk.width, n);
@@ -804,7 +844,7 @@ impl World {
             .collect()
     }
 
-    fn set_station_desk(&mut self, r: usize, d: usize, slot: usize) {
+    pub(super) fn set_station_desk(&mut self, r: usize, d: usize, slot: usize) {
         self.station = Station::Desk {
             room: self.rooms[r].id,
             desk: d,
@@ -942,6 +982,9 @@ impl World {
     /// `-` / `=`: the desk one preset narrower/wider; its screens are
     /// configured to the new size (and are no longer maximized).
     fn op_width(&mut self, f: fn(Width) -> Width, now: Time) -> Vec<Out> {
+        if let Some(out) = self.hand_width(f, now) {
+            return out;
+        }
         let Some((r, d)) = self.station_desk() else {
             return Vec::new();
         };
@@ -1191,10 +1234,25 @@ impl World {
                 cat: None,
             },
         );
-        let st = Station::Desk {
-            room: self.rooms[t].id,
-            desk: at,
-            slot: 0,
+        // back in the air (or on its wall) where it was left
+        if let Some(a) = place.air {
+            let [x, y, z] = a.pos();
+            let st = self.wm.entry(id).or_default();
+            st.air = Some(ScreenPlace {
+                center: Vec3::new(x, y, z),
+                yaw: a.yaw(),
+                pitch: 0.0,
+            });
+            st.wall = a.wall;
+        }
+        let st = if place.air.is_some() {
+            Station::Air(id)
+        } else {
+            Station::Desk {
+                room: self.rooms[t].id,
+                desk: at,
+                slot: 0,
+            }
         };
         if self.mode().focus().is_none() {
             self.go_to(st, now, false);
@@ -1918,6 +1976,7 @@ mod tests {
             room: Some("bravo".into()),
             desk: Some(DeskAt::Last),
             width: Some(Width::TwoThirds),
+            air: None,
         };
         let out = w.place_new(id, &p, 0.0);
         assert_eq!(sizes(&out), [(id.0, Vec2::new(837.0, 720.0))]);
@@ -1948,7 +2007,8 @@ mod tests {
             Some(Place {
                 room: Some("bravo".into()),
                 desk: Some(DeskAt::Index(1)),
-                width: Some(Width::TwoThirds)
+                width: Some(Width::TwoThirds),
+                air: None,
             })
         );
     }

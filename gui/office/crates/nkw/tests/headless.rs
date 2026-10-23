@@ -291,6 +291,230 @@ quit
 }
 
 #[test]
+fn mouse_look_turns_the_walker_and_locks_the_pointer() {
+    // S14: `pointer` goes through `process_input` like the patched winit
+    // backend's relative motion; the headless host records the lock
+    let r = run(
+        "pointer 50 0
+expect json /host/look_events 0
+key w
+expect mode ANDAR
+expect json /host/pointer_locked true
+dump {dir}/a.json
+pointer 100 0
+dump {dir}/b.json
+key Escape
+expect mode NAV
+expect json /host/pointer_locked false
+pointer 100 0
+expect json /host/look_events 1
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let yaw = |d: &serde_json::Value| d["camera"]["yaw"].as_f64().unwrap();
+    let (a, b) = (r.json("a.json"), r.json("b.json"));
+    let want = (100.0f64 * 0.12).to_radians();
+    assert!(
+        (yaw(&b) - yaw(&a) - want).abs() < 1e-3,
+        "yaw {} → {} (want +{want})",
+        yaw(&a),
+        yaw(&b)
+    );
+    assert_eq!(b["host"]["look_events"], 1);
+}
+
+#[test]
+fn mouse_look_off_neither_locks_nor_looks() {
+    let r = run(
+        "key w
+expect mode ANDAR
+expect json /host/pointer_locked false
+pointer 100 0
+expect json /host/look_events 0
+quit
+",
+        &["--mouse-look", "off"],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+}
+
+#[test]
+fn buttons_in_nav_reach_no_world_command() {
+    // NAV: the world takes no pointer (no client either: nothing happens)
+    let r = run(
+        "button left down
+button left up
+button right down
+button right up
+expect mode NAV
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+}
+
+#[test]
+fn every_plugins_palette_items_reach_comandos() {
+    // the objects' media items are no S9 world command: only the hub's
+    // `set_palette_items` on `OpenPalette` brings them
+    let r = run(
+        "key colon
+wait 200
+expect mode COMANDOS
+text \"media.play\"
+wait 200
+expect json /ext/overlay/palette/top \"media.play_pause\"
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+}
+
+#[test]
+fn a_shot_locks_the_vault_first() {
+    // the hub injects {"Shot":true} into the objects before every shot
+    let r = run(
+        "shot {dir}/s.png
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    assert!(r.path("s.png").exists());
+}
+
+#[test]
+fn the_stats_summary_has_the_wave3_fields() {
+    let r = run(
+        "wait 300\nquit\n",
+        &[],
+        &[("NKW_STATS", "slow,ext"), ("NKW_STATS_WARMUP_MS", "100")],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let s = r.summary();
+    for k in ["compose_hud_changes", "look_events"] {
+        assert!(s[k].is_u64(), "{k}: {s}");
+    }
+    for p in ["wm", "objects", "cats", "overlay"] {
+        assert!(s["ext_plugin_us_p95"][p].is_u64(), "{p}: {s}");
+    }
+}
+
+/// The overlay's own raster of the NAV mode label at `scale` (the buffer
+/// the hub composes), RGBA.
+fn label_buffer(scale: f64) -> (Vec<u8>, f64) {
+    use nkw::ext::{Ctx, HudInput};
+    let w = nkw::demo::world(
+        nkw_core::Output {
+            width_px: 1280,
+            height_px: 720,
+            scale: scale as f32,
+        },
+        nkw::world::Opts {
+            reduced_motion: false,
+        },
+    );
+    let mut o = nkw::overlay::Overlay::new(&nkw::cli::Cli {
+        demo: true,
+        ..Default::default()
+    });
+    let pids = std::collections::BTreeMap::new();
+    let ctx = Ctx {
+        world: &w,
+        now: 0.0,
+        frame: 0,
+        reduced_motion: false,
+        demo: true,
+        scale,
+        size_px: [1280, 720],
+        pids: &pids,
+        visible_rooms: &[],
+        line: None,
+    };
+    let hud = HudInput {
+        mode_label: w.mode().label(),
+        badges: Vec::new(),
+        dialog: None,
+        focus_rect: None,
+        tags: Vec::new(),
+        pickables: Vec::new(),
+        aimed: false,
+    };
+    let mut els = o.elements(&ctx, &hud);
+    let i = els
+        .iter()
+        .position(|e| e.id == nkw::overlay::LABEL_ID)
+        .expect("the mode label");
+    let mut e = els.swap_remove(i);
+    let mut px = Vec::new();
+    let _ = e.buf.render().draw(|b| {
+        px = b.to_vec();
+        Ok::<_, ()>(Vec::new())
+    });
+    (px, e.buf_scale)
+}
+
+#[test]
+fn the_mode_label_is_crisp_at_1_25() {
+    // a fractional scale: the overlay rasters at physical px (buf_scale =
+    // 1.25) and the hub composes it 1:1, so the shot's label is exactly
+    // the overlay's buffer (no 2-px resampling blur)
+    let r = run(
+        "shot {dir}/l.png\ndump {dir}/l.json\nquit\n",
+        &["--scale", "1.25"],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let d = r.json("l.json");
+    let placed = d["host"]["hud"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == nkw::overlay::LABEL_ID)
+        .unwrap_or_else(|| panic!("no label in {}", d["host"]))
+        .clone();
+    assert_eq!(placed["buf_scale"], 1.25, "{placed}");
+    let at = |i| placed["at"][i].as_f64().unwrap();
+    let (x0, y0) = (at(0), at(1));
+    assert_eq!(
+        (x0.fract(), y0.fract()),
+        (0.0, 0.0),
+        "whole pixels: {placed}"
+    );
+    let bw = placed["px"][0].as_f64().unwrap() as u32;
+    let bh = placed["px"][1].as_f64().unwrap() as u32;
+    let (buf, scale) = label_buffer(1.25);
+    assert_eq!(scale, 1.25);
+    assert_eq!(buf.len() as u32, bw * bh * 4, "same buffer as the frame's");
+    let (w, _, shot) = read_png(&r.path("l.png"));
+    let (mut opaque, mut bad) = (0, 0);
+    for y in 0..bh {
+        for x in 0..bw {
+            let b = ((y * bw + x) * 4) as usize;
+            if buf[b + 3] != 255 {
+                continue; // blended with the world below
+            }
+            opaque += 1;
+            let s = (((y0 as u32 + y) * w + x0 as u32 + x) * 4) as usize;
+            if shot[s..s + 3] != buf[b..b + 3] {
+                bad += 1;
+            }
+        }
+    }
+    assert!(opaque > 100, "{opaque} opaque px");
+    assert_eq!(bad, 0, "{bad} of {opaque} label px differ from the buffer");
+}
+
+#[test]
 fn expect_mismatch_exits_3() {
     let r = run("expect mode FOCO\n", &[], &[]);
     assert_eq!(r.code(), 3);

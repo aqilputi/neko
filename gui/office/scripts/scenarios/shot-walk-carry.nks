@@ -1,0 +1,27 @@
+# R2: carrying a screen in ANDAR — a testclient on acme, `w`, `g` picks it up (it floats
+# 1.2 m ahead, facing you), walk back a second with `s`, `g` again: it stays in the air.
+key J
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait
+wait json /screens/0/size [624.0,720.0] 3000
+wait 300
+key w
+wait 200
+wait json /aim/Screen 1 2000
+inject wm {"command": "world.grab"}
+expect json /carrying 1
+down s
+wait 1000
+up s
+wait 400
+shot ${OUT}/shot-walk-carry-hand.png
+inject wm {"command": "world.grab"}
+wait 300
+expect json /carrying null
+expect json /screens/0/air true
+inject wm {"command": "world.back", "args": {"pressed": "true"}}
+wait 500
+inject wm {"command": "world.back", "args": {"pressed": "false"}}
+wait 400
+shot ${OUT}/shot-walk-carry.png
+dump ${OUT}/dump-walk-carry.json
+quit

@@ -1,0 +1,97 @@
+diff --git a/src/backend/winit/input.rs b/src/backend/winit/input.rs
+index c1a43c04..f90cf4ba 100644
+--- a/src/backend/winit/input.rs
++++ b/src/backend/winit/input.rs
+@@ -10,7 +10,7 @@ use crate::backend::input::{
+     DeviceCapability, Event, GestureBeginEvent, GestureEndEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
+     GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent, InputBackend, InputTime, KeyState,
+     KeyboardKeyEvent, Keycode, PointerAxisEvent, PointerButtonEvent, PointerMotionAbsoluteEvent,
+-    TouchCancelEvent, TouchDownEvent, TouchEvent, TouchMotionEvent, TouchSlot, TouchUpEvent, UnusedEvent,
++    PointerMotionEvent, TouchCancelEvent, TouchDownEvent, TouchEvent, TouchMotionEvent, TouchSlot, TouchUpEvent, UnusedEvent,
+ };
+ 
+ /// Marker used to define the `InputBackend` types for the winit backend.
+@@ -101,6 +101,43 @@ impl Event<WinitInput> for WinitMouseMovedEvent {
+ }
+ 
+ impl PointerMotionAbsoluteEvent<WinitInput> for WinitMouseMovedEvent {}
++
++/// Winit-Backend internal event wrapping `DeviceEvent::PointerMotion` (on Wayland: the host's
++/// `zwp_relative_pointer_v1`, unaccelerated) into a [`PointerMotionEvent`]
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct WinitMouseRelativeEvent {
++    pub(crate) time: InputTime,
++    pub(crate) delta: (f64, f64),
++}
++
++impl Event<WinitInput> for WinitMouseRelativeEvent {
++    fn time(&self) -> InputTime {
++        self.time
++    }
++
++    fn device(&self) -> WinitVirtualDevice {
++        WinitVirtualDevice
++    }
++}
++
++impl PointerMotionEvent<WinitInput> for WinitMouseRelativeEvent {
++    fn delta_x(&self) -> f64 {
++        self.delta.0
++    }
++
++    fn delta_y(&self) -> f64 {
++        self.delta.1
++    }
++
++    // winit only exposes the unaccelerated delta (Wayland: dx_unaccel/dy_unaccel)
++    fn delta_x_unaccel(&self) -> f64 {
++        self.delta.0
++    }
++
++    fn delta_y_unaccel(&self) -> f64 {
++        self.delta.1
++    }
++}
+ impl AbsolutePositionEvent<WinitInput> for WinitMouseMovedEvent {
+     fn x(&self) -> f64 {
+         self.global_position.x
+@@ -529,7 +566,7 @@ impl InputBackend for WinitInput {
+     type KeyboardKeyEvent = WinitKeyboardInputEvent;
+     type PointerAxisEvent = WinitMouseWheelEvent;
+     type PointerButtonEvent = WinitMouseInputEvent;
+-    type PointerMotionEvent = UnusedEvent;
++    type PointerMotionEvent = WinitMouseRelativeEvent;
+     type PointerMotionAbsoluteEvent = WinitMouseMovedEvent;
+ 
+     type GestureSwipeBeginEvent = UnusedEvent;
+diff --git a/src/backend/winit/mod.rs b/src/backend/winit/mod.rs
+index 45dd05af..c6229b5c 100644
+--- a/src/backend/winit/mod.rs
++++ b/src/backend/winit/mod.rs
+@@ -520,6 +520,26 @@ impl<F: FnMut(WinitEvent)> ApplicationHandler for WinitEventLoopApp<'_, F> {
+         }
+     }
+ 
++    fn device_event(
++        &mut self,
++        _event_loop: &dyn ActiveEventLoop,
++        _device_id: Option<winit::event::DeviceId>,
++        event: winit::event::DeviceEvent,
++    ) {
++        // Wayland: winit binds zwp_relative_pointer_v1 per seat and reports its unaccelerated
++        // deltas here; with `Window::set_cursor_grab(CursorGrabMode::Locked)`
++        // (zwp_pointer_constraints_v1) the host cursor stays put and only these keep coming.
++        if let winit::event::DeviceEvent::PointerMotion { delta } = event {
++            let event = InputEvent::PointerMotion {
++                event: WinitMouseRelativeEvent {
++                    time: self.timestamp(),
++                    delta,
++                },
++            };
++            (self.callback)(WinitEvent::Input(event));
++        }
++    }
++
+     fn window_event(&mut self, _event_loop: &dyn ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+         let Some(window) = self.inner.window.as_ref() else {
+             return;

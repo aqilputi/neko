@@ -405,3 +405,219 @@ pub fn office(aspect: f32, seeds: &[u64], at: usize, talk: Option<usize>) -> Dra
 pub fn desk_monitor_cat(aspect: f32) -> DrawList {
     office(aspect, &[11, 23, 37], 1, None)
 }
+
+// ---- wave 3 (R5): the room shell, the walking villagers
+
+/// Where the camera stands for a shell shot.
+#[derive(Clone, Copy, Debug)]
+pub enum View {
+    /// the room's NAV entry (its middle, at the stations' depth)
+    Entry,
+    /// a desk's NAV station
+    Desk(usize),
+    /// out in the hall, looking in through the open side
+    Hall,
+    /// any pose
+    At(Pose),
+}
+
+/// The North room `shelled` draws for `desks` desks.
+pub fn shell_slot(desks: usize) -> RoomSlot {
+    let len = (2.0 * desks as f32 + 1.2).max(6.0);
+    RoomSlot {
+        side: Side::North,
+        x0: 0.0,
+        len,
+        door_x: len / 2.0,
+    }
+}
+
+/// A North room of `seeds.len()` desks (a villager at each), in its shell
+/// (`nkw_gl::shell`, the same composition `nkw` draws), with the hall.
+pub fn shelled(
+    aspect: f32,
+    kind: &nkw_core::persist::RoomKind,
+    index: usize,
+    band: u8,
+    seeds: &[u64],
+    view: View,
+) -> DrawList {
+    use nkw_gl::shell;
+    let slot = shell_slot(seeds.len());
+    let screen = Vec2::new(0.72, 0.45);
+    let first = slot.len / 2.0 - (seeds.len() as f32 - 1.0);
+    let desk_x = |k: usize| first + 2.0 * k as f32;
+    let pose = match view {
+        View::Entry => layout::room_entry(&slot),
+        View::Desk(k) => layout::desk_station(&slot, desk_x(k)),
+        View::Hall => Pose::new(Vec3::new(slot.len / 2.0, 1.6, 1.2), 0.0, -0.06),
+        View::At(p) => p,
+    };
+    let mut l = DrawList::empty(
+        camera(pose.pos, pose.yaw, pose.pitch, aspect),
+        sky_for_band(band),
+    );
+    shell::hall(&[slot], band, &mut l.instances);
+    let look = shell::Look {
+        kind,
+        index,
+        band,
+        visible: true,
+    };
+    shell::room(&slot, &look, pose.pos, &mut l.instances);
+    for (k, seed) in seeds.iter().enumerate() {
+        let x = desk_x(k);
+        let (droot, yaw) = layout::desk_root(&slot, x);
+        let dw = layout::desk_width(screen.x);
+        l.instances.push(piece(
+            MeshId::Desk,
+            Mat4::from_scale_rotation_translation(
+                Vec3::new(dw / 1.6, 1.0, 1.0),
+                Quat::from_rotation_y(-yaw),
+                droot,
+            ),
+        ));
+        let (croot, cyaw) = layout::chair_root(&slot, x);
+        l.instances.push(piece(MeshId::Chair, root(croot, cyaw)));
+        let (froot, fyaw) = layout::monitor_root(&slot, x, screen);
+        let lift = layout::stack_bottom(1, screen) - layout::DESK_TOP;
+        let foot = root(froot, fyaw);
+        rig::monitor(foot, screen, lift, &mut l.instances);
+        let s =
+            rig::monitor_screen(foot, screen, lift) * Mat4::from_scale(Vec3::new(1.0, 1.0, 0.004));
+        l.instances.push(Instance {
+            tint: [60, 64, 80, 255],
+            emissive: 1.0,
+            ..piece(MeshId::Box, s)
+        });
+        let seat = layout::cat_seat(&slot, x);
+        let j = if k % 2 == 0 { typing() } else { sit() };
+        let cam = l.camera.pose.pos;
+        let mut cat = Vec::new();
+        rig::cat_instances(
+            &j,
+            &Coat::from_seed(*seed),
+            root(seat.pos, seat.yaw),
+            Some([226, 120, 120, 255]),
+            0.0,
+            &mut cat,
+        );
+        let fade = layout::fade_for(cam, seat.pos + Vec3::Y * 0.3);
+        l.instances
+            .extend(cat.into_iter().map(|i| Instance { fade, ..i }));
+        l.blobs.push(Blob {
+            center: droot + Vec3::Y * 0.01,
+            radius: dw * 0.5,
+            alpha: 0.25,
+        });
+        l.blobs.push(Blob {
+            center: croot + Vec3::Y * 0.01,
+            radius: 0.3,
+            alpha: 0.3,
+        });
+    }
+    l
+}
+
+/// The reception as `nkw` composes it (wave 3): the shell, the
+/// receptionist's desk in the middle of the back wall, and the furniture
+/// where `crates/nkw/src/objects/place.rs::local_place` puts it for a 6 m
+/// room (the numbers are copied here: `nkw-gl` cannot see `nkw`), drawn as
+/// `objects/draw.rs` draws it.
+pub fn reception_room(aspect: f32, band: u8, view: View) -> DrawList {
+    use nkw_core::persist::RoomKind;
+    let mut l = shelled(aspect, &RoomKind::Reception, 0, band, &[23], view);
+    let slot = shell_slot(1);
+    let len = slot.len;
+    let mid = len / 2.0;
+    let w = |x: f32, y: f32, z: f32| layout::to_world(&slot, Vec3::new(x, y, z));
+    let floor = |x: f32, z: f32, yaw: f32| root(w(x, 0.0, z), yaw);
+    let on_wall = 0.075;
+    let left = -std::f32::consts::FRAC_PI_2;
+    let right = std::f32::consts::FRAC_PI_2;
+    let o = &mut l.instances;
+    // the left wall by the far corner: the turntable on its cabinet, the lamp in the corner
+    rig::turntable(floor(0.42, 1.75, left), 0.6, true, 0.8, o);
+    o.push(Instance {
+        emissive: 0.6,
+        ..piece(MeshId::Lamp, floor(0.32, 0.68, left))
+    });
+    // above the board: ON AIR to the right, the calendar to the left
+    rig::on_air(root(w(mid + 0.52, 2.45, on_wall), 0.0), true, o);
+    o.push(piece(
+        MeshId::Calendar,
+        root(w(mid - 0.52, 2.38, on_wall), 0.0),
+    ));
+    // the plant on the right-hand window's sill (window at 3/4 of the wall)
+    let win = nkw_gl::shell::window_xs(len);
+    let sill = nkw_gl::shell::SILL_Y;
+    rig::plant(root(w(win[win.len() - 1] + 0.32, sill, 0.155), 0.0), 3, o);
+    // the right wall: fireplace, aquarium
+    rig::fireplace(floor(len - 0.25, 2.4, right), 0.15, o);
+    rig::aquarium(floor(len - 0.3, 3.75, right), 0.0, 0.7, o);
+    // by the door: the battery's cushion and oil jar, the package
+    let cushion = floor(mid - 1.3, 4.25, std::f32::consts::PI);
+    o.push(piece(MeshId::Cushion, cushion));
+    rig::oil_lamp(
+        cushion * Mat4::from_translation(Vec3::new(-0.12, 0.12, 0.0)),
+        0.7,
+        o,
+    );
+    o.push(piece(
+        MeshId::Package,
+        floor(mid + 1.2, 4.5, std::f32::consts::PI),
+    ));
+    // the clock above the door, facing the room
+    let clock = root(
+        w(mid, 2.42, layout::ROOM_DEPTH - 0.04),
+        std::f32::consts::PI,
+    );
+    o.push(piece(MeshId::WallClock, clock));
+    o.extend(rig::clock_hands(clock, 10, 10));
+    for (x, z, r) in [
+        (0.42, 1.75, 0.55),
+        (len - 0.25, 2.4, 0.5),
+        (len - 0.3, 3.75, 0.4),
+        (mid - 1.3, 4.25, 0.35),
+        (mid + 1.2, 4.5, 0.3),
+    ] {
+        l.blobs.push(Blob {
+            center: w(x, 0.005, z),
+            radius: r,
+            alpha: 0.3,
+        });
+    }
+    l
+}
+
+/// Four villagers walking across a floor at four phases of the stride,
+/// seen from the side and a little above.
+pub fn cats_walking(aspect: f32) -> DrawList {
+    let mut l = DrawList::empty(
+        camera(Vec3::new(0.0, 0.95, 2.4), 0.0, -0.28, aspect),
+        sky_for_band(3),
+    );
+    shell(&mut l, 7.0, -2.0, 6.0);
+    let seeds = [11u64, 23, 37, 58];
+    for (k, seed) in seeds.iter().enumerate() {
+        let x = -1.35 + 0.9 * k as f32;
+        // walking towards -x (left), each a quarter stride further
+        let g = rig::gait_at(rig::STRIDE_M * (0.125 + k as f32 * 0.25), 0.9);
+        let r = root(Vec3::new(x, 0.0, 0.0), -std::f32::consts::FRAC_PI_2);
+        rig::cat_walking(
+            &sit(),
+            &g,
+            &Coat::from_seed(*seed),
+            r,
+            (k % 2 == 0).then_some([226, 96, 96, 255]),
+            0.0,
+            &mut l.instances,
+        );
+        l.blobs.push(Blob {
+            center: Vec3::new(x, 0.005, 0.0),
+            radius: 0.32,
+            alpha: 0.35,
+        });
+    }
+    l
+}

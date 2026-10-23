@@ -246,6 +246,20 @@ impl Router {
         Route::None
     }
 
+    /// The command one key alone is bound to in `mode`'s chain (first mode
+    /// wins), without touching a sequence in progress: for key releases.
+    /// A key that is only the prefix of a sequence has none.
+    pub fn lookup_in(&self, mode: &str, key: &str) -> Option<String> {
+        let own = [mode.to_string()];
+        let chain = self.chains.get(mode).map_or(&own[..], |c| &c[..]);
+        self.binds
+            .iter()
+            .filter(|(seq, _, _)| seq.len() == 1 && seq[0] == key)
+            .filter_map(|(_, c, m)| chain.iter().position(|x| x == m).map(|r| (r, c)))
+            .min_by_key(|(r, _)| *r)
+            .map(|(_, c)| c.clone())
+    }
+
     /// Drop a sequence in progress (the mode changed under it).
     pub fn reset(&mut self) {
         self.buf.clear();
@@ -580,6 +594,38 @@ mod tests {
         r.reset();
         assert!(r.pending().is_empty());
         assert_eq!(r.feed_in("normal.world", "q"), Route::None);
+    }
+
+    /// A key release resolves the key alone along the chain and leaves a
+    /// sequence in progress alone.
+    #[test]
+    fn lookup_in_is_single_key_and_stateless() {
+        let mut r = world_router();
+        let rows: &[(&str, &str, Option<&str>)] = &[
+            ("world.walk", "w", Some("world.forward")),
+            ("world.walk", "ctrl+k", Some("switcher.open")),
+            ("world.walk", "x", None),
+            ("normal.world", "h", Some("world.left")),
+            ("normal.world", "x", Some("session.stop")),
+            ("normal.world", "g", None), // only a prefix of "gg"
+            ("normal.world", "d", None),
+            ("world.focus", "ctrl+]", Some("world.back")),
+            ("world.focus", "h", None),
+            ("world.nothing", "w", None),
+        ];
+        for (mode, key, want) in rows {
+            assert_eq!(r.lookup_in(mode, key).as_deref(), *want, "{mode} {key}");
+        }
+        assert_eq!(r.feed_in("normal.world", "g"), Route::Pending);
+        assert_eq!(
+            r.lookup_in("normal.world", "w").as_deref(),
+            Some("world.walk")
+        );
+        assert_eq!(r.pending(), ["g"], "untouched");
+        assert_eq!(
+            r.feed_in("normal.world", "g"),
+            Route::Unsupported("world.first".into())
+        );
     }
 
     #[test]

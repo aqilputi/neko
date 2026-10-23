@@ -524,7 +524,8 @@ fn pickables_and_palette() {
     // the reception's 14 + its door
     assert_eq!(p.len(), 15);
     assert!(p.iter().all(|x| matches!(x.pick, Pick::Object { .. })));
-    assert_eq!(o.palette_items(&rig.ctx()).len(), 7);
+    // + world.open, world.library_search, world.vault_lock
+    assert_eq!(o.palette_items(&rig.ctx()).len(), 10);
 }
 
 #[test]

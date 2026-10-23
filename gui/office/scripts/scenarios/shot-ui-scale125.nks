@@ -1,0 +1,13 @@
+#@args --scale 1.25
+# R3: at a fractional scale the overlay rasters at physical px (fonts at round(px · 1.25),
+# OverlayElem.buf_scale = 1.25): the mode label, a toast and the dialogue box with crisp
+# glyph edges, nothing resampled. Run with `--scale 1.25` (the directive above).
+wait 300
+expect json /ext/overlay/label "NAVEGAR"
+inject overlay {"toast": {"text": "escala 1,25: texto nítido", "kind": "info", "ms": 20000}}
+inject overlay {"dialog": {"name": "api-gateway", "rgb": [106, 159, 216], "text": "Aplicar a migração agora?", "choices": ["sim, aplicar agora", "não, revisar antes"]}}
+wait json /ext/overlay/dialog/choices 2 1000
+wait 600
+shot ${OUT}/shot-ui-scale125.png
+dump ${OUT}/dump-ui-scale125.json
+quit

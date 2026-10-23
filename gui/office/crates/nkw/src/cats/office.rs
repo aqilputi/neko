@@ -12,6 +12,9 @@ use nkw_core::{CatId, Time};
 
 /// The reception's cat (toasts, confirmations): never a session.
 pub const RECEPTIONIST: CatId = CatId(1);
+/// The library's cat (the vault's keeper): never a session, ours like the
+/// receptionist, at desk 0 (the counter) of the `RoomKind::Library` room.
+pub const LIBRARIAN: CatId = CatId(999_000);
 /// The first id a session gets (the receptionist keeps 1).
 pub const FIRST_ID: u32 = 2;
 /// Kittens drawn per desk; the rest is a "+N" tag.

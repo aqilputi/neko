@@ -1,0 +1,14 @@
+# R6: the vault in the library, unlocked with the phrase, then shot: a shot always locks it
+# first (LockReason::Shot), so the picture shows it closed. shot-obj-vault-open is impossible.
+wait 100
+key b
+wait json /ext/objects/library/browsing true 2000
+inject objects {"Command":{"name":"world.goto_object","args":{"name":"cofre"}}}
+wait 700
+inject objects {"vault":{"phrase":"destrancar"}}
+wait json /ext/objects/vault/state "unlocked" 1000
+wait 600
+shot ${OUT}/shot-obj-vault-closed.png
+expect json /ext/objects/vault/state "locked"
+dump ${OUT}/dump-obj-vault-closed.json
+quit

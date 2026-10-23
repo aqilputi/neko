@@ -1,0 +1,12 @@
+# R2: the aim in ANDAR — facing acme's first desk with a testclient on it the World aims
+# at its screen (the overlay draws the ring from `aimed`).
+key J
+spawn ${TESTCLIENT} --app-id alpha --checker --no-frame-wait
+wait json /screens/0/size [624.0,720.0] 3000
+wait 300
+key w
+wait 300
+wait json /aim/Screen 1 2000
+shot ${OUT}/shot-walk-aim.png
+dump ${OUT}/dump-walk-aim.json
+quit

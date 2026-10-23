@@ -471,11 +471,25 @@ pub const KITTEN_SCALE: f32 = 0.45;
 
 /// A kitten (0.45 scale, a bigger head) with a laptop in its lap when `typing`.
 pub fn kitten_instances(c: &Coat, root: Mat4, typing: bool, fade: f32, out: &mut Vec<Instance>) {
-    let j = if typing {
+    kitten_instances_looking(c, root, typing, 0.0, fade, out);
+}
+
+/// A kitten whose head is turned by `head_rot_y` (radians, around y; the
+/// paws keep typing): "kittens look but keep typing" (FEEL §3.5).
+pub fn kitten_instances_looking(
+    c: &Coat,
+    root: Mat4,
+    typing: bool,
+    head_rot_y: f32,
+    fade: f32,
+    out: &mut Vec<Instance>,
+) {
+    let mut j = if typing {
         kitten_typing()
     } else {
         CatJoints::default()
     };
+    j.head_rot_y = head_rot_y;
     let small = root * Mat4::from_scale(Vec3::splat(KITTEN_SCALE));
     parts(&j, c, small, None, fade, 1.18, out);
     if typing {
@@ -484,6 +498,303 @@ pub fn kitten_instances(c: &Coat, root: Mat4, typing: bool, fade: f32, out: &mut
             fade,
             ..piece(MeshId::CatLaptop, lap)
         });
+    }
+}
+
+// ---------------------------------------------------------------- walking
+
+/// The legs of a walking cat at one moment (S17).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Gait {
+    /// radians, 2π per stride
+    pub phase: f32,
+    /// swing of each leg around its hip/shoulder, radians (FL FR BL BR);
+    /// positive = the paw forward (towards -z)
+    pub legs: [f32; 4],
+    /// the body's rise over the stance, metres (≥ 0)
+    pub bob: f32,
+    /// forward lean, radians
+    pub lean: f32,
+}
+
+impl Gait {
+    /// Standing still: legs under the body, no bob, no lean.
+    pub const NEUTRAL: Gait = Gait {
+        phase: 0.0,
+        legs: [0.0; 4],
+        bob: 0.0,
+        lean: 0.0,
+    };
+}
+
+/// One stride (a full cycle of the four legs), metres.
+pub const STRIDE_M: f32 = 0.5;
+/// The speed at which the gait reaches its full swing, m/s.
+const FULL_SWING_MPS: f32 = 0.9;
+/// The widest leg swing, radians.
+const SWING_RAD: f32 = 0.42;
+/// The highest bob, metres.
+const BOB_M: f32 = 0.025;
+/// The lean at full swing, radians.
+const LEAN_RAD: f32 = 0.06;
+
+/// The gait after walking `dist_m` at `speed_mps`: a trot, diagonal pairs
+/// (FL+BR, FR+BL) swinging opposite; the phase comes from the distance, so
+/// a walker that stops keeps its legs where they were; speed 0 → neutral.
+pub fn gait_at(dist_m: f32, speed_mps: f32) -> Gait {
+    if speed_mps.is_nan() || speed_mps <= 1e-4 || !dist_m.is_finite() {
+        return Gait::NEUTRAL;
+    }
+    let k = (speed_mps / FULL_SWING_MPS).clamp(0.0, 1.0);
+    let phase = (TAU * dist_m / STRIDE_M).rem_euclid(TAU);
+    let a = SWING_RAD * k * phase.sin();
+    Gait {
+        phase,
+        legs: [a, -a, -a, a],
+        // up twice a stride (once per pair), never below the stance
+        bob: BOB_M * k * 0.5 * (1.0 - (2.0 * phase).cos()),
+        lean: LEAN_RAD * k,
+    }
+}
+
+/// The walking cat's proportions, metres (root = the floor under its middle).
+pub mod walk {
+    /// hip and shoulder joints above the floor
+    pub const HIP_Y: f32 = 0.26;
+    pub const SHOULDER_Y: f32 = 0.24;
+    /// hips behind the middle (+z), shoulders ahead (-z)
+    pub const HIP_Z: f32 = 0.13;
+    pub const SHOULDER_Z: f32 = -0.13;
+    pub const LEG_X: f32 = 0.085;
+    /// legs a little sturdier than the seated cat's arms
+    pub const LEG_THICK: f32 = 1.3;
+    /// the torso drawn lying down: scale of its width, length and thickness
+    pub const TORSO_SCALE: [f32; 3] = [0.82, 0.88, 0.78];
+    /// the head: scale, and its centre (y, z) at rest
+    pub const HEAD_SCALE: f32 = 0.8;
+    pub const HEAD_Y: f32 = 0.265;
+    pub const HEAD_Z: f32 = -0.33;
+    /// where the tail leaves the rump
+    pub const TAIL_Y: f32 = 0.31;
+    pub const TAIL_Z: f32 = 0.19;
+    /// the leg mesh's length (joint to the bottom of the paw)
+    pub const LEG_LEN: f32 = 0.249;
+}
+
+/// The joint frames of a walking cat (body, head, ears, the two front
+/// legs at the shoulder, the tail), for name tags and envelopes.
+pub fn cat_walking_frames(j: &CatJoints, g: &Gait, root: Mat4) -> CatFrames {
+    let w = walk_frames(j, g, root);
+    CatFrames {
+        body: w.body,
+        head: w.head,
+        ears: w.ears,
+        legs: [w.legs[0], w.legs[1]],
+        tail: w.tail,
+    }
+}
+
+struct WalkFrames {
+    /// the torso, its y along the cat's length
+    body: Mat4,
+    head: Mat4,
+    ears: [Mat4; 2],
+    /// FL FR BL BR, at the joint, y up the leg, scaled to reach the floor
+    legs: [Mat4; 4],
+    tail: [Mat4; 3],
+}
+
+fn walk_frames(j: &CatJoints, g: &Gait, root: Mat4) -> WalkFrames {
+    use walk::*;
+    // the bob lifts everything above the paws; the lean pitches it nose-down around the hips
+    let local =
+        t(0.0, HIP_Y + g.bob, HIP_Z) * Mat4::from_rotation_x(-g.lean) * t(0.0, -HIP_Y, -HIP_Z);
+    let frame = root * local;
+    let [sx, sl, st] = TORSO_SCALE;
+    let body = frame
+        * t(0.0, (HIP_Y + SHOULDER_Y) / 2.0, 0.0)
+        * Mat4::from_rotation_x(-FRAC_PI_2)
+        * Mat4::from_scale(Vec3::new(sx, sl, st));
+    let head = frame
+        * t(0.0, HEAD_Y, HEAD_Z)
+        * Mat4::from_quat(
+            Quat::from_rotation_y(j.head_rot_y)
+                * Quat::from_rotation_x(j.head_rot_x)
+                * Quat::from_rotation_z(j.head_rot_z),
+        )
+        * Mat4::from_scale(Vec3::splat(HEAD_SCALE));
+    let ears = [-1.0f32, 1.0].map(|k| {
+        head * t(k * 0.115, 0.1, 0.0)
+            * Mat4::from_rotation_z(-k * 0.32)
+            * Mat4::from_rotation_x(j.ears_back)
+    });
+    // joints on the (leaning) body, legs hanging plumb from them and
+    // swinging around x; each leg is stretched so its paw meets the floor
+    let joint = |x: f32, y: f32, z: f32, swing: f32| {
+        let at = local.transform_point3(Vec3::new(x, y, z));
+        root * t(at.x, at.y, at.z)
+            * Mat4::from_rotation_x(swing)
+            * Mat4::from_scale(Vec3::new(LEG_THICK, at.y / LEG_LEN, LEG_THICK))
+    };
+    let legs = [
+        joint(-LEG_X, SHOULDER_Y, SHOULDER_Z, g.legs[0]),
+        joint(LEG_X, SHOULDER_Y, SHOULDER_Z, g.legs[1]),
+        joint(-LEG_X, HIP_Y, HIP_Z, g.legs[2]),
+        joint(LEG_X, HIP_Y, HIP_Z, g.legs[3]),
+    ];
+    let t0 = frame
+        * t(0.0, TAIL_Y, TAIL_Z)
+        * Mat4::from_rotation_z(j.tail_sway)
+        * Mat4::from_rotation_x(j.tail_pitch)
+        * Mat4::from_scale(Vec3::splat(0.9));
+    let step = t(0.0, 0.2 * RIG_SCALE, 0.0) * Mat4::from_rotation_x(0.7 * j.tail_curl);
+    let t1 = t0 * step;
+    let t2 = t1 * step;
+    WalkFrames {
+        body,
+        head,
+        ears,
+        legs,
+        tail: [t0, t1, t2],
+    }
+}
+
+/// A villager walking on four legs (S17): the torso level at the hips, the
+/// paws from `g`, the head ahead (with `j.head_*` on top), the tail per `j`;
+/// the same parts and tints as [`cat_instances`] plus two more legs.
+/// `root`: the floor point under the cat's middle with its yaw (it walks
+/// towards root's -z).
+pub fn cat_walking(
+    j: &CatJoints,
+    g: &Gait,
+    c: &Coat,
+    root: Mat4,
+    collar: Option<[u8; 4]>,
+    fade: f32,
+    out: &mut Vec<Instance>,
+) {
+    use MeshId::*;
+    let f = walk_frames(j, g, root);
+    let mut push = |mesh, model, tint| out.push(tinted(mesh, model, tint, fade));
+    let tux = c.pattern == Pattern::Tuxedo;
+    let sock = if tux { c.muzzle } else { c.body };
+
+    push(CatTorso, f.body, c.body);
+    // the haunches sit on the back legs' joints
+    for (k, leg) in [(-1.0f32, f.legs[2]), (1.0, f.legs[3])] {
+        let hip = leg.transform_point3(Vec3::ZERO);
+        let haunch = Mat4::from_translation(hip)
+            * Mat4::from_quat(Quat::from_mat4(&root))
+            * t(k * 0.02, -0.01, -0.02)
+            * Mat4::from_scale(Vec3::new(0.9, 0.85, 0.85));
+        push(CatPawBack, haunch, c.body);
+    }
+    for leg in f.legs {
+        push(CatPawFront, leg, sock);
+    }
+    head_parts(j, c, f.head, f.ears, &mut push);
+    let thick = Mat4::from_scale(Vec3::new(j.tail_scale, 1.0, j.tail_scale));
+    for (k, seg) in f.tail.iter().enumerate() {
+        let tint = match (c.pattern, k) {
+            (Pattern::Tabby, 2) => shade(c.tail, 0.78),
+            _ => c.tail,
+        };
+        push(CatTailSeg, *seg * thick, tint);
+    }
+    match c.pattern {
+        Pattern::Solid => {}
+        Pattern::Tabby => {
+            let dark = shade(c.body, 0.8);
+            // across the back (the lying torso's +z is up)
+            for y in [0.12f32, 0.02, -0.08] {
+                let h = torso_half_at(y);
+                let m = f.body
+                    * t(0.0, y, h.y - 0.014)
+                    * Mat4::from_scale(Vec3::new(h.x / 0.15, 1.0, 1.0));
+                push(CatStripe, m, dark);
+            }
+            let crown = Mat4::from_cols(Vec4::Z, Vec4::X, Vec4::Y, Vec4::W);
+            for x in [-0.045f32, 0.045] {
+                let m = f.head
+                    * t(x, 0.0975, 0.0995)
+                    * Mat4::from_rotation_x(0.78)
+                    * crown
+                    * Mat4::from_scale(Vec3::new(0.8, 0.8, 0.5));
+                push(CatStripe, m, shade(c.head, 0.8));
+            }
+        }
+        Pattern::Tuxedo => {
+            // the bib under the chest
+            push(
+                CatChest,
+                f.body * t(0.0, 0.14, -0.1) * Mat4::from_rotation_x(FRAC_PI_2),
+                c.muzzle,
+            );
+        }
+        Pattern::Calico => {
+            let h = torso_half_at(0.07);
+            push(
+                CatPatch,
+                f.body * t(-0.05, 0.07, h.y - 0.012) * Mat4::from_rotation_y(-0.35),
+                c.tail,
+            );
+            let h = torso_half_at(-0.1);
+            push(
+                CatPatch,
+                f.body * t(0.09, -0.1, h.y - 0.02) * Mat4::from_rotation_y(0.55),
+                c.ears,
+            );
+            push(
+                CatPatch,
+                f.head
+                    * t(0.085, 0.06, 0.02)
+                    * Mat4::from_rotation_z(-0.7)
+                    * Mat4::from_rotation_y(FRAC_PI_2),
+                c.ears,
+            );
+        }
+    }
+    if let Some(col) = collar {
+        // around the neck, where the torso narrows towards the head
+        let h = torso_half_at(0.17);
+        let neck = f.body
+            * t(0.0, 0.17, 0.0)
+            * Mat4::from_scale(Vec3::new(1.08 * h.x / 0.112, 1.0, 1.08 * h.y / 0.112));
+        push(CatCollar, neck, col);
+    }
+}
+
+/// Skull, muzzle, eyes and ears on `head`.
+fn head_parts(
+    j: &CatJoints,
+    c: &Coat,
+    head: Mat4,
+    ears: [Mat4; 2],
+    push: &mut impl FnMut(MeshId, Mat4, [u8; 4]),
+) {
+    use MeshId::*;
+    push(CatSkull, head, c.head);
+    push(CatMuzzle, head * t(0.0, -0.052, -0.128), c.muzzle);
+    let open = j.eyes_open.clamp(0.0, 1.0).max(0.12);
+    for k in [-1.0f32, 1.0] {
+        let eye = head
+            * t(k * 0.076, 0.0, -0.133)
+            * Mat4::from_rotation_y(-k * 0.42)
+            * Mat4::from_scale(Vec3::new(1.0, open, 1.0));
+        push(CatEye, eye, [255; 4]);
+    }
+    let style = ear_style(c.ear);
+    for e in ears {
+        push(CatEarOuter, e * style, c.ears);
+        push(CatEarInner, e * style, c.accent);
+    }
+}
+
+fn ear_style(e: Ear) -> Mat4 {
+    match e {
+        Ear::Pointy => Mat4::from_scale(Vec3::new(0.95, 1.15, 1.0)),
+        Ear::Round => Mat4::from_scale(Vec3::new(1.15, 0.78, 1.0)),
+        Ear::Folded => Mat4::from_rotation_x(-1.05) * Mat4::from_scale(Vec3::new(1.1, 0.7, 1.0)),
     }
 }
 
@@ -1000,6 +1311,198 @@ mod tests {
         let ratio = head(&a).y / head(&grown).y;
         assert!((ratio - KITTEN_SCALE).abs() < 1e-3, "{ratio}");
         assert!(tris(&b) <= 1500);
+        // looking: the head turns, the paws and the laptop stay
+        let mut l = Vec::new();
+        kitten_instances_looking(&c, Mat4::IDENTITY, true, 0.9, 0.0, &mut l);
+        assert_eq!(l.len(), b.len());
+        let face = |v: &[Instance]| {
+            v.iter()
+                .find(|i| i.mesh == MeshId::CatSkull)
+                .unwrap()
+                .model
+                .transform_vector3(Vec3::NEG_Z)
+        };
+        assert!(face(&l).normalize().dot(face(&b).normalize()) < 0.7);
+        let paws = |v: &[Instance]| -> Vec<Mat4> {
+            v.iter()
+                .filter(|i| i.mesh == MeshId::CatPawFront || i.mesh == MeshId::CatLaptop)
+                .map(|i| i.model)
+                .collect()
+        };
+        assert_eq!(paws(&l), paws(&b));
+    }
+
+    #[test]
+    fn gait_moves_diagonal_pairs_together_and_opposite() {
+        for k in 0..32 {
+            let d = k as f32 * 0.037;
+            let g = gait_at(d, 0.9);
+            let [fl, fr, bl, br] = g.legs;
+            assert!((fl - br).abs() < 1e-6 && (fr - bl).abs() < 1e-6, "{g:?}");
+            assert!((fl + fr).abs() < 1e-6, "pairs opposite: {g:?}");
+            assert!(g.bob >= 0.0 && g.bob <= 0.025 + 1e-6, "{g:?}");
+            assert!((0.0..TAU).contains(&g.phase));
+            // one stride later it is the same gait
+            let h = gait_at(d + STRIDE_M, 0.9);
+            assert!((g.bob - h.bob).abs() < 1e-4 && (g.legs[0] - h.legs[0]).abs() < 1e-4);
+        }
+        // a quarter stride: the widest swing; half a stride: the other pair forward
+        let q = gait_at(STRIDE_M / 4.0, 0.9);
+        let t = gait_at(STRIDE_M * 0.75, 0.9);
+        assert!(q.legs[0] > 0.3 && t.legs[0] < -0.3);
+        assert!(q.bob > 0.02, "up when the legs are out: {q:?}");
+        // slow walkers swing less, standing ones not at all
+        assert!(gait_at(STRIDE_M / 4.0, 0.3).legs[0] < q.legs[0]);
+        assert_eq!(gait_at(1.234, 0.0), Gait::NEUTRAL);
+        assert_eq!(gait_at(f32::NAN, 1.0), Gait::NEUTRAL);
+        assert!(gait_at(1.0, 0.9).lean > 0.0);
+    }
+
+    fn walker(g: &Gait, root: Mat4) -> Vec<Instance> {
+        let mut v = Vec::new();
+        cat_walking(
+            &CatJoints::default(),
+            g,
+            &Coat::from_seed(7),
+            root,
+            Some([200, 80, 80, 255]),
+            0.0,
+            &mut v,
+        );
+        v
+    }
+
+    #[test]
+    fn a_walking_cat_stands_on_four_paws() {
+        let root =
+            Mat4::from_rotation_translation(Quat::from_rotation_y(0.6), Vec3::new(2.0, 0.0, -1.0));
+        for phase in [0.0f32, PI] {
+            let g = gait_at(STRIDE_M * phase / TAU, 0.9);
+            let v = walker(&g, root);
+            let paws: Vec<_> = v.iter().filter(|i| i.mesh == MeshId::CatPawFront).collect();
+            assert_eq!(paws.len(), 4);
+            for p in paws {
+                let foot = p
+                    .model
+                    .transform_point3(Vec3::new(0.0, -walk::LEG_LEN, -0.01));
+                assert!(foot.y.abs() <= 0.01, "phase {phase}: paw at {foot}");
+            }
+        }
+        // the paws swing about the hips: mid-stride the front-left is ahead of the front-right
+        let g = gait_at(STRIDE_M / 4.0, 0.9);
+        let v = walker(&g, Mat4::IDENTITY);
+        let feet: Vec<Vec3> = v
+            .iter()
+            .filter(|i| i.mesh == MeshId::CatPawFront)
+            .map(|i| {
+                i.model
+                    .transform_point3(Vec3::new(0.0, -walk::LEG_LEN, 0.0))
+            })
+            .collect();
+        assert!(feet[0].z < feet[1].z - 0.05, "{feet:?}");
+        assert!(feet[3].z < feet[2].z - 0.05, "{feet:?}");
+    }
+
+    #[test]
+    fn a_walking_cat_has_the_seated_parts_and_two_more_legs() {
+        for seed in 0..64u64 {
+            let c = Coat::from_seed(seed);
+            let (mut sat, mut walking) = (Vec::new(), Vec::new());
+            cat_instances(
+                &CatJoints::default(),
+                &c,
+                Mat4::IDENTITY,
+                None,
+                0.3,
+                &mut sat,
+            );
+            cat_walking(
+                &CatJoints::default(),
+                &gait_at(0.3, 0.9),
+                &c,
+                Mat4::IDENTITY,
+                None,
+                0.3,
+                &mut walking,
+            );
+            assert_eq!(walking.len(), sat.len() + 2, "seed {seed}");
+            assert!(walking.iter().all(|i| i.fade == 0.3));
+            assert!(tris(&walking) <= 1700);
+            // the same tints part for part
+            let tints = |v: &[Instance], m| {
+                let mut t: Vec<_> = v.iter().filter(|i| i.mesh == m).map(|i| i.tint).collect();
+                t.sort();
+                t.dedup();
+                t
+            };
+            for m in [
+                MeshId::CatTorso,
+                MeshId::CatSkull,
+                MeshId::CatEarOuter,
+                MeshId::CatTailSeg,
+            ] {
+                assert_eq!(tints(&walking, m), tints(&sat, m), "{m:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_walking_cat_is_low_level_and_faces_its_way() {
+        let yaw = 1.1;
+        let root =
+            Mat4::from_rotation_translation(Quat::from_rotation_y(-yaw), Vec3::new(1.0, 0.0, 3.0));
+        for d in [0.0f32, 0.1, 0.2, 0.3] {
+            let v = walker(&gait_at(d, 0.9), root);
+            let top = v
+                .iter()
+                .filter(|i| i.mesh == MeshId::CatEarOuter)
+                .map(|i| i.model.transform_point3(Vec3::new(0.0, 0.11, 0.0)).y)
+                .fold(0.0f32, f32::max);
+            assert!(top <= 0.45, "ear tips at {top}");
+            let f = cat_walking_frames(&CatJoints::default(), &gait_at(d, 0.9), root);
+            // the torso lies level: its long axis is horizontal
+            let along = f.body.transform_vector3(Vec3::Y).normalize();
+            assert!(along.y.abs() < 0.1, "{along}");
+            // the head is ahead of the body, the tail behind
+            let fwd = root.transform_vector3(Vec3::NEG_Z);
+            let body = f.body.transform_point3(Vec3::ZERO);
+            assert!((f.head.transform_point3(Vec3::ZERO) - body).dot(fwd) > 0.2);
+            assert!((f.tail[0].transform_point3(Vec3::ZERO) - body).dot(fwd) < -0.1);
+            // hips at 0.26 m when not bobbing
+        }
+        let f = cat_walking_frames(&CatJoints::default(), &Gait::NEUTRAL, Mat4::IDENTITY);
+        let body = f.body.transform_point3(Vec3::ZERO);
+        assert!((body.y - (walk::HIP_Y + walk::SHOULDER_Y) / 2.0).abs() < 1e-5);
+        // the head turns on top of the walk
+        let look = CatJoints {
+            head_rot_y: 0.8,
+            ..CatJoints::default()
+        };
+        let turned = cat_walking_frames(&look, &Gait::NEUTRAL, Mat4::IDENTITY);
+        assert!(
+            (turned.head.transform_vector3(Vec3::NEG_Z).normalize()
+                - f.head.transform_vector3(Vec3::NEG_Z).normalize())
+            .length()
+                > 0.5
+        );
+    }
+
+    #[test]
+    fn the_monitor_neck_is_sturdy_with_a_flared_foot() {
+        let m = crate::mesh::build(MeshId::MonitorStand);
+        let r_at = |y0: f32, y1: f32| {
+            m.vertices
+                .iter()
+                .filter(|v| v.pos[1] > y0 && v.pos[1] < y1)
+                .map(|v| Vec2::new(v.pos[0], v.pos[2]).length())
+                .fold(0.0f32, f32::max)
+        };
+        assert!(
+            (r_at(0.075, 0.905) - 0.035).abs() < 1e-3,
+            "Ø {}",
+            2.0 * r_at(0.075, 0.905)
+        );
+        assert!(r_at(-0.01, 0.005) > 0.055, "flared foot");
     }
 
     #[test]

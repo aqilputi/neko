@@ -10,9 +10,10 @@ use std::time::Duration;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, LoopHandle, PostAction};
 use nkw_testclient::{
-    Args, Event, Fill, KeyState, Log, MOTHER_FILL, TEXT_MIMES, USAGE, damage_rect, paint,
-    paint_rect, parse_args, physical_size, pick_text_mime,
+    Args, CHILD_AFTER_MS, Event, Fill, KeyState, Log, MOTHER_FILL, TEXT_MIMES, USAGE, child_argv,
+    damage_rect, paint, paint_rect, parse_args, physical_size, pick_text_mime,
 };
+use smithay_client_toolkit::activation::{ActivationHandler, ActivationState, RequestData};
 use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
     wp_fractional_scale_v1::{self, WpFractionalScaleV1},
@@ -76,7 +77,18 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(e) = run(args) {
+    // the token is one-shot and must not leak into children (xdg-activation)
+    let token = if args.activation_token {
+        let t = std::env::var("XDG_ACTIVATION_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        // SAFETY: single-threaded, before any thread or child exists
+        unsafe { std::env::remove_var("XDG_ACTIVATION_TOKEN") };
+        Some(t)
+    } else {
+        None
+    };
+    if let Err(e) = run(args, &argv, token) {
         eprintln!("nkw-testclient: {e}");
         std::process::exit(1);
     }
@@ -130,9 +142,19 @@ struct Client {
     popup: Option<Popup>,
     popup_opened: bool,
     exit: bool,
+    /// `--activation-token`: the global, and the env's token (`Some(None)`:
+    /// the flag without a token); taken at the first configure
+    activation: Option<ActivationState>,
+    token: Option<Option<String>>,
+    /// `--spawn-child`
+    child: Option<std::process::Child>,
 }
 
-fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+fn run(
+    args: Args,
+    argv: &[String],
+    token: Option<Option<String>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let log = Log::open(&args.log)?;
     let conn = Connection::connect_to_env()?;
     let (globals, queue) = registry_queue_init(&conn)?;
@@ -154,8 +176,25 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         (None, None)
     };
 
+    let activation = token
+        .is_some()
+        .then(|| ActivationState::bind(&globals, &qh).ok())
+        .flatten();
     let (w, h) = args.size;
     let pool = SlotPool::new((w * h * 4) as usize, &shm)?;
+    if args.spawn_child {
+        let child = child_argv(argv);
+        event_loop
+            .handle()
+            .insert_source(
+                Timer::from_duration(Duration::from_millis(CHILD_AFTER_MS)),
+                move |_, _, c: &mut Client| {
+                    c.spawn_child(&child);
+                    TimeoutAction::Drop
+                },
+            )
+            .map_err(|e| e.error)?;
+    }
 
     if let Some(ms) = args.exit_after_ms {
         event_loop
@@ -197,6 +236,9 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         popup: None,
         popup_opened: false,
         exit: false,
+        activation,
+        token,
+        child: None,
         args,
     };
     match client.args.parent_of.clone() {
@@ -206,6 +248,10 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     while !client.exit {
         // No timeout: the client only wakes for Wayland events or its own timer.
         event_loop.dispatch(None, &mut client)?;
+    }
+    if let Some(mut c) = client.child.take() {
+        let _ = c.kill();
+        let _ = c.wait();
     }
     Ok(())
 }
@@ -240,6 +286,42 @@ fn new_win(window: Window, tag: Option<&'static str>, fill: Fill, size: (u32, u3
 }
 
 impl Client {
+    /// `--spawn-child`: this binary again, as our child; it dies with us.
+    fn spawn_child(&mut self, argv: &[String]) {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args(argv);
+        // SAFETY: prctl is async-signal-safe
+        unsafe {
+            std::os::unix::process::CommandExt::pre_exec(&mut cmd, || {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+        match cmd.spawn() {
+            Ok(c) => {
+                self.log.emit(Event::SpawnedChild { pid: c.id() });
+                self.child = Some(c);
+            }
+            Err(e) => eprintln!("nkw-testclient: --spawn-child: {e}"),
+        }
+    }
+
+    /// `--activation-token`: activate the main window once it is mapped.
+    fn activate_once(&mut self) {
+        let Some(token) = self.token.take() else {
+            return;
+        };
+        if let (Some(t), Some(a), Some(main)) = (&token, &self.activation, &self.main) {
+            a.activate::<Client>(main.window.wl_surface(), t.clone());
+        }
+        self.log.emit(Event::Activation {
+            token: token.is_some() && self.activation.is_some(),
+        });
+    }
+
     fn make_mother(&mut self, qh: &QueueHandle<Self>, app_id: &str) {
         let surface = self.compositor.create_surface(qh);
         let window = self
@@ -578,6 +660,9 @@ impl WindowHandler for Client {
             win.full_damage = true;
             self.draw(qh, mother);
         }
+        if !mother && first {
+            self.activate_once();
+        }
         if mother && first && self.main.is_none() {
             let parent = self.mother.as_ref().map(|m| m.window.clone());
             self.make_main(qh, parent.as_ref());
@@ -899,6 +984,12 @@ impl DataSourceHandler for Client {
     fn dnd_finished(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource) {}
 
     fn action(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &WlDataSource, _: DndAction) {}
+}
+
+impl ActivationHandler for Client {
+    type RequestUdata = ();
+    // we only activate with a token we were given; never request one
+    fn new_token(&mut self, _: String, _: &RequestData<()>) {}
 }
 
 impl ShmHandler for Client {

@@ -3,8 +3,8 @@
 //! ```text
 //! nkw [--demo] [--headless] [--script FILE|-] [--shot PATH.png] [--reduced-motion] [--preset64]
 //!     [--size WxH] [--scale S] [--seconds N] [--socket NAME] [--gl-debug]
-//!     [--core auto|none|demo|URL] [--world-mod ctrl+alt|super] [--state-dir DIR] [--no-sys]
-//!     [-- CMD ARGS...]
+//!     [--core auto|none|demo|URL] [--world-mod ctrl+alt|super] [--focus-escape KEY]
+//!     [--mouse-look on|off] [--state-dir DIR] [--no-sys] [-- CMD ARGS...]
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -22,8 +22,8 @@ pub mod exit {
 
 pub const USAGE: &str = "usage: nkw [--demo] [--headless] [--script FILE|-] [--shot PATH.png] \
 [--reduced-motion] [--preset64] [--size WxH] [--scale S] [--seconds N] [--socket NAME] \
-[--gl-debug] [--core auto|none|demo|URL] [--world-mod ctrl+alt|super] [--state-dir DIR] \
-[--no-sys] [-- CMD ARGS...]";
+[--gl-debug] [--core auto|none|demo|URL] [--world-mod ctrl+alt|super] [--focus-escape KEY] \
+[--mouse-look on|off] [--state-dir DIR] [--no-sys] [-- CMD ARGS...]";
 
 /// `--core`: where the cats come from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +79,12 @@ pub struct Cli {
     pub core: Option<Core>,
     /// what `world+` is
     pub world_mod: WorldMod,
+    /// `--world-mod` was given (it wins over `[keys] world_mod`)
+    pub world_mod_flag: bool,
+    /// `--focus-escape KEY` (wins over `[keys] focus_escape`)
+    pub focus_escape: Option<String>,
+    /// `--mouse-look on|off` (wins over `[walk] mouse_look`)
+    pub mouse_look: Option<bool>,
     /// `--state-dir`: the persistence root
     pub state_dir: Option<PathBuf>,
     /// `--no-sys`: no D-Bus/PipeWire adapters (implied by `--demo`)
@@ -103,6 +109,9 @@ impl Default for Cli {
             help: false,
             core: None,
             world_mod: WorldMod::CtrlAlt,
+            world_mod_flag: false,
+            focus_escape: None,
+            mouse_look: None,
             state_dir: None,
             no_sys: false,
         }
@@ -137,6 +146,49 @@ impl Cli {
             xdg.as_deref().map(Path::new),
             home.as_deref().map(Path::new),
         )
+    }
+
+    /// `world.toml`: next to `world.json` with `--state-dir`, else
+    /// `$XDG_CONFIG_HOME/nekuroddo/` (`~/.config/nekuroddo/`); `None` under
+    /// `--demo` (the same file `Wm::new` reads).
+    pub fn world_toml(&self) -> Option<PathBuf> {
+        let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+        self.world_toml_from(env("XDG_CONFIG_HOME").as_deref(), env("HOME").as_deref())
+    }
+
+    fn world_toml_from(&self, config_home: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
+        if self.demo {
+            return None;
+        }
+        crate::wm::persist_io::config_path(self.state_dir.as_deref(), config_home, home)
+    }
+
+    /// What `world+` is: `--world-mod`, else `[keys] world_mod`, else
+    /// ctrl+alt.
+    pub fn world_mod_or(&self, cfg: Option<&str>) -> WorldMod {
+        if self.world_mod_flag {
+            return self.world_mod;
+        }
+        match cfg {
+            Some("super") => WorldMod::Super,
+            Some("ctrl+alt") => WorldMod::CtrlAlt,
+            _ => self.world_mod,
+        }
+    }
+
+    /// FOCO's escape chord: `--focus-escape`, else `[keys] focus_escape`,
+    /// else `ctrl+]`.
+    pub fn focus_escape_or(&self, cfg: Option<&str>) -> String {
+        self.focus_escape
+            .as_deref()
+            .or(cfg.filter(|k| !k.trim().is_empty()))
+            .unwrap_or(crate::ext::FOCUS_ESCAPE)
+            .to_string()
+    }
+
+    /// ANDAR's mouse-look: `--mouse-look`, else `[walk] mouse_look`.
+    pub fn mouse_look_or(&self, cfg: bool) -> bool {
+        self.mouse_look.unwrap_or(cfg)
     }
 
     fn state_root_from(&self, xdg: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
@@ -212,6 +264,22 @@ pub fn parse<S: AsRef<str>>(args: &[S], env_reduced: bool) -> Result<Cli, UsageE
                     "super" => WorldMod::Super,
                     _ => return err(format!("bad --world-mod {v:?} (ctrl+alt|super)")),
                 };
+                cli.world_mod_flag = true;
+            }
+            "--focus-escape" => {
+                let v = value(a)?;
+                if v.trim().is_empty() {
+                    return err("bad --focus-escape \"\"".into());
+                }
+                cli.focus_escape = Some(v);
+            }
+            "--mouse-look" => {
+                let v = value(a)?;
+                cli.mouse_look = Some(match v.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return err(format!("bad --mouse-look {v:?} (on|off)")),
+                });
             }
             "--state-dir" => {
                 let v = value(a)?;
@@ -350,6 +418,18 @@ mod tests {
                 Box::new(|c| c.state_dir.as_deref() == Some("/tmp/s".as_ref())),
             ),
             (vec!["--no-sys"], Box::new(|c| c.no_sys && !c.sys())),
+            (
+                vec!["--focus-escape", "ctrl+g"],
+                Box::new(|c| c.focus_escape.as_deref() == Some("ctrl+g")),
+            ),
+            (
+                vec!["--mouse-look", "off"],
+                Box::new(|c| c.mouse_look == Some(false)),
+            ),
+            (
+                vec!["--mouse-look", "on"],
+                Box::new(|c| c.mouse_look == Some(true)),
+            ),
         ];
         for (args, check) in cases {
             let c = ok(&args);
@@ -381,6 +461,9 @@ mod tests {
             (&["--core", "maybe"], "bad --core"),
             (&["--world-mod", "hyper"], "bad --world-mod"),
             (&["--state-dir", ""], "bad --state-dir"),
+            (&["--focus-escape", " "], "bad --focus-escape"),
+            (&["--mouse-look", "maybe"], "bad --mouse-look"),
+            (&["--mouse-look"], "needs a value"),
         ];
         for (args, want) in cases {
             let e = parse(args, false).unwrap_err();
@@ -421,6 +504,48 @@ mod tests {
             Some(PathBuf::from("/t")),
             "unless given"
         );
+    }
+
+    #[test]
+    fn world_toml_follows_the_wm() {
+        let c = Some(Path::new("/c"));
+        let h = Some(Path::new("/home/demo"));
+        assert_eq!(
+            ok(&["--state-dir", "/s"]).world_toml_from(c, h),
+            Some(PathBuf::from("/s/world.toml"))
+        );
+        assert_eq!(
+            ok(&[]).world_toml_from(c, h),
+            Some(PathBuf::from("/c/nekuroddo/world.toml"))
+        );
+        assert_eq!(
+            ok(&[]).world_toml_from(None, h),
+            Some(PathBuf::from("/home/demo/.config/nekuroddo/world.toml"))
+        );
+        assert_eq!(ok(&["--demo"]).world_toml_from(c, h), None);
+        assert_eq!(
+            ok(&["--demo", "--state-dir", "/s"]).world_toml_from(c, h),
+            None,
+            "the demo never reads a world.toml"
+        );
+    }
+
+    #[test]
+    fn the_flags_win_over_world_toml() {
+        let plain = ok(&[]);
+        assert_eq!(plain.world_mod_or(Some("super")), WorldMod::Super);
+        assert_eq!(plain.world_mod_or(Some("hyper")), WorldMod::CtrlAlt);
+        assert_eq!(plain.world_mod_or(None), WorldMod::CtrlAlt);
+        let flag = ok(&["--world-mod", "ctrl+alt"]);
+        assert_eq!(flag.world_mod_or(Some("super")), WorldMod::CtrlAlt);
+        assert_eq!(plain.focus_escape_or(Some("ctrl+g")), "ctrl+g");
+        assert_eq!(plain.focus_escape_or(Some(" ")), "ctrl+]");
+        assert_eq!(plain.focus_escape_or(None), "ctrl+]");
+        let esc = ok(&["--focus-escape", "ctrl+q"]);
+        assert_eq!(esc.focus_escape_or(Some("ctrl+g")), "ctrl+q");
+        assert!(plain.mouse_look_or(true));
+        assert!(!ok(&["--mouse-look", "off"]).mouse_look_or(true));
+        assert!(ok(&["--mouse-look", "on"]).mouse_look_or(false));
     }
 
     #[test]

@@ -10,8 +10,13 @@
 //!   window (`Forward`);
 //! - SALTO, COMANDOS, the reply line and the map: printable keys are text
 //!   (`Text`, for the overlay), the rest resolves in the mode;
-//! - ANDAR's held keys (`w a s d q e`, arrows) are swallowed: the World
-//!   walks with them itself.
+//! - ANDAR's held keys resolve like any other key: a [`HELD_CMDS`] command
+//!   comes out with `pressed` on the press and on the release (S16); the
+//!   release of any other key is swallowed (FOCO: forwarded unless bound);
+//! - `lua.key:<mode>:<key>` bindings (Lua functions, from `/v1/keymap`)
+//!   are commands like the others, in the same chain;
+//! - the plugins' sub-modes (`Plugin::submode`): `map` (overlay) and
+//!   `library` (objects, `world.library → normal.world → normal → *`).
 
 pub mod names;
 pub mod table;
@@ -97,8 +102,11 @@ pub mod sym {
     pub const DOWN: u32 = 0xff54;
 }
 
-/// ANDAR's held keys: the World reads them itself (`World::walk_key`).
-const HELD: [&str; 8] = [
+/// ANDAR's held commands (S16): in `world.walk` they come out with
+/// `pressed = "true"` on the key's press and `"false"` on its release, so a
+/// keymap can rebind walking (the World's `walk_key` stays the keysym
+/// fallback).
+pub const HELD_CMDS: [&str; 9] = [
     "world.forward",
     "world.back",
     "world.strafe_left",
@@ -107,7 +115,16 @@ const HELD: [&str; 8] = [
     "world.turn_right",
     "world.look_up",
     "world.look_down",
+    "world.run",
 ];
+
+/// A held command's route.
+fn held(name: String, pressed: bool) -> Route {
+    Route::Command {
+        name,
+        args: BTreeMap::from([("pressed".to_string(), pressed.to_string())]),
+    }
+}
 
 /// A modifier key alone (Shift, Control, Alt, Super, AltGr …).
 fn is_modifier(sym: u32) -> bool {
@@ -124,6 +141,8 @@ pub struct Router {
     inner: ck::Router,
     /// the keymap mode of the last key (a mode change drops a sequence)
     last_mode: &'static str,
+    /// the plugin sub-mode the last key resolved in ("map", "library")
+    last_sub: Option<&'static str>,
     routed: u64,
 }
 
@@ -138,6 +157,7 @@ impl Router {
             inner: build(&binds),
             binds,
             last_mode: "normal.world",
+            last_sub: None,
             routed: 0,
         }
     }
@@ -161,6 +181,7 @@ impl Router {
             self.inner.reset();
             self.last_mode = m;
         }
+        self.last_sub = names::submode_of(m);
         if is_modifier(ev.sym) {
             return if focus {
                 Route::Forward
@@ -169,6 +190,15 @@ impl Router {
             };
         }
         self.routed += 1;
+        if !ev.pressed {
+            // a release: the key alone, the sequence in progress untouched
+            return match self.inner.lookup_in(m, &ev.name) {
+                Some(c) if m == "world.walk" && HELD_CMDS.contains(&c.as_str()) => held(c, false),
+                Some(_) => Route::Swallow,
+                None if focus => Route::Forward,
+                None => Route::Swallow,
+            };
+        }
         let text = names::is_text_mode(m);
         let printable = ev.utf8.is_some() && !ev.mods.ctrl && !ev.mods.alt && !ev.mods.logo;
         if text && printable {
@@ -176,10 +206,11 @@ impl Router {
         }
         match self.inner.feed_in(m, &ev.name) {
             ck::Route::Core(c) | ck::Route::Unsupported(c) => {
-                if (m == "world.talk" && names::is_client_command(&c))
-                    || (m == "world.walk" && HELD.contains(&c.as_str()))
-                {
+                if m == "world.talk" && names::is_client_command(&c) {
                     return Route::Swallow;
+                }
+                if m == "world.walk" && HELD_CMDS.contains(&c.as_str()) {
+                    return held(c, true);
                 }
                 Route::Command {
                     name: c,
@@ -212,6 +243,7 @@ impl Router {
             "bindings": self.keymap.len(),
             "binds": self.binds.iter().map(|b| b.keys.len()).sum::<usize>(),
             "mode": self.last_mode,
+            "submode": self.last_sub,
             "pending": self.inner.pending(),
             "routed": self.routed,
         })

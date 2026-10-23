@@ -186,6 +186,56 @@ impl Canvas {
         }
     }
 
+    /// An anti-aliased circle outline: centre (`cx`, `cy`) in pixel
+    /// coordinates (pixel centres at +0.5), `r` to the middle of the
+    /// stroke, `w` wide; blended over what is there.
+    pub fn ring(&mut self, cx: f32, cy: f32, r: f32, w: f32, c: Rgb) {
+        if w <= 0.0 || r < 0.0 {
+            return;
+        }
+        let reach = r + w / 2.0 + 1.0;
+        let x0 = (cx - reach).floor().max(0.0) as i32;
+        let y0 = (cy - reach).floor().max(0.0) as i32;
+        let x1 = ((cx + reach).ceil() as i32).min(self.w as i32);
+        let y1 = ((cy + reach).ceil() as i32).min(self.h as i32);
+        for yy in y0..y1 {
+            for xx in x0..x1 {
+                let d = ((xx as f32 + 0.5 - cx).powi(2) + (yy as f32 + 0.5 - cy).powi(2)).sqrt();
+                let cover = (w / 2.0 + 0.5 - (d - r).abs()).clamp(0.0, 1.0);
+                let k = (cover * 255.0).round() as u8;
+                if k == 255 {
+                    let i = (yy as usize * self.w + xx as usize) * 4;
+                    self.px[i..i + 3].copy_from_slice(&c);
+                    self.px[i + 3] = 255;
+                } else {
+                    self.blend(xx, yy, c, k);
+                }
+            }
+        }
+    }
+
+    /// A radial fade over the whole canvas (a vignette): clear inside the
+    /// normalised radius `inner`, `a` at `outer` and beyond, smoothstep in
+    /// between. The radius is 1 where the ellipse touches the edges' middles
+    /// (the corners are at √2).
+    pub fn radial_alpha(&mut self, c: Rgb, a: u8, inner: f32, outer: f32) {
+        if a == 0 || self.w == 0 || self.h == 0 {
+            return;
+        }
+        let (hw, hh) = (self.w as f32 / 2.0, self.h as f32 / 2.0);
+        let span = (outer - inner).max(1e-6);
+        for yy in 0..self.h {
+            let ny = (yy as f32 + 0.5 - hh) / hh;
+            for xx in 0..self.w {
+                let nx = (xx as f32 + 0.5 - hw) / hw;
+                let d = (nx * nx + ny * ny).sqrt();
+                let t = ((d - inner) / span).clamp(0.0, 1.0);
+                let k = (t * t * (3.0 - 2.0 * t) * a as f32).round() as u8;
+                self.blend(xx as i32, yy as i32, c, k);
+            }
+        }
+    }
+
     /// The pixels as premultiplied RGBA (what a compositor's memory buffer
     /// wants); untouched pixels of a [`Canvas::transparent`] stay 0.
     pub fn into_rgba(self) -> (usize, usize, Vec<u8>) {
@@ -500,6 +550,64 @@ mod tests {
             px.as_chunks::<4>().0.iter().all(|p| p[0] <= p[3]),
             "premultiplied"
         );
+    }
+
+    #[test]
+    fn ring_is_an_aa_annulus() {
+        let mut t = Canvas::transparent(21, 21);
+        t.ring(10.5, 10.5, 6.0, 2.0, [255, 255, 255]);
+        // the centre and the far corners stay empty; the stroke is solid
+        assert_eq!(alpha(&t, 10, 10), 0, "hollow");
+        assert_eq!(alpha(&t, 0, 0), 0);
+        assert_eq!(alpha(&t, 16, 10), 255, "on the stroke (r = 6)");
+        assert_eq!(alpha(&t, 10, 4), 255);
+        // along a ray the coverage rises then falls, with AA on both sides
+        let ray: Vec<u8> = (10..21).map(|x| alpha(&t, x, 10)).collect();
+        let peak = ray.iter().position(|a| *a == 255).unwrap();
+        assert!(ray[..=peak].windows(2).all(|w| w[0] <= w[1]), "{ray:?}");
+        assert!(ray[peak..].windows(2).all(|w| w[0] >= w[1]), "{ray:?}");
+        // symmetric: the four quadrants mirror each other
+        for y in 0..21 {
+            for x in 0..21 {
+                assert_eq!(alpha(&t, x, y), alpha(&t, 20 - x, y), "{x},{y}");
+                assert_eq!(alpha(&t, x, y), alpha(&t, x, 20 - y), "{x},{y}");
+            }
+        }
+        let partial =
+            t.px.as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| p[3] > 0 && p[3] < 255);
+        assert!(partial.count() > 8, "anti-aliased");
+        // off-canvas parts clip; a zero width draws nothing
+        let mut c = Canvas::transparent(8, 8);
+        c.ring(0.0, 0.0, 6.0, 2.0, [1, 2, 3]);
+        c.ring(4.0, 4.0, 3.0, 0.0, [1, 2, 3]);
+        assert!(alpha(&c, 6, 0) > 0);
+    }
+
+    #[test]
+    fn radial_alpha_darkens_the_edges_only() {
+        let mut t = Canvas::transparent(64, 36);
+        t.radial_alpha([10, 20, 30], 200, 0.5, 1.4);
+        assert_eq!(alpha(&t, 32, 18), 0, "the centre is clear");
+        assert_eq!(alpha(&t, 40, 18), 0, "inside `inner`");
+        let corner = alpha(&t, 0, 0);
+        assert!(corner > 150 && corner <= 200, "{corner}");
+        // monotone from the centre outwards, along x and along the diagonal
+        let row: Vec<u8> = (32..64).map(|x| alpha(&t, x, 18)).collect();
+        assert!(row.windows(2).all(|w| w[0] <= w[1]), "{row:?}");
+        let diag: Vec<u8> = (0..18)
+            .map(|k| alpha(&t, 32 + k * 32 / 18, 18 + k))
+            .collect();
+        assert!(diag.windows(2).all(|w| w[0] <= w[1]), "{diag:?}");
+        // mirror symmetric, colour kept
+        assert_eq!(alpha(&t, 1, 5), alpha(&t, 62, 30));
+        assert_eq!(&t.px[..3], &[10, 20, 30]);
+        // alpha 0: untouched
+        let mut z = Canvas::transparent(4, 4);
+        z.radial_alpha([9, 9, 9], 0, 0.0, 1.0);
+        assert!(z.px.iter().all(|v| *v == 0));
     }
 
     #[test]

@@ -1,0 +1,17 @@
+# R3: ANDAR's overlay — the crosshair (a dot, a 6 px ring when something interactable is
+# in the aim), the "na mão" keys while a screen is in hand and the comfort vignette
+# (walk.comfort_vignette), forced here with `inject overlay` so the shot does not depend
+# on where the walker stands.
+key w
+wait 300
+expect mode ANDAR
+expect json /ext/overlay/crosshair "dot"
+shot ${OUT}/shot-ui-andar-dot.png
+inject overlay {"aimed": true, "carrying": true, "vignette": 0.75}
+wait 400
+expect json /ext/overlay/crosshair "ring"
+expect json /ext/overlay/hand true
+expect json /ext/overlay/vignette 0.75
+shot ${OUT}/shot-ui-andar.png
+dump ${OUT}/dump-ui-andar.json
+quit

@@ -155,7 +155,7 @@ Medidos na máquina alvo (Intel Iris Xe, Mesa, niri, 1080p a 60 Hz) com o `nkw` 
 | GPU por quadro | S4 a 1080p, MSAA 4× | ≤ 2 ms | 4 ms | `NKW_STATS=gpu` (`GL_TIME_ELAPSED`, EXT_disjoint_timer_query) |
 | câmera em movimento | S4: deslizes h/l a cada 1 s; S5: laço de ANDAR | 60 fps, 0 quadros perdidos | 2 perdidos seguidos | quadros enviados vs callbacks de quadro do host |
 | latência de tecla | S2 | tecla repassada ao cliente na mesma iteração do laço (< 1 ms) | 1 quadro | carimbo de tempo no `nkw-testclient` |
-| RAM | partida sem janelas / 8 janelas | ≤ 45 MB / ≤ 110 MB RSS | 150 MB | `VmRSS`/`VmHWM` (buffers de GPU do cliente não contam) |
+| RAM | partida sem janelas / 8 janelas | ≤ 90 MB / ≤ 110 MB RSS (eram 45 MB na partida; o driver Mesa sozinho ocupa ~48 MB, medido com `NKW_MEM=1`) | 150 MB | `VmRSS`/`VmHWM` (buffers de GPU do cliente não contam) |
 | binário | release, stripped | ≤ 15 MB | 25 MB | `stat -c %s` |
 | partida | até o 1º quadro / até os gatos aparecerem | ≤ 250 ms / ≤ 1 s | 500 ms / 2 s | `NKW_STATS` a partir do `starttime` do processo |
 | build | release a frio / incremental (mexer no `nkw-core`) | ≤ 4 min / ≤ 15 s | 8 min / 30 s | `time cargo build` |

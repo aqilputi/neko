@@ -60,6 +60,8 @@ pub struct Gfx {
     /// the last world pass's list and each screen's commit then: what the
     /// next pass compares against to damage only what changed (S4)
     last_list: Option<nkw_gl::draw::DrawList>,
+    /// the list before that, cleared and refilled by the next pass
+    spare_list: Option<nkw_gl::draw::DrawList>,
     commits: HashMap<ScreenId, CommitCounter>,
     /// world passes skipped because nothing visible changed
     pub skipped_passes: u64,
@@ -71,6 +73,19 @@ pub struct Gfx {
     dim_size: (i32, i32),
     pub gl_debug: bool,
     pub gl_errors: u32,
+    /// the last composed HUD elements as placed (`dump()["host"]["hud"]`)
+    pub hud_placed: Vec<HudPlaced>,
+}
+
+/// One composed HUD element: where it went (physical px) and, for a
+/// physical-px buffer, its buffer size.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct HudPlaced {
+    pub id: u64,
+    pub at: (f64, f64),
+    pub buf_scale: f64,
+    /// buffer px (`None` for integer-scale buffers)
+    pub px: Option<(f64, f64)>,
 }
 
 const GL_RGBA8: u32 = 0x8058;
@@ -88,6 +103,7 @@ impl Gfx {
             world: None,
             world_buf: None,
             last_list: None,
+            spare_list: None,
             commits: HashMap::new(),
             skipped_passes: 0,
             full_damage: std::env::var_os("NKW_FULL_DAMAGE").is_some_and(|v| v == "1"),
@@ -96,6 +112,7 @@ impl Gfx {
             dim_size: (0, 0),
             gl_debug,
             gl_errors: 0,
+            hud_placed: Vec::new(),
         };
         let opts = RenderOpts {
             gl_debug,
@@ -192,19 +209,32 @@ impl Nkw {
             .iter()
             .filter(|w| matches!(w.want, Want::Rate(_)))
             .count();
-        self.stats.ext(ext_us, rates);
+        self.stats.ext(ext_us, rates, now);
+        self.sync_pointer_lock();
         let grid = self.grid(now);
         let mut plan = schedule::plan(&grid, now, &wishes);
         if !was_requested || self.sched.full || !self.shots.is_empty() {
             // host-initiated redraw (expose, resize) or a pending shot
             plan.compose = true;
         }
+        // compose on HUD change (S14): a dialog that finished revealing, a
+        // badge that changed … with nobody wishing for it. Only on frames
+        // that run anyway, and only while the HUD can change by itself.
+        let mut hud = None;
+        if !plan.compose && self.hud_may_change() {
+            let h = self.hud_input(now);
+            if self.hud_hash != Some(ext::hud_hash(&h)) {
+                plan.compose = true;
+                self.stats.compose_hud_changes += 1;
+            }
+            hud = Some(h);
+        }
         if self.sched.last_world == 0.0 && plan.compose {
             plan.world_pass = true;
         }
         let update_us = t0.elapsed().as_micros() as u64;
         if plan.compose {
-            let cost = self.render(plan.world_pass, now);
+            let cost = self.render(plan.world_pass, now, hud);
             let animated = wishes.iter().any(|w| w.want == Want::Continuous);
             let f = stats::Frame {
                 t_us: stats::mono_us(),
@@ -243,7 +273,16 @@ impl Nkw {
         }
     }
 
-    fn render(&mut self, world_pass: bool, now: Time) -> Cost {
+    /// Whether the HUD may differ from the last composed one without a
+    /// wish: the last one was busy, or a dialog or SALTO is up now.
+    fn hud_may_change(&self) -> bool {
+        self.hud_busy
+            || matches!(self.world.mode().kind(), Some(ModeKind::Hint { .. }))
+            || self.ext.cats.dialog().is_some()
+            || self.ext.objects.dialog().is_some()
+    }
+
+    fn render(&mut self, world_pass: bool, now: Time, hud: Option<HudInput>) -> Cost {
         let mut cost = Cost::default();
         let out_px = [self.world.out.width_px, self.world.out.height_px];
         let scale = self.world.out.scale as f64;
@@ -332,8 +371,23 @@ impl Nkw {
                     Some((*id, t?))
                 })
                 .collect();
-            let mut list =
-                crate::scene::draw_list(&self.world, &|id| texs.get(&id).copied(), &self.visible);
+            // two lists, swapped: the last pass's and this one (S4, a)
+            let mut list = self.gfx.spare_list.take().unwrap_or_else(|| {
+                let c = nkw_gl::draw::Camera {
+                    pose: self.world.camera,
+                    fov_y: 1.0,
+                    near: 0.1,
+                    far: 1.0,
+                    aspect: 1.0,
+                };
+                nkw_gl::draw::DrawList::empty(c, sky)
+            });
+            crate::scene::draw_list_into(
+                &self.world,
+                &|id| texs.get(&id).copied(),
+                &self.visible,
+                &mut list,
+            );
             {
                 let ctx = crate::hook_ctx!(self, now);
                 self.ext.wm.draw(&ctx, &mut list);
@@ -383,6 +437,7 @@ impl Nkw {
                 // the texture already shows this list: no GL work at all
                 self.gfx.skipped_passes += 1;
                 self.sched.last_world = now;
+                self.gfx.spare_list = Some(list);
             } else {
                 let t = Instant::now();
                 let world = self.gfx.world.as_mut().unwrap();
@@ -407,36 +462,38 @@ impl Nkw {
                 self.sched.last_world = now;
                 self.gfx.check("world pass");
                 self.refresh_world_buf(&damage);
-                self.gfx.last_list = Some(list);
+                self.gfx.spare_list = self.gfx.last_list.replace(list);
             }
         }
 
         let t = Instant::now();
+        let mut hud = hud;
         let fading = self.world.fade(now) > 0.0;
-        let mut elems: Vec<Elem> = Vec::new();
+        let mut elems: Vec<Elem> = Vec::with_capacity(16);
         for layer in render::layers(&self.world, fading) {
             match layer {
                 Layer::Hud => {
-                    let hud = self.hud_input(now);
+                    // built once per frame: the HUD-change check may have it
+                    let hud = match hud.take() {
+                        Some(h) => h,
+                        None => self.hud_input(now),
+                    };
+                    self.hud_hash = Some(ext::hud_hash(&hud));
+                    self.hud_busy = hud.busy();
                     let overlay = {
                         let ctx = crate::hook_ctx!(self, now);
                         self.ext.overlay.elements(&ctx, &hud)
                     };
+                    let mut placed = std::mem::take(&mut self.gfx.hud_placed);
+                    placed.clear();
                     let r = self.gfx.renderer();
                     for o in overlay {
-                        let at = (o.pos.0 as f64 * scale, o.pos.1 as f64 * scale);
-                        if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
-                            r,
-                            at,
-                            &o.buf,
-                            None,
-                            None,
-                            None,
-                            Kind::Unspecified,
-                        ) {
+                        if let Some((e, p)) = hud_element(r, &o, scale) {
                             elems.push(Elem::Hud(e));
+                            placed.push(p);
                         }
                     }
+                    self.gfx.hud_placed = placed;
                 }
                 Layer::FocusCat(cat) => {
                     let got = {
@@ -615,11 +672,15 @@ impl Nkw {
                 [p.x as i32, p.y as i32, z.x as i32, z.y as i32]
             }),
             tags: ps.iter().flat_map(|p| p.tags(&ctx)).collect(),
-            pickables: if salto {
+            // SALTO's labels, and the map's shelves (R3: `Pick::Book`)
+            pickables: if salto || self.ext.overlay.submode() == Some("map") {
                 ps.iter().flat_map(|p| p.pickables(&ctx)).collect()
             } else {
                 Vec::new()
             },
+            // ANDAR only (the aim is the walker's crosshair)
+            aimed: self.world.walking.is_some()
+                && (self.world.aim().is_some() || self.ext.objects.aimed(&ctx).is_some()),
         }
     }
 
@@ -672,6 +733,92 @@ impl Nkw {
     }
 }
 
+/// `(at, src, size)` of [`hud_placement`].
+pub type HudGeom = ((f64, f64), Option<(f64, f64)>, Option<(i32, i32)>);
+
+/// Where a HUD element lands and at what size (S14). An integer-scale
+/// buffer (`buf_scale == 1`) is placed as Smithay sizes it. A physical-px
+/// buffer (`buf_scale = output scale`, rastered with Smithay scale 1) goes
+/// on whole physical pixels, its logical size `round(px / buf_scale)`, and
+/// its source rectangle exactly the pixels drawn, so texels map 1:1 (no
+/// resampling blur at fractional scales). Returns `(at, src, size)`: the
+/// physical location, the source rectangle's size in buffer px (`None`:
+/// the whole buffer) and the logical size (`None`: the buffer's own).
+pub fn hud_placement(
+    pos: (i32, i32),
+    buf_px: (f64, f64),
+    buf_scale: f64,
+    out_scale: f64,
+) -> HudGeom {
+    if buf_scale == 1.0 {
+        return (
+            (pos.0 as f64 * out_scale, pos.1 as f64 * out_scale),
+            None,
+            None,
+        );
+    }
+    let at = (
+        (pos.0 as f64 * out_scale).round(),
+        (pos.1 as f64 * out_scale).round(),
+    );
+    let logical = (
+        (buf_px.0 / buf_scale).round() as i32,
+        (buf_px.1 / buf_scale).round() as i32,
+    );
+    // what Smithay will draw: round(logical × scale) px from a whole-px origin
+    let drawn = (
+        (logical.0 as f64 * out_scale).round(),
+        (logical.1 as f64 * out_scale).round(),
+    );
+    let k = buf_scale / out_scale;
+    (at, Some((drawn.0 * k, drawn.1 * k)), Some(logical))
+}
+
+/// The render element of one overlay element ([`hud_placement`]).
+fn hud_element(
+    r: &mut GlowRenderer,
+    o: &crate::ext::OverlayElem,
+    scale: f64,
+) -> Option<(MemoryRenderBufferRenderElement<GlowRenderer>, HudPlaced)> {
+    use smithay::backend::renderer::element::Element;
+    let plain = |r: &mut GlowRenderer, at: (f64, f64)| {
+        MemoryRenderBufferRenderElement::from_buffer(
+            r,
+            at,
+            &o.buf,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        )
+        .ok()
+    };
+    let placed = |at, px| HudPlaced {
+        id: o.id,
+        at,
+        buf_scale: o.buf_scale,
+        px,
+    };
+    if o.buf_scale == 1.0 {
+        let (at, _, _) = hud_placement(o.pos, (0.0, 0.0), 1.0, scale);
+        return plain(r, at).map(|e| (e, placed(at, None)));
+    }
+    // the buffer's size in px: the whole-buffer element's source
+    let px = plain(r, (0.0, 0.0))?.src().size;
+    let (at, src, size) = hud_placement(o.pos, (px.w, px.h), o.buf_scale, scale);
+    MemoryRenderBufferRenderElement::from_buffer(
+        r,
+        at,
+        &o.buf,
+        None,
+        src.map(|(w, h)| Rectangle::from_size((w, h).into())),
+        size.map(|(w, h)| (w, h).into()),
+        Kind::Unspecified,
+    )
+    .ok()
+    .map(|e| (e, placed(at, Some((px.w, px.h)))))
+}
+
 /// The composed frame as top-down RGBA. `output_flipped`: the output
 /// renders with `Transform::Flipped180` (the winit window's GL surface).
 fn read_back<R>(
@@ -693,4 +840,42 @@ where
     }
     crate::shot::opaque(&mut px);
     Some(px)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integer_buffers_are_placed_as_before() {
+        assert_eq!(
+            hud_placement((10, 20), (99.0, 9.0), 1.0, 1.25),
+            ((12.5, 25.0), None, None)
+        );
+        assert_eq!(
+            hud_placement((3, 4), (1.0, 1.0), 1.0, 2.0),
+            ((6.0, 8.0), None, None)
+        );
+    }
+
+    #[test]
+    fn physical_buffers_map_one_to_one() {
+        // 125 x 30 px rastered at 1.25: 100 x 24 logical, drawn 125 x 30 px
+        let (at, src, size) = hud_placement((10, 21), (125.0, 30.0), 1.25, 1.25);
+        assert_eq!(at, (13.0, 26.0), "whole physical pixels");
+        assert_eq!(size, Some((100, 24)));
+        assert_eq!(src, Some((125.0, 30.0)));
+        // sizes that do not divide: the source is exactly what is drawn
+        for w in 90..140 {
+            let (_, src, size) = hud_placement((0, 0), (w as f64, 17.0), 1.25, 1.25);
+            let (sw, sh) = src.unwrap();
+            let (lw, lh) = size.unwrap();
+            assert_eq!(sw, (lw as f64 * 1.25).round(), "1:1 at {w}");
+            assert_eq!(sh, (lh as f64 * 1.25).round());
+            assert!(
+                (sw - w as f64).abs() <= 1.0,
+                "at most one px off the buffer: {w}"
+            );
+        }
+    }
 }

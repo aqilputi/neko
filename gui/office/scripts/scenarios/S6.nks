@@ -1,0 +1,22 @@
+# S6 (onda 3): a biblioteca aberta sobre o fixture "big" do plugin dos objetos (50k entradas,
+# 12 níveis, gerado na memória: nunca o $HOME). Vai à biblioteca, folheia 3 estantes, busca uma
+# vez, e fica olhando a estante. Mede a RAM com a biblioteca aberta (≤ S1 + 30 MB, relatado) e
+# que a biblioteca parada não acorda o mundo.
+#@warmup 4000
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait --log ${RUN}/client-alpha.json
+wait 800
+inject objects {"library":{"fixture":"big"}}
+key b
+wait 1200
+key l
+key l
+key j
+key Return
+wait 400
+key l
+key Return
+wait 400
+key BackSpace
+wait 400
+inject cats {"cmd":"world.library_search","args":{"q":"notas"}}
+wait 1000

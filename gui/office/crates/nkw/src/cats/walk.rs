@@ -40,6 +40,12 @@ pub struct Walk {
     pub end_yaw: f32,
     /// where it hops up to on arrival (a desk top beside your screen)
     pub perch: Option<Vec3>,
+    /// metres walked on the paths before this one (the stride carries on
+    /// across a re-route)
+    pub before_m: f32,
+    /// the spot it was sent to (the path may end short of it, at the
+    /// nearest free floor)
+    pub goal: Vec2,
 }
 
 impl Walk {
@@ -51,6 +57,21 @@ impl Walk {
             (p, self.end_yaw, false)
         } else {
             (p, inbox::yaw_of(dir), true)
+        }
+    }
+
+    /// How far along its path it is at `now` (the gait's clock: pausing
+    /// keeps the legs where they were).
+    pub fn dist(&self, now: Time) -> f32 {
+        (((now - self.t0).max(0.0) * inbox::SPEED as f64) as f32).min(self.path.len)
+    }
+
+    /// Its legs at `now`: the stride from the distance walked; standing
+    /// (arrived, or a cut) is the neutral stance.
+    pub fn gait(&self, now: Time) -> nkw_gl::rig::Gait {
+        match self.at(now).2 {
+            true => nkw_gl::rig::gait_at(self.before_m + self.dist(now), inbox::SPEED),
+            false => nkw_gl::rig::Gait::NEUTRAL,
         }
     }
 
@@ -73,95 +94,100 @@ impl Walk {
 /// ends with, and the perch it hops up to (a desk top).
 pub type Spot = (Vec2, f32, Option<Vec3>);
 
-/// Whether a face at `p` shows in the frame seen from `you` (inside the
-/// view with a margin) and off your screen (`screen`: its centre and half
-/// size in NDC).
-fn in_view(ctx: &Ctx, you: &Pose, p: Vec3, screen: Option<(Vec2, Vec2)>) -> bool {
-    let aspect = ctx.size_px[0] as f32 / ctx.size_px[1].max(1) as f32;
-    let cam = nkw_gl::draw::Camera {
-        pose: *you,
-        fov_y: crate::world::FOV_Y,
-        near: 0.05,
-        far: 60.0,
-        aspect,
-    };
-    let c = cam.proj() * cam.view() * p.extend(1.0);
-    if c.w <= 0.0 {
-        return false;
-    }
-    let n = Vec2::new(c.x, c.y) / c.w;
-    let inside = n.x.abs() < 0.88 && n.y > -0.8 && n.y < 0.85;
-    let over = screen.is_some_and(|(sc, half)| {
-        let d = (n - sc).abs();
-        d.x < half.x + 0.08 && d.y < half.y + 0.25
-    });
-    inside && !over
-}
-
-/// The spots walkers go to, best first: at a desk station, the front
-/// corners of the room's desk tops that show in the frame beside your
-/// screen (a cat sitting on the floor 1.3 m before an eye-height camera is
-/// below the frame), nearest first; then the floor semicircle before you
-/// (§6.6), which is all there is in ANDAR or in the hall.
-pub fn spots(ctx: &Ctx, you: &Pose) -> Vec<Spot> {
+/// The desk-top points a walker may perch on at desk `d` of `room`: the
+/// four corners of its top, inset so a sitting cat fits (front first), each
+/// with the floor point it jumps up from.
+fn desk_corners(w: &crate::world::World, room: nkw_core::RoomId, d: usize) -> Vec<(Vec3, Vec3)> {
     use nkw_core::layout::{
         CHAIR_FROM_WALL, DESK_DEPTH, DESK_FROM_WALL, DESK_TOP, desk_width, facing,
     };
+    let (Some(seat), Some((_, logical))) = (w.cat_seat(room, d), w.monitor_place(room, d)) else {
+        return Vec::new();
+    };
+    let f = facing(seat.yaw);
+    let f = Vec3::new(f.x, 0.0, f.z).normalize_or_zero();
+    let right = Vec3::new(-f.z, 0.0, f.x);
+    let dw = desk_width(logical.x * nkw_core::onetoone::M_PER_PX);
+    let centre = seat.pos + f * (CHAIR_FROM_WALL - DESK_FROM_WALL - DESK_DEPTH / 2.0);
+    let mut v = Vec::new();
+    for depth in [-1.0f32, 1.0] {
+        for side in [-1.0f32, 1.0] {
+            let x = right * side * (dw / 2.0 - 0.17);
+            let c = centre + x + f * depth * (DESK_DEPTH / 2.0 - 0.2);
+            let below = centre + x - f * (DESK_DEPTH / 2.0 + 0.25);
+            v.push((Vec3::new(c.x, DESK_TOP, c.z), below));
+        }
+    }
+    v
+}
+
+/// Your screen at a desk station, in NDC from `you`.
+fn station_screen(ctx: &Ctx, you: &Pose) -> Option<inbox::NdcRect> {
     let w = ctx.world;
-    let mut out: Vec<(f32, Spot)> = Vec::new();
-    if let nkw_core::Station::Desk { room, desk, .. } = w.station
+    let nkw_core::Station::Desk { room, desk, .. } = w.station else {
+        return None;
+    };
+    let (place, logical) = w.monitor_place(room, desk)?;
+    let aspect = ctx.size_px[0] as f32 / ctx.size_px[1].max(1) as f32;
+    Some(inbox::screen_rect(
+        you,
+        aspect,
+        &place,
+        logical * nkw_core::onetoone::M_PER_PX,
+    ))
+}
+
+/// The spots walkers go to, best first: at a desk station, the desk-top
+/// corners of the room that frame a sitting cat comfortably from your
+/// station ([`inbox::framing`]: head in the middle band, ears inside, off
+/// your screen, never nearer than 1.6 m), nearest first (a cat sitting on
+/// the floor before an eye-height camera is below the frame); then the
+/// floor semicircle before you (§6.6), which is all there is in ANDAR or
+/// in the hall.
+pub fn spots(ctx: &Ctx, you: &Pose, kittens: &dyn Fn(CatId) -> usize) -> Vec<Spot> {
+    let w = ctx.world;
+    let aspect = ctx.size_px[0] as f32 / ctx.size_px[1].max(1) as f32;
+    let mut out: Vec<(inbox::Framing, Spot)> = Vec::new();
+    if let nkw_core::Station::Desk { room, .. } = w.station
         && !w.mode().walking()
         && let Some(r) = w.rooms.iter().find(|r| r.id == room)
     {
-        // your screen in NDC (perches must not cover it)
-        let screen = w.monitor_place(room, desk).map(|(place, logical)| {
-            let size = logical * nkw_core::onetoone::M_PER_PX;
-            let aspect = ctx.size_px[0] as f32 / ctx.size_px[1].max(1) as f32;
-            let cam = nkw_gl::draw::Camera {
-                pose: *you,
-                fov_y: crate::world::FOV_Y,
-                near: 0.05,
-                far: 60.0,
-                aspect,
-            };
-            let vp = cam.proj() * cam.view();
-            let right = Pose::new(Vec3::ZERO, place.yaw, 0.0).right();
-            let ndc = |q: Vec3| {
-                let c = vp * q.extend(1.0);
-                Vec2::new(c.x, c.y) / c.w.max(1e-4)
-            };
-            let a = ndc(place.center - right * size.x / 2.0 - Vec3::Y * size.y / 2.0);
-            let b = ndc(place.center + right * size.x / 2.0 + Vec3::Y * size.y / 2.0);
-            ((a + b) / 2.0, (b - a).abs() / 2.0)
-        });
+        let screen = station_screen(ctx, you);
         for d in 0..r.desks.len() {
-            let (Some(seat), Some((_, logical))) = (w.cat_seat(room, d), w.monitor_place(room, d))
-            else {
-                continue;
-            };
-            let f = facing(seat.yaw);
-            let f = Vec3::new(f.x, 0.0, f.z).normalize_or_zero();
-            let right = Vec3::new(-f.z, 0.0, f.x);
-            let dw = desk_width(logical.x * nkw_core::onetoone::M_PER_PX);
-            let centre = seat.pos + f * (CHAIR_FROM_WALL - DESK_FROM_WALL - DESK_DEPTH / 2.0);
-            for side in [-1.0f32, 1.0] {
-                let corner =
-                    centre + right * side * (dw / 2.0 - 0.17) - f * (DESK_DEPTH / 2.0 - 0.2);
-                let perch = Vec3::new(corner.x, DESK_TOP, corner.z);
-                if !in_view(ctx, you, perch + Vec3::Y * FLOOR_FACE, screen) {
+            let seat = w.cat_seat(room, d);
+            let n = r.desks[d].cat.map_or(0, kittens);
+            for (perch, below) in desk_corners(w, room, d) {
+                // a cat's kittens keep their corners
+                let taken = seat.is_some_and(|s| {
+                    (0..n.min(4)).any(|i| super::kitten_spot(&s, i).distance(perch) < 0.3)
+                });
+                if taken {
                     continue;
                 }
-                let below = corner - f * 0.45;
+                let fr = inbox::framing(you, aspect, perch, screen);
+                if !fr.ok() {
+                    continue;
+                }
                 let look = floor(you.pos) - floor(perch);
-                out.push((
-                    look.length(),
-                    (floor(below), inbox::yaw_of(look), Some(perch)),
-                ));
+                out.push((fr, (floor(below), inbox::yaw_of(look), Some(perch))));
             }
         }
     }
-    out.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut v: Vec<Spot> = out.into_iter().map(|(_, s)| s).collect();
+    out.sort_by(|a, b| a.0.dist.total_cmp(&b.0.dist));
+    // nearest first, each clear of the ones before it in the frame (cats
+    // side by side, never one in front of the other)
+    let mut taken: Vec<inbox::Framing> = Vec::new();
+    let mut v: Vec<Spot> = Vec::new();
+    for (fr, s) in out {
+        if taken
+            .iter()
+            .any(|t| (t.head_x - fr.head_x).abs() < inbox::SPOT_GAP)
+        {
+            continue;
+        }
+        taken.push(fr);
+        v.push(s);
+    }
     for i in 0..inbox::NEAR_MAX + 1 {
         let (p, yaw) = stop(you, i);
         v.push((p, yaw, None));
@@ -308,7 +334,8 @@ impl Walks {
             w.rooms.iter().map(|r| r.desks.len()).sum::<usize>(),
         );
         if self.spots.as_ref().is_none_or(|(k, _)| *k != key) {
-            self.spots = Some((key, spots(ctx, &you)));
+            let kittens = |c: CatId| o.get(c).map_or(0, |v| v.kittens().0.len());
+            self.spots = Some((key, spots(ctx, &you, &kittens)));
         }
         let spots = self
             .spots
@@ -321,10 +348,7 @@ impl Walks {
             let cur = self.walks.iter().position(|x| &x.key == key);
             if let Some(i) = cur {
                 let x = &self.walks[i];
-                if !x.home
-                    && x.perch == perch
-                    && x.path.pts.last().is_some_and(|p| p.distance(*to) < 0.3)
-                {
+                if !x.home && x.perch == perch && x.goal.distance(*to) < 0.3 {
                     continue;
                 }
             }
@@ -332,6 +356,7 @@ impl Walks {
                 Some(i) => self.walks[i].at(now).0,
                 None => start_of(ctx, *cat, *postman),
             };
+            let before_m = cur.map_or(0.0, |i| self.walks[i].before_m + self.walks[i].dist(now));
             let path = route(w, from, *to, 0.7).unwrap_or_else(|| Path::new(vec![from, *to]));
             let t0 = if instant {
                 now - path.secs() - 1.0
@@ -352,6 +377,8 @@ impl Walks {
                 home: false,
                 end_yaw,
                 perch,
+                before_m,
+                goal: *to,
             };
             match cur {
                 Some(i) => self.walks[i] = walk,
@@ -364,6 +391,7 @@ impl Walks {
                 continue;
             }
             let from = x.at(now).0;
+            x.before_m += x.dist(now);
             let to = home_of(ctx, x.cat, x.postman);
             x.path = route(w, from, to.0, 0.0).unwrap_or_else(|| Path::new(vec![from, to.0]));
             x.t0 = if ctx.reduced_motion {
@@ -374,6 +402,7 @@ impl Walks {
             x.home = true;
             x.end_yaw = to.1;
             x.perch = None;
+            x.goal = to.0;
         }
         self.walks.retain(|x| !(x.home && x.arrived(now)));
     }
@@ -602,7 +631,7 @@ mod tests {
         w.tick(10.0);
         let you = w.station_pose(&w.station).unwrap();
         let rooms = w.visible_rooms(&[]);
-        let sp = with_ctx(&w, &rooms, 10.0, |ctx| spots(ctx, &you));
+        let sp = with_ctx(&w, &rooms, 10.0, |ctx| spots(ctx, &you, &|_| 0));
         let perched: Vec<&Spot> = sp.iter().filter(|s| s.2.is_some()).collect();
         assert!(!perched.is_empty(), "some desk top in view");
         for (_, _, p) in &perched {
@@ -629,11 +658,142 @@ mod tests {
             face.dot((floor(you.pos) - floor(p)).normalize()) > 0.99,
             "facing you"
         );
-        // its face shows in the frame
-        let (fp, _) = walks.face(first.cat, 100.0).unwrap();
-        assert!(with_ctx(&w, &rooms, 100.0, |ctx| in_view(
-            ctx, &you, fp, None
-        )));
+        // it reads comfortably from your station
+        let fr = inbox::framing(&you, 16.0 / 9.0, p, None);
+        assert!(fr.ok(), "{fr:?}");
+    }
+
+    /// The busy world at `px`, the camera at acme's first desk.
+    fn busy_world_at(o: &Office, px: (u32, u32)) -> crate::world::World {
+        let mut w = crate::demo::world(
+            crate::cats::tests::out(px.0, px.1, 1.0),
+            crate::world::Opts {
+                reduced_motion: false,
+            },
+        );
+        w.sync_contexts(&o.contexts(), 0.0);
+        w.command(crate::world::Cmd::RoomNext, 0.0);
+        w.tick(10.0);
+        w
+    }
+
+    #[test]
+    fn the_inbox_frames_every_walker_comfortably_from_the_station() {
+        for px in [(1280, 720), (1920, 1080)] {
+            let (_, o, mut walks, t) = busy_walks();
+            let w = busy_world_at(&o, px);
+            let you = w.station_pose(&w.station).unwrap();
+            let rooms = w.visible_rooms(&[]);
+            let screen = with_ctx(&w, &rooms, 10.0, |ctx| station_screen(ctx, &you));
+            assert!(screen.is_some());
+            for i in 0..40 {
+                let now = 10.0 + i as f64 * 0.25;
+                with_ctx(&w, &rooms, now, |ctx| {
+                    walks.plan(ctx, &o, t + (now * 1000.0) as i64)
+                });
+            }
+            assert_eq!(walks.counts().1, 3, "three near you");
+            let aspect = px.0 as f32 / px.1 as f32;
+            // acme's room at 16:9 frames two desk tops clear of each other
+            // (api-gateway's); the third comes to the floor before you
+            let perched = walks.walks.iter().filter(|x| x.perch.is_some()).count();
+            assert_eq!(perched, 2, "{px:?}");
+            let mut xs = Vec::new();
+            for x in walks.walks.iter().filter(|x| x.perch.is_some()) {
+                let (p, _, moving) = x.at3(200.0);
+                assert!(!moving);
+                let fr = inbox::framing(&you, aspect, p, screen);
+                xs.push(fr.head_x);
+                assert!(
+                    (inbox::HEAD_Y_MIN..=inbox::HEAD_Y_MAX).contains(&fr.head_y),
+                    "{}: head at {} of the frame",
+                    x.key,
+                    fr.head_y
+                );
+                assert!(fr.ears_inside, "{}", x.key);
+                assert!(fr.screen_overlap <= 0.10, "{}: {fr:?}", x.key);
+                assert!(fr.dist >= 1.6, "{}: {} m", x.key, fr.dist);
+            }
+            assert!(
+                (xs[0] - xs[1]).abs() >= inbox::SPOT_GAP,
+                "side by side: {xs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_stride_follows_the_distance_walked() {
+        let walk = Walk {
+            key: "k".into(),
+            cat: CatId(3),
+            seed: 1,
+            postman: false,
+            path: Path::new(vec![Vec2::ZERO, Vec2::new(0.0, -2.8)]),
+            t0: 10.0,
+            home: false,
+            end_yaw: 0.0,
+            perch: None,
+            before_m: 0.0,
+            goal: Vec2::new(0.0, -2.8),
+        };
+        // 0.25 m in: half a stride (STRIDE_M = 0.5)
+        let t = 10.0 + 0.25 / inbox::SPEED as f64;
+        let g = walk.gait(t);
+        assert!((g.phase - std::f32::consts::PI).abs() < 1e-3, "{g:?}");
+        assert_eq!(g, nkw_gl::rig::gait_at(0.25, inbox::SPEED));
+        // arrived (2 s at 1.4 m/s): standing, the neutral stance
+        assert_eq!(walk.gait(12.5), nkw_gl::rig::Gait::NEUTRAL);
+        // a re-route carries the stride on: the same legs at the same place
+        let on = Walk {
+            path: Path::new(vec![Vec2::new(0.0, -0.25), Vec2::new(1.0, -0.25)]),
+            t0: t,
+            before_m: walk.dist(t),
+            ..walk.clone()
+        };
+        assert!((on.gait(t).phase - g.phase).abs() < 1e-4);
+        // the same distance, the same legs, whatever the clock says
+        let late = Walk {
+            t0: 50.0,
+            ..walk.clone()
+        };
+        assert_eq!(late.gait(50.0 + 0.25 / inbox::SPEED as f64), g);
+    }
+
+    #[test]
+    fn framing_rules_table() {
+        let cam = Pose::new(Vec3::new(0.0, nkw_core::layout::EYE, 0.0), 0.0, -0.09);
+        let fwd = cam.heading();
+        let ahead =
+            |d: f32, x: f32, y: f32| Vec3::new(fwd.x * d - fwd.y * x, y, fwd.y * d + fwd.x * x);
+        let rows: [(Vec3, bool, &str); 6] = [
+            (ahead(2.2, 0.8, 0.75), true, "a desk top beside"),
+            (ahead(1.2, 0.5, 0.75), false, "too near"),
+            (ahead(1.8, 0.6, 0.0), false, "on the floor: below the band"),
+            (ahead(2.4, 0.0, 0.75), false, "over your screen"),
+            (ahead(2.2, 3.0, 0.75), false, "out to the side"),
+            (ahead(-2.0, 0.0, 0.75), false, "behind"),
+        ];
+        let screen = Some((Vec2::new(0.0, 0.05), Vec2::new(0.25, 0.3)));
+        for (base, ok, what) in rows {
+            let fr = inbox::framing(&cam, 16.0 / 9.0, base, screen);
+            assert_eq!(fr.ok(), ok, "{what}: {fr:?}");
+        }
+        // the ear tips are above the rig's ears
+        let mut v = Vec::new();
+        super::super::body::cat_instances(
+            &nkw_gl::rig::CatJoints::default(),
+            &super::super::body::Coat::from_seed(1),
+            glam::Mat4::IDENTITY,
+            None,
+            0.0,
+            &mut v,
+        );
+        let ear = v
+            .iter()
+            .filter(|i| i.mesh == nkw_gl::draw::MeshId::CatEarOuter)
+            .map(|i| i.model.transform_point3(Vec3::ZERO).y)
+            .fold(0.0f32, f32::max);
+        assert!(inbox::EAR_TIP_Y >= ear + 0.08, "ears at {ear}");
     }
 
     #[test]

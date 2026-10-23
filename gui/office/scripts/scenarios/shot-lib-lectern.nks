@@ -1,0 +1,18 @@
+# R6: the lectern — notas.md previewed (≤ 64 KB of UTF-8, rastered with the shipped font).
+wait 100
+key b
+wait json /ext/objects/library/browsing true 2000
+inject objects {"Command":{"name":"world.book_next","args":{}}}
+inject objects {"Command":{"name":"world.book_next","args":{}}}
+inject objects {"Command":{"name":"world.book_next","args":{}}}
+inject objects {"Command":{"name":"world.book_next","args":{}}}
+inject objects {"Command":{"name":"world.book_next","args":{}}}
+inject objects {"Command":{"name":"world.book_next","args":{}}}
+expect json /ext/objects/library/selected "notas.md"
+wait 400
+inject objects {"Command":{"name":"world.book_preview","args":{}}}
+wait json /ext/objects/library/lectern true 2000
+wait 300
+shot ${OUT}/shot-lib-lectern.png
+dump ${OUT}/dump-lib-lectern.json
+quit

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use smithay::backend::input::InputTime;
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-    KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+    KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::input::keyboard::{FilterResult, Keycode};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
@@ -21,6 +21,9 @@ use crate::world::Cmd;
 /// What the keyboard filter took from the client.
 enum Taken {
     Command(String, BTreeMap<String, String>),
+    /// a held command's release (ANDAR): runs even when the press predates
+    /// the mode (the machine's key filter is for presses)
+    Release(String, BTreeMap<String, String>),
     Text(KeyEv),
     /// FOCO on a cat's terminal: the key is the pane's
     Pane(CatId, KeyEv),
@@ -40,6 +43,11 @@ impl Nkw {
                 );
                 let pos = event.position_transformed(size.into());
                 self.pointer_motion(pos, Event::time(&event));
+            }
+            InputEvent::PointerMotion { event } => {
+                // the host's relative pointer (the patched Smithay winit
+                // backend; unpatched builds never see this variant)
+                self.look(event.delta_x(), event.delta_y());
             }
             InputEvent::PointerButton { event } => {
                 self.pointer_button(event.button_code(), event.state(), Event::time(&event));
@@ -86,7 +94,27 @@ impl Nkw {
         p.frame(self);
     }
 
+    /// ANDAR's mouse-look: a relative motion turns the walker's head.
+    pub fn look(&mut self, dx: f64, dy: f64) {
+        if self.world.walking.is_none() || !self.world.walk_config().mouse_look {
+            return;
+        }
+        self.world.look_delta(dx as f32, dy as f32);
+        self.stats.look_events += 1;
+        self.world.want(nkw_core::Wish::world(nkw_core::Want::Once));
+        self.wake();
+    }
+
     pub fn pointer_button(&mut self, button: u32, state: ButtonState, time: InputTime) {
+        if self.world.walking.is_some() && self.world.focus_2d().is_none() {
+            // ANDAR: no client has the pointer; left interacts, right grabs
+            if state == ButtonState::Pressed
+                && let Some(cmd) = walk_button(button)
+            {
+                self.dispatch(cmd, &BTreeMap::new());
+            }
+            return;
+        }
         let p = self.seat.get_pointer().unwrap();
         // in FOCO a click on the dimmed world around the window leaves (§3.6)
         if state == ButtonState::Pressed
@@ -140,6 +168,17 @@ impl Nkw {
                 Some(Target::CatTerm(c)) => Some(c),
                 _ => None,
             };
+            if !pressed && st.world.mode().walking() {
+                // ANDAR: a held walking command ends on its key's release
+                // (S16: `{"pressed": "false"}`), rebound keys included
+                let sub = st.ext.submode();
+                if let Route::Command { name, args } =
+                    st.ext.router.route(st.world.mode(), sub, &ev)
+                {
+                    st.intercepted.remove(&code);
+                    return FilterResult::Intercept(Some(Taken::Release(name, args)));
+                }
+            }
             if !pressed {
                 // a release follows its press
                 return match (st.intercepted.remove(&code), pane) {
@@ -148,7 +187,7 @@ impl Nkw {
                     (false, _) => FilterResult::Forward,
                 };
             }
-            let sub = st.ext.overlay.submode();
+            let sub = st.ext.submode();
             let taken = match st.ext.router.route(st.world.mode(), sub, &ev) {
                 Route::Forward => match pane {
                     Some(c) => Some(Taken::Pane(c, ev)),
@@ -163,6 +202,11 @@ impl Nkw {
         });
         // keys held across a mode change count only once released (§3.2)
         let counts = self.world.machine.key(code.raw(), pressed);
+        if let Some(Some(Taken::Release(name, args))) = &taken {
+            self.dispatch(name, args);
+            let _ = self.dh.flush_clients();
+            return;
+        }
         if let Some(Some(t)) = taken
             && counts
         {
@@ -178,6 +222,7 @@ impl Nkw {
                     self.wake();
                 }
                 Taken::Pane(c, ev) => self.ext.cats.key_to_pane(c, &ev),
+                Taken::Release(..) => {}
             }
         } else if counts
             && self.world.mode().walking()
@@ -196,7 +241,28 @@ impl Nkw {
     }
 }
 
+/// What a pointer button press does in ANDAR (evdev codes).
+pub fn walk_button(button: u32) -> Option<&'static str> {
+    match button {
+        0x110 => Some("world.interact"),
+        0x111 => Some("world.grab"),
+        _ => None,
+    }
+}
+
 fn xkb_utf32(sym: u32) -> u32 {
     use smithay::input::keyboard::xkb;
     xkb::keysym_to_utf32(xkb::Keysym::new(sym))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn walk_buttons() {
+        assert_eq!(walk_button(0x110), Some("world.interact"));
+        assert_eq!(walk_button(0x111), Some("world.grab"));
+        assert_eq!(walk_button(0x112), None, "middle: nothing");
+    }
 }

@@ -33,7 +33,12 @@ pub enum ExitRule {
 pub struct ExitTo {
     pub station: Station,
     pub pose: Pose,
+    /// `snap` to a station farther than [`SNAP_CUT_M`]: a cut, not a glide
+    pub cut: bool,
 }
+
+/// `snap` cuts instead of gliding beyond this, metres (on the floor).
+pub const SNAP_CUT_M: f32 = 8.0;
 
 /// Apply `rule` at `here` with the room's `spots`.
 pub fn exit(rule: ExitRule, here: &Pose, spots: &[Spot]) -> ExitTo {
@@ -48,10 +53,12 @@ pub fn exit(rule: ExitRule, here: &Pose, spots: &[Spot]) -> ExitTo {
         Some(s) => ExitTo {
             station: s.station,
             pose: s.pose,
+            cut: rule == ExitRule::Snap && floor_dist(s) > SNAP_CUT_M,
         },
         None => ExitTo {
             station: Station::Free(*here),
             pose: *here,
+            cut: false,
         },
     }
 }
@@ -141,6 +148,55 @@ mod tests {
             exit(ExitRule::Stay, &here, &spots).station,
             Station::Free(here)
         );
+    }
+
+    #[test]
+    fn the_exit_table() {
+        // (rule, here, spots, want station id or None = Free, cut)
+        let a = spot(0.0, 0.0, 0.0, 1);
+        let far = spot(9.0, 0.0, 0.0, 2);
+        let behind = spot(0.5, 0.0, 180.0, 3);
+        type Row = (ExitRule, Pose, Vec<Spot>, Option<u32>, bool);
+        let rows: Vec<Row> = vec![
+            (
+                ExitRule::Auto,
+                me(0.5, 0.0, 0.0),
+                vec![a, far],
+                Some(1),
+                false,
+            ),
+            (ExitRule::Auto, me(0.5, 0.0, 0.0), vec![behind], None, false),
+            (ExitRule::Auto, me(5.0, 0.0, 0.0), vec![a, far], None, false),
+            (
+                ExitRule::Snap,
+                me(5.0, 0.0, 0.0),
+                vec![a, far],
+                Some(2),
+                false,
+            ),
+            (
+                ExitRule::Snap,
+                me(0.4, 0.0, 0.0),
+                vec![behind],
+                Some(3),
+                false,
+            ),
+            (ExitRule::Snap, me(-9.0, 0.0, 0.0), vec![far], Some(2), true),
+            (ExitRule::Snap, me(0.0, 7.9, 0.0), vec![a], Some(1), false),
+            (ExitRule::Stay, me(0.0, 0.0, 0.0), vec![a], None, false),
+            (ExitRule::Stay, me(0.0, 0.0, 0.0), vec![], None, false),
+        ];
+        for (i, (rule, here, spots, want, cut)) in rows.into_iter().enumerate() {
+            let out = exit(rule, &here, &spots);
+            match want {
+                Some(id) => assert_eq!(out.station, Station::Air(ScreenId(id)), "row {i}"),
+                None => {
+                    assert_eq!(out.station, Station::Free(here), "row {i}");
+                    assert_eq!(out.pose, here, "row {i}");
+                }
+            }
+            assert_eq!(out.cut, cut, "row {i}");
+        }
     }
 
     #[test]
