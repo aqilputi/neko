@@ -2,10 +2,10 @@
 okf_version: "0.2"
 type: Plan
 title: Plano — o mundo como WM de verdade (nkw): telas no espaço, paridade com o niri e a sessão própria
-description: Segundo adendo ao plano do mundo. O que falta para o nkw ser um gerenciador de janelas completo como o niri (lacuna por área, com fase), a especificação das telas no espaço (criar, arrastar no ar com o mouse, redimensionar em 3D, grupos, arranjos, telas que seguem você, ímãs, desfazer), o que mais entra nesta fase (DECORAR, notas, salas pelo telefone, modo foto), as decisões de arquitetura da sessão própria (um binário, backends, nunca tela preta, layer-shell e multimonitor no mundo 3D, roteamento do ponteiro, config e IPC), orçamentos, testes e o roteiro em cinco fases com go/no-go.
+description: Segundo adendo ao plano do mundo. O que falta para o nkw ser um gerenciador de janelas completo como o niri (lacuna por área, com fase), as decisões do usuário de 2026-10-24, a especificação das telas no espaço (criar, arrastar no ar com ctrl+arrastar em qualquer ponto, redimensionar em 3D, grupos, arranjos das telas abertas, telas que seguem você, ímãs, desfazer), o HUD de jogo que absorve o papel da barra, o que mais entra nesta fase (DECORAR, notas, salas pelo telefone, modo foto), as decisões de arquitetura da sessão própria (um binário, backends, nunca tela preta, layer-shell e multimonitor no mundo 3D, roteamento do ponteiro, config e IPC, captura e compartilhamento de tela), orçamentos, testes e o roteiro em cinco fases com go/no-go.
 resource: https://github.com/aqilputi/nekuroddo/tree/main/gui/office
-tags: [plano, mundo, nkw, wayland, smithay, compositor, wm, niri, drm, kms, libinput, libseat, layer-shell, multimonitor, portais, ipc, arrumar, telas-no-ar, mouse, decorar, sessão]
-timestamp: 2026-10-24T18:00:00Z
+tags: [plano, mundo, nkw, wayland, smithay, compositor, wm, niri, drm, kms, libinput, libseat, layer-shell, multimonitor, portais, ipc, arrumar, telas-no-ar, mouse, decorar, sessão, hud, waybar, compartilhamento-de-tela, screencast]
+timestamp: 2026-10-24T21:00:00Z
 generated: { by: agent:claude-code/claude-fable-5-1, at: 2026-10-24T18:00:00Z }
 status: draft
 stale_after: 2027-04-24T00:00:00Z
@@ -59,10 +59,11 @@ sources:
 O pedido do usuário, na íntegra: *"OK, para isto virar um WM de verdade parecido com o niri, o que falta? Eu
 queria criar telas e arrastá-las pelo ar, e outras coisas. Faça um plano para isso."*
 
-Este documento responde em sete partes: a **lacuna** frente ao niri, área por área (§1); a especificação das
-**telas no espaço**, que é o pedido explícito (§2); as **outras coisas** que valem entrar nesta fase (§3); as
-**decisões de arquitetura** da sessão própria e do mundo com mouse (§4); **orçamentos e testes** (§5); o
-**roteiro** com ordem, aceites e go/no-go (§6); e as **perguntas** que só o usuário responde (§7).
+Este documento responde em oito partes: as **decisões do usuário** sobre as perguntas da primeira versão
+(logo depois do resumo); a **lacuna** frente ao niri, área por área (§1); a especificação das **telas no
+espaço**, que é o pedido explícito (§2); as **outras coisas** que valem entrar, inclusive o **HUD de jogo**
+(§3); as **decisões de arquitetura** da sessão própria e do mundo com mouse (§4); **orçamentos e testes** (§5);
+o **roteiro** com ordem, aceites e go/no-go (§6); e as **perguntas** (§7), agora quase todas respondidas.
 
 Ele estende o [plano do mundo](plano-mundo.md) e o [adendo dos objetos](plano-mundo-objetos.md). Tudo o que
 eles decidem continua valendo, em especial: aninhado primeiro (D1), Smithay (D2), GLES próprio (D3), teclado
@@ -80,10 +81,13 @@ utilizável, com um só monitor, sem mouse além de clicar e olhar, e sem nada d
   1. **Telas no espaço** (o pedido): criar telas onde você mira, arrastá-las pelo ar com o mouse e pelo teclado,
      redimensionar em 3D, agrupar, salvar arranjos, telas que seguem você. Tudo isso roda **aninhado**, é
      visível já na primeira semana e não arrisca a sessão de ninguém. **Vai primeiro (fase A).**
-  2. **Paridade de WM** com o niri, ainda aninhado: IPC `nkw msg`, regras de janela completas, recarga do
-     `world.toml`, mesas em abas, salas criadas e renomeadas, `spawn` na partida, capturas de tela, hover com
-     o mouse, urgência, animações configuráveis, ferramentas de depuração. **Fase B.** Mais o que o 3D
-     oferece de graça e o niri não tem: DECORAR, notas na parede, modo foto. **Fase C.**
+  2. **HUD de jogo e paridade de WM** com o niri, ainda aninhado: o **HUD de jogo** que faz o papel da barra
+     (salas como barra de atalhos, relógio, bandeja, áudio, rede, bateria, CPU/RAM, mídia, notificações,
+     agentes; minimapa, bússola, inbox como diário de missões, medidores) é o primeiro pacote da fase; depois
+     IPC `nkw msg`, regras de janela completas, recarga do `world.toml`, mesas em abas, salas criadas e
+     renomeadas, `spawn` na partida, capturas de tela, **modo apresentação** (compartilhar uma janela só,
+     aninhado), hover com o mouse, urgência, animações configuráveis, ferramentas de depuração. **Fase B.**
+     Mais o que o 3D oferece de graça e o niri não tem: DECORAR, notas na parede, modo foto. **Fase C.**
   3. **A sessão própria**: DRM/KMS atômico, libinput, libseat, multimonitor, layer-shell, bloqueio, ociosidade,
      captura e portais, gama, DPMS, IME, cursor, notificações. É o grosso do esforço e o único pedaço que pode
      deixar você sem tela. **Fase D, atrás de `nkw --session`**, com a sessão niri continuando padrão até um
@@ -92,19 +96,41 @@ utilizável, com um só monitor, sem mouse além de clicar e olhar, e sem nada d
   janelas da mesma vista, lado a lado como uma baia de vidro; um monitor pode ser uma **vista fixa** (o mapa, uma
   estação). **Um binário** (`nkw`, `nkw --session`, `nkw --headless`) com um trait de backend (D12). **Nunca
   tela preta** (D13): modo plano de emergência, hook de panic que salva o estado, unidade de reinício e queda
-  para o greeter. **Barras e lançadores externos são planos**, em 2D sobre o mundo; a faixa do HUD se recolhe
-  quando há barra (D14). **Mouse**: arrastar move; clicar seleciona; `world+arrastar` funciona em todo modo,
-  inclusive no FOCO (D15). **`world.toml` continua canônico, com recarga a quente; `nkw msg` é a IPC**, JSON
-  por socket, com fluxo de eventos (D16). **Portais**: `xdg-desktop-portal-wlr` para captura e `-gtk` para o
-  resto; `wlr-screencopy` + `ext-image-copy-capture` escritos à mão (D17).
+  para o greeter. **Barras e lançadores externos são planos**, em 2D sobre o mundo; o HUD de jogo esconde o
+  que a barra já mostra e recua da zona exclusiva dela (D14, D19). **Mouse**: `ctrl+arrastar` move a tela a
+  partir de qualquer ponto no NAV, no ARRUMAR e no ANDAR com ponteiro livre; o clique simples seleciona (e,
+  no FOCO, é do app); `world+arrastar` funciona em todo modo e é o único jeito de mover no FOCO (D15).
+  **`world.toml` continua canônico, com recarga a quente; `nkw msg` é a IPC**, JSON por socket, com fluxo de
+  eventos (D16). **Portais e compartilhamento de tela**: `xdg-desktop-portal-wlr` para captura e `-gtk` para o
+  resto; `wlr-screencopy` + `ext-image-copy-capture` escritos à mão; o seletor do portal é o SALTO do mundo;
+  compartilhar tela e janela numa reunião é **condição do go/no-go** (D17).
 - **As telas no espaço reaproveitam o que existe**: `Station::Air`, `carry.rs`, `collide::ray_hit_quad`,
   `onetoone.rs`, `persist::Air`, as intenções de lugar, o `--script` com ponteiro sintético. O novo é um
   **modo ARRUMAR** (`v` no NAV), uma máquina de estados do ponteiro, `magnet.rs` (ímãs e guias), `history.rs`
   (desfazer), **molduras vazias** (a próxima janela nasce ali), **clusters**, **arranjos** nomeados e **telas
   ancoradas** (seguem a vista e, a 1:1, são compostas em 2D exato, sem FOCO — o "segundo monitor" mesmo num
   monitor só).
-- **Esforço**: A 3–4 semanas · B 3 · C 2 · D 6–8 · E 3–4, um dev com agents; 17 a 21 semanas no total. O
-  go/no-go para a sessão virar padrão fica no fim da E, com critérios medidos (§6.7).
+- **Esforço**: A 3–4 semanas · B 4–5 · C 2 · D 6–8 · E 3–4, um dev com agents, no máximo quatro pacotes em
+  paralelo por onda (a máquina do usuário não aguenta mais); 18 a 23 semanas no total. O go/no-go para a
+  sessão virar padrão fica no fim da E, com critérios medidos (§6.7).
+
+## Decisões do usuário (2026-10-24)
+
+As perguntas da §7 da primeira versão tiveram estas respostas. Elas mudam a §2 (arrasto e arranjos), criam a
+§3.5 (HUD de jogo) e a D19, e mexem em D14, D15, D17, §5 e §6.
+
+| # | pergunta | decisão | onde muda |
+|---|---|---|---|
+| 2 | arrastar no NAV | **`ctrl+arrastar` em qualquer ponto da tela** (aro ou conteúdo) move a tela no NAV, no ARRUMAR e no ANDAR com ponteiro livre; o **clique simples** continua selecionando (e, no FOCO, vai para o app). **`world+arrastar`** vale em todo modo, inclusive no FOCO. No FOCO, `ctrl+clique` dentro do app é do app (abrir link em aba nova, seleção múltipla…), então **no FOCO só `world+arrastar` move**; no NAV e no ARRUMAR, `ctrl+arrastar` em qualquer ponto. O modificador é configurável (`[mouse] drag_modifier`) | §2.3, §2.4, §2.12, D15 |
+| 3 | arranjos | **só arrumam as janelas já abertas**: nada é lançado; o que o arranjo pede e não está aberto vira um aviso com a lista | §2.6, fase A |
+| 5 | barras | hoje roda a waybar, mas o desejado é um **HUD de jogo** que absorva o papel da barra (salas no lugar de workspaces, relógio, bandeja, áudio, rede, bateria, CPU/RAM, mídia, contagem de notificações, agentes), com cara de jogo: minimapa e bússola nos cantos, a inbox como diário de missões, medidores de status. **Barras layer-shell de verdade continuam suportadas na sessão** para quem as quer: planas, em 2D, e o HUD esconde as partes que elas já cobrem quando há zona exclusiva | §3.5, D14, D19, fase B |
+| 6 | compartilhar tela | **é condição do go/no-go**: o ScreenCast pelo portal (`xdg-desktop-portal-wlr` com `wlr-screencopy`/`ext-image-copy-capture`) tem de funcionar na sessão própria, tela inteira e janela única; aninhado também, do jeito documentado em D17 (o niri já compartilha a janela inteira do `nkw`; uma janela só pelo modo apresentação) | D17, §5.1, fases B e D, §6.7 |
+| 1 | monitores | sem resposta. **Premissa**: o multimonitor é desenhado de forma genérica (D11 vale para 1..N saídas, quaisquer posições, escalas e rotações), e a primeira entrega da D cobre 1 saída, 2 lado a lado, 1 + 1 vertical e 3 | D11, fase D |
+| 4 | sessão própria neste ciclo | sem resposta. **Premissa**: a sessão própria **continua no roteiro** (fase D); o compartilhamento de janela pelo portal e o go/no-go dependem dela. Se o usuário decidir parar antes, A–C ficam de pé sozinhas | §6.6 |
+
+O que **não** mudou: aninhado primeiro, teclado primeiro (todo gesto de mouse tem caminho por teclado),
+1:1 exato no FOCO, câmera parada durante um arrasto, orçamentos de leveza, e a sessão niri como padrão até o
+go/no-go.
 
 ## 1. A lacuna frente ao niri
 
@@ -143,11 +169,13 @@ Legenda: ✓ existe · ◐ parcial · ✗ não existe · — não se aplica ao m
 
 | área | hoje | o que fazer | fase |
 |---|---|---|---|
-| layer-shell (waybar, mako, fuzzel, swaybg) | ✗ | `wlr-layer-shell` pelo Smithay (`WlrLayerShellState`, `LayerMap`): **D14** — `top`/`overlay` compostos em 2D sobre o mundo com zona exclusiva respeitada pelo HUD; `background`/`bottom` viram "o lado de fora" (visto pelas janelas das salas); teclado exclusivo/on-demand pelas regras do protocolo | D |
+| layer-shell (waybar, mako, fuzzel, swaybg) | ✗ | `wlr-layer-shell` pelo Smithay (`WlrLayerShellState`, `LayerMap`): **D14** — `top`/`overlay` compostos em 2D sobre o mundo com zona exclusiva respeitada pelo HUD (que esconde o que a barra já mostra, D19); `background`/`bottom` viram "o lado de fora" (visto pelas janelas das salas); teclado exclusivo/on-demand pelas regras do protocolo | D |
+| o papel da barra sem barra | ◐ (faixa de status da onda 4) | **HUD de jogo** (§3.5, D19): salas como barra de atalhos, relógio, bandeja (StatusNotifierItem), áudio, rede, bateria, CPU/RAM, mídia, notificações, agentes, minimapa, bússola, diário de missões; módulos custom com o protocolo JSON da waybar | B |
 | bloqueio de sessão (swaylock) | ✗ | `ext-session-lock-v1` (`SessionLockManagerState`): a superfície de bloqueio é composta 2D em toda saída; o passe do mundo para; o cofre tranca; sem superfície do cliente, uma tela creme própria com o relógio | D |
 | ociosidade (swayidle) | ✗ | `ext-idle-notify-v1` (`IdleNotifierState`), alimentado por libinput; combina com o `idle-inhibit` dos clientes que já registramos; `[session] idle_after_s` → noite no mundo (as luzes baixam) | D |
-| captura: screenshot e screencast | ✗ (só `--shot`) | `wlr-screencopy-v1` **e** `ext-image-copy-capture-v1`, à mão (como niri e cosmic-comp), com `block_out_from_capture` das regras e o cofre trancando antes; captura de **uma tela** = a textura da janela (exata, independe do 3D); ON AIR acende durante uma sessão de captura | D |
-| backend de portal | ✗ | **D17**: `xdg-desktop-portal-wlr` (ScreenCast, Screenshot) + `xdg-desktop-portal-gtk` (FileChooser, Settings, Notification, AppChooser); `nkw-portals.conf` e `XDG_CURRENT_DESKTOP=nkw` só na sessão própria | D |
+| captura: screenshot e screencast | ✗ (só `--shot`) | `wlr-screencopy-v1` **e** `ext-image-copy-capture-v1` (+ `ext-image-capture-source-v1` para saída e para toplevel), à mão ou pelo Smithay se a rev pinada já os tiver, com `block_out_from_capture` das regras e o cofre trancando antes; captura de **uma tela** = a textura da janela (exata, independe do 3D); a captura de saída sai **sem o HUD** por padrão (`[capture] hud = false`); ON AIR acende no HUD local durante uma sessão de captura | D |
+| backend de portal | ✗ | **D17**: `xdg-desktop-portal-wlr` (ScreenCast, Screenshot) + `xdg-desktop-portal-gtk` (FileChooser, Settings, Notification, AppChooser); `nkw-portals.conf` e `XDG_CURRENT_DESKTOP=nkw` só na sessão própria; o seletor de saída/janela do `-wlr` é o SALTO do mundo (`nkw msg pick --dmenu`) | D |
+| compartilhar tela numa reunião (go/no-go) | ◐ (aninhado: o niri compartilha a janela inteira do `nkw`) | sessão própria: tela inteira e janela única pelo portal em navegador e app Electron (§6.7); aninhado: o mundo inteiro pelo portal do niri (já funciona) e **uma janela só pelo modo apresentação** (`world.present`: a tela em 1:1 ocupando a janela do `nkw`, sem HUD, sem o mundo em volta) | B (aninhado) · D |
 | gama / luz noturna (wlsunset, gammastep) | ✗ | `wlr-gamma-control-v1` à mão → LUT de gama do CRTC; o mundo já tem hora do dia, mas a gama vai no CRTC para o 1:1 continuar exato | D |
 | screenshot UI própria | ✗ | `world.screenshot {output \| screen \| area}`: `screen` captura a textura da tela selecionada; `area` é um retângulo 2D sobre o quadro; salva em `~/Imagens/nekuroddo/` e copia; funciona aninhado | B |
 
@@ -166,7 +194,7 @@ Legenda: ✓ existe · ◐ parcial · ✗ não existe · — não se aplica ao m
 | temas de cursor | ✗ (cursor do host) | sessão própria: XCursor (`XCURSOR_THEME`/`SIZE`), plano de cursor por hardware, formas do `cursor-shape` mapeadas para nomes do tema, imagens próprias dos clientes; no NAV/ANDAR, mira em vez de cursor quando o ponteiro está travado | D |
 | gestos de touchpad | ✗ | `pointer-gestures` repassado ao cliente em FOCO; no mundo: 3 dedos horizontal = `h`/`l` (deslize que encaixa), vertical = `J`/`K`; pinça = ARRUMAR na tela selecionada (afastar/aproximar); respeita movimento reduzido | E |
 | tablet | ◐ (seat para `cursor-shape`) | `TabletManagerState` + libinput tablet no FOCO; fora do FOCO, a caneta aponta como mouse | E |
-| acessibilidade | ◐ (teclado total, movimento reduzido, alto contraste, escala de fonte, giro em passos) | mantém; soma: guias de ímã em alto contraste, tamanho do cursor (`[input] cursor_size`), tempo de pressão longa configurável, "sem arrasto" (`[mouse] drag = false`: tudo por teclado), toque não entra nesta fase | A · D |
+| acessibilidade | ◐ (teclado total, movimento reduzido, alto contraste, escala de fonte, giro em passos) | mantém; soma: guias de ímã em alto contraste, tamanho do cursor (`[input] cursor_size`), modificador do arrasto configurável (`[mouse] drag_modifier = "ctrl" \| "alt" \| "world" \| "none"`), "sem arrasto" (`[mouse] drag = false`: tudo por teclado), HUD com escala, alto contraste e modo de foco por teclado (§3.5); toque não entra nesta fase | A · B · D |
 
 ### 1.5 Recursos de WM frente ao niri
 
@@ -202,11 +230,11 @@ com ponteiro sintético.
 
 | termo | o quê | código |
 |---|---|---|
-| pose de tela | posição (m), `yaw`, `pitch` (±25°, novo), `scale` (0,5–3×, novo); nunca roll | `Air { pos_mm, yaw_mdeg, pitch_mdeg, scale_pct, wall, cluster }` |
-| moldura vazia | uma tela sem janela, no ar ou numa mesa; a próxima janela sem lugar nasce nela | `Placeholder { id, pose, armed }` |
-| tela ancorada | presa à vista (segue você), num encaixe do HUD; a 1:1 é composta em 2D exato | `Dock { screen, slot: Corner \| Side, scale }` |
-| cluster | grupo rígido de telas no ar que se move junto e é uma estação só | `Cluster { id, name, screens }` |
-| arranjo | poses salvas por `app_id` (e `title` opcional) de uma sala, com lista de `spawn` opcional | `layouts/<name>.json` |
+| pose de tela | posição (m), `yaw`, `pitch` (±25°, novo), `scale` (0,5–3×, novo); nunca roll | `AirPose { pos, yaw, pitch, scale }`; no arquivo `Air { pos_mm, yaw_mdeg, pitch_mdeg, scale_pct, wall, cluster }` |
+| moldura vazia | uma tela sem janela, no ar ou numa mesa; a próxima janela sem lugar nasce nela | `Frame { id: FrameId, pose, armed }` |
+| tela ancorada | presa à vista (segue você), num encaixe do HUD; sempre 2D, exata a 1× | `DockSlot` (8 encaixes) + escala |
+| cluster | grupo rígido de telas no ar que se move junto e é uma estação só | `Cluster { id: ClusterId, name, screens }` |
+| arranjo | poses salvas por `app_id` (e `title` opcional) de uma sala; só arruma o que está aberto | `layouts/<name>.json` |
 | ARRUMAR | sobreposição de modo (como SALTO) para mover a tela selecionada pelo teclado | `Kind::Arrange` |
 | ímã | alvo de encaixe com tolerância: parede, slot de mesa, borda de outra tela, grade | `magnet.rs` |
 
@@ -227,12 +255,12 @@ Hoje uma janela nova entra numa mesa nova à direita, ou onde uma intenção ou 
 | como | o quê acontece |
 |---|---|
 | `N` no NAV ou no ANDAR (`world.new_screen`) | uma **moldura vazia** aparece onde a mira cruza o mundo (parede, mesa ou ar a 1,2 m, o primeiro que servir), virada para você; a paleta abre já nos apps com o título "nova tela: …"; o app escolhido nasce nela (intenção de lugar com o token de ativação do lançamento e o `pid`). `esc` na paleta deixa a moldura armada |
-| `shift+N` (`world.placeholder`) | só a moldura, sem paleta: "a próxima janela vai aqui". A mais recente armada ganha; uma regra explícita de `[[rules]]` ganha da moldura |
+| `ctrl+n` (`world.frame`) | só a moldura, sem paleta: "a próxima janela vai aqui". A mais recente armada ganha; uma regra explícita de `[[rules]]` ganha da moldura. (Não é `shift+N`: `N` já é `shift+n`.) |
 | botão do meio em espaço vazio (parede, chão, ar) | o mesmo que `N` naquele ponto |
-| botão direito em espaço vazio | um **balão de menu** (reusa a caixa de escolhas da CONVERSA): "nova tela aqui", "terminal aqui", "nota aqui", "colar aqui" (uri-list → livro, texto → nota); `j`/`k`/`enter`/`esc` |
+| botão direito em espaço vazio | um **balão de menu** (uma página compacta no estilo do telefone, ancorada no ponteiro): "nova tela aqui", "terminal aqui", "moldura vazia aqui", "arranjos…"; na fase C entram "nota aqui" e, na E, "colar aqui" (uri-list → livro, texto → nota); `j`/`k`/`enter`/`esc` ou clique. Botão direito **sobre uma tela** abre o menu dela: ARRUMAR, ancorar, prender no ar, mandar para a sala…, fechar. Pelo teclado: `shift+f10` ou a tecla Menu (`world.menu`) na tela selecionada |
 | telefone › Apps › `a` | abre o app **no ar**, à sua frente, em vez de numa mesa |
 | paleta: `nova tela <app>` | idem ao `N`, a partir de qualquer modo |
-| `T` / `world+enter` | continua: terminal numa mesa nova à direita. `shift+T`: terminal no ar, na mira |
+| `T` / `world+enter` | continua: terminal numa mesa nova à direita. `world+shift+enter` (`world.terminal_air`): terminal no ar, na mira (não é `shift+T`: `T` já é `shift+t`) |
 
 A moldura vazia é um objeto do mundo: uma moldura creme com "…" pulsando devagar (0,5 Hz, para, com movimento
 reduzido). É estação (`h`/`l` chegam nela; `enter` abre a paleta nela), aparece no SALTO, persiste no
@@ -242,15 +270,30 @@ FOCO hoje.
 
 ### 2.3 Arrastar com o mouse
 
-**Onde pegar.** No NAV e no ANDAR, qualquer ponto da tela (aro ou conteúdo): nenhum cliente recebe o ponteiro
-fora do FOCO, então não há conflito. No FOCO, o conteúdo é do cliente; pega-se pelo **aro** visível em volta
-do retângulo 1:1 (as margens) ou com **`world+botão esquerdo`** em qualquer lugar, como `Mod+arrastar` em
-todo WM. Começar um arrasto no FOCO sai do FOCO: a câmera recua para a estação (≤ 260 ms) e a tela já vem
-pela mão.
+**Onde pegar** (decisão do usuário, 2026-10-24). O gesto de mover é **`ctrl+botão esquerdo` arrastando a
+partir de qualquer ponto da tela** — aro ou conteúdo — e **`world+botão esquerdo`**, como `Mod+arrastar` em
+todo WM. O botão sem modificador nunca move nada sem querer:
+
+| modo | botão esquerdo simples | `ctrl+esquerdo` arrastando | `world+esquerdo` arrastando | redimensionar |
+|---|---|---|---|---|
+| NAV, ARRUMAR | clique seleciona; duplo clique = FOCO; nas **alças** (cantos e bordas da tela selecionada ou sob o ponteiro) arrasta e redimensiona; em espaço vazio, laçada | move a tela de qualquer ponto | move | alças; `ctrl+direito` ou `world+direito` arrastando: pelo canto mais próximo |
+| ANDAR, ponteiro livre (`alt` alterna) | como no NAV | move | move | como no NAV |
+| ANDAR, mira (ponteiro travado) | interage (existe); direito pega (`g`, existe) | **segurar carrega**: a tela na mira vai para a mão enquanto o botão está apertado e é solta onde estiver ao soltar (o `g` sem segurar) | idem | — (só pelo ARRUMAR) |
+| FOCO | é do app, `ctrl+clique` inclusive (abrir link em aba nova, seleção múltipla) | **é do app** | move: sai do FOCO, a câmera recua para a estação (≤ 260 ms) e a tela já vem pela mão | `world+direito` arrastando |
+| CONVERSA, SALTO, COMANDOS, telefone | nada no mundo (a caixa/painel 2D pode ser clicável) | nada | move (sai do modo como o `esc`) | `world+direito` |
+
+Clicar no mundo escurecido em volta do FOCO continua saindo do FOCO (como hoje). Uma tela **ancorada a 1×**
+recebe o ponteiro como um segundo monitor (rolar uma referência sem sair do FOCO da outra), mas `ctrl+` e
+`world+arrastar` sobre ela a movem. `[mouse] drag_modifier = "ctrl"` é o padrão; `"alt"`, `"world"` (só o
+`world+`) e `"none"` (o botão simples arrastando move em qualquer ponto, a proposta original, para quem
+prefere) existem. `world+` é `ctrl+alt` aninhado e `super` na sessão própria, então `world+arrastar` também
+satisfaz o `ctrl`.
 
 **Clique ou arrasto.** Um pressionar seguido de movimento abaixo de `[mouse] drag_threshold_px = 6` é
-clique (seleciona; no já selecionado, FOCO conforme `click_focuses`). Acima, é arrasto. A tela "levanta"
-3 cm na sua direção e a sombra-bolha cresce (80 ms).
+clique (seleciona; no já selecionado, ou com duplo clique em ≤ 400 ms, FOCO conforme `click_focuses`).
+`ctrl+clique` sem arrastar é um clique. Acima do limiar, com o modificador, é arrasto: a tela "levanta" 3 cm
+na sua direção e a sombra-bolha cresce (80 ms); sem o modificador, fora das alças, o pressionar vira nada (o
+cursor mostra a mão aberta para ensinar o `ctrl`).
 
 **O plano do arrasto.** A tela se move no **plano paralelo à imagem que passa pelo centro dela**: o raio do
 ponteiro cruza esse plano e o centro vai para lá. Profundidade constante, até você mudar:
@@ -260,11 +303,19 @@ ponteiro cruza esse plano e o centro vai para lá. Profundidade constante, até 
 | mover | translada no plano da vista |
 | rodinha / `[` `]` | profundidade, ±0,2 m por passo, 0,5 a 6 m, no máximo 1 m/s (conforto) |
 | `shift` segurado | **encaixe forte**: grade de 25 cm, `yaw` em passos de 15°, alinhamento com paredes e slots |
-| `alt` segurado | **girar**: horizontal = `yaw`, vertical = `pitch` (±25°); sem `alt`, a tela fica virada para o olho ("billboard") e, ao soltar, mantém a direção que tinha para o olho |
-| `ctrl` segurado | sem ímã nenhum |
-| `ctrl` + rodinha | escala visual, 0,5 a 3×, passos de 10 % |
+| `alt` segurado + mover | **girar**: horizontal = `yaw`, vertical = `pitch` (±25°); sem `alt`, a tela fica virada para o olho ("billboard") e, ao soltar, mantém a direção que tinha para o olho |
+| `alt` + rodinha | escala visual, 0,5 a 3×, passos de 10 % (também sem arrasto, sobre a tela selecionada) |
+| `x` (alterna) ou `ctrl` apertado de novo | sem ímã nenhum enquanto valer |
+| `g` (alterna) | encaixe forte sem segurar `shift` |
 | `esc` ou botão direito durante o arrasto | cancela: a tela volta à pose de origem (≤ 200 ms) |
 | soltar | `drop_target` (§2.8): slot de mesa, parede, encaixe do HUD (ancorar), outra tela (cluster, só com `shift`) ou o ar |
+
+**O modificador que começou o arrasto não conta como gesto** enquanto não for solto: no `ctrl+arrastar` o
+`ctrl` segurado não desliga os ímãs, e no `world+arrastar` aninhado (`ctrl+alt`) o `alt` segurado não gira.
+Soltar o modificador no meio não encerra o arrasto (quem encerra é o botão); apertá-lo de novo passa a
+valer como gesto. É uma regra só, testada por tabela, e evita que o atalho de pegar vire outra coisa. As
+teclas durante o arrasto (`esc`, `[` `]`, `x`, `g`, `q` `e` para girar 15°) ficam num modo de teclas próprio,
+`world.drag`, ativo só enquanto um arrasto do mouse dura.
 
 **Captura.** Durante o arrasto o mundo é dono do ponteiro: nenhum cliente recebe movimento; o cursor vira
 `grabbing`. O botão solto fora da janela do host (aninhado) ou a janela do mundo perdendo o foco encerram o
@@ -278,15 +329,18 @@ aro ganha um anel fino e o rótulo diz "1:1". É o jeito de pôr uma referência
 (e a composição 2D exata entra sozinha, §2.7).
 
 **No ANDAR**, tudo isso vale com o ponteiro **destravado**: `alt` (toque, não segurado) alterna entre
-mouse-look e ponteiro livre, e o HUD mostra qual está ativo. O `g` (carregar) continua sendo a forma de
-**andar com a tela**: ela flutua à sua frente enquanto você anda, e o arrasto é a forma de **ficar parado e
-mover a tela**. As duas usam as mesmas regras de soltar.
+mouse-look e ponteiro livre, e o HUD mostra qual está ativo. Com a mira, `ctrl+esquerdo` **segurado** carrega
+a tela enquanto você olha e anda, e soltar o botão a solta. O `g` (carregar) continua sendo a forma de
+**andar com a tela** sem segurar nada: ela flutua à sua frente enquanto você anda, e o arrasto é a forma de
+**ficar parado e mover a tela**. As três usam as mesmas regras de soltar.
 
 ### 2.4 Redimensionar em 3D
 
-- **Mouse**: alças nos quatro cantos (24 px em espaço de tela) e nas bordas (12 px). Arrastar um canto muda
-  largura e altura; uma borda, só um eixo; `shift` trava a proporção; `world+botão direito` em qualquer ponto
-  redimensiona pelo canto mais próximo (como `Mod+botão direito` nos WMs).
+- **Mouse**: alças nos quatro cantos (24 px em espaço de tela) e nas bordas (12 px) da tela selecionada e da
+  que está sob o ponteiro, no NAV, no ARRUMAR e no ANDAR com ponteiro livre; arrastá-las **não precisa de
+  modificador** (é a única exceção: alça é alça). Arrastar um canto muda largura e altura; uma borda, só um
+  eixo; `shift` trava a proporção; `ctrl+botão direito` (NAV, ARRUMAR) e `world+botão direito` (todo modo,
+  inclusive FOCO) em qualquer ponto redimensionam pelo canto mais próximo (como `Mod+botão direito` nos WMs).
 - **O que muda**: o tamanho lógico do cliente. A projeção do novo retângulo na profundidade da tela vira
   milímetros (1 px = 1 mm). Limites: mínimo 200×150 lógicos, máximo o útil da saída a 1:1, e os `min_size`/
   `max_size` do `xdg_toplevel`. Encaixe em presets quando a 16 px: largura 1/3, 1/2, 2/3, 1 e altura 1/2,
@@ -294,31 +348,36 @@ mover a tela**. As duas usam as mesmas regras de soltar.
 - **`configure` ao vivo**, no máximo 10 por segundo durante o arrasto, e um final ao soltar (clientes GTK e
   navegadores redesenham caro). A tela mostra o tamanho ("1280 × 800") enquanto redimensiona. Até o cliente
   comitar o tamanho novo, o quad usa a textura antiga esticada só dentro da moldura, como no niri.
-- **Teclado**: `-`/`=` presets de largura (existe), `shift+-`/`shift+=` presets de altura (novo), `1`…`4` no
-  ARRUMAR escolhem a largura 1/3, 1/2, 2/3, 1 direto, `0` leva a tela à distância 1:1 ("ponto de leitura").
-- **Escala** (visual) é `ctrl+rodinha` ou `ctrl+-`/`ctrl+=`; `ctrl+0` volta a 1×. Uma "TV" grande e longe é
-  escala 2× a 4 m, com a janela ainda em 1280×720.
+- **Teclado**: `-`/`=` presets de largura (existe), `_`/`+` (`shift+-`/`shift+=`) presets de altura (novo),
+  `1`…`4` no ARRUMAR escolhem a largura 1/3, 1/2, 2/3, 1 direto, `0` leva a tela à distância 1:1 ("ponto de
+  leitura").
+- **Escala** (visual) é `alt+rodinha` ou `ctrl+-`/`ctrl+=` no ARRUMAR; `ctrl+0` volta a 1×. (Não é
+  `ctrl+rodinha`: o `ctrl` começa o arrasto.) Uma "TV" grande e longe é escala 2× a 4 m, com a janela ainda em
+  1280×720.
 
 ### 2.5 Teclado: o modo ARRUMAR
 
 `v` no NAV (ou `world.arrange` pela paleta) sobre a tela selecionada; `v` também no ANDAR sobre a tela na
-mira. O HUD mostra `ARRUMAR` e uma legenda de uma linha. Teclas (modo `world.arrange` do keymap, religáveis):
+mira. O HUD mostra `ARRUMAR` e uma legenda de uma linha. Teclas (modo `world.arrange` do keymap, religáveis,
+sem cair nas teclas do NAV: só as globais `world+…` valem além destas):
 
 | tecla | comando | o quê |
 |---|---|---|
-| `h` `j` `k` `l` / setas | `world.nudge_left` / `_down` / `_up` / `_right` | move 10 cm no plano da vista (`shift`: 50 cm; `ctrl`: 1 cm) |
-| `[` `]` | `world.nearer` / `world.farther` | profundidade ±20 cm |
-| `q` `e` | `world.yaw_left` / `world.yaw_right` | `yaw` ±15° (`ctrl`: ±5°) |
-| `shift+k` `shift+j` | `world.pitch_up` / `world.pitch_down` | `pitch` ±5°, até ±25° |
-| `-` `=` · `shift+-` `shift+=` | `world.narrower` / `world.wider` · `world.shorter` / `world.taller` | presets de largura · de altura |
-| `1` `2` `3` `4` | `world.size_preset {n}` | largura 1/3, 1/2, 2/3, 1 |
+| `h` `j` `k` `l` / setas | `world.nudge_left` / `_down` / `_up` / `_right` | move 10 cm no plano da vista |
+| `H` `J` `K` `L` · `alt+h` `alt+j` `alt+k` `alt+l` | `world.nudge_*_big` · `world.nudge_*_fine` | 50 cm · 1 cm |
+| `[` `]` · `{` `}` | `world.nearer` / `world.farther` · `world.nearer_big` / `world.farther_big` | profundidade ±20 cm · ±50 cm |
+| `q` `e` · `alt+q` `alt+e` | `world.yaw_left` / `world.yaw_right` · `world.yaw_left_fine` / `world.yaw_right_fine` | `yaw` ±15° · ±5° |
+| `ctrl+k` `ctrl+j` | `world.pitch_up` / `world.pitch_down` | `pitch` ±5°, até ±25° |
+| `-` `=` · `_` `+` | `world.narrower` / `world.wider` · `world.shorter` / `world.taller` | presets de largura · de altura |
+| `1` `2` `3` `4` | `world.size_preset_1` … `_4` | largura 1/3, 1/2, 2/3, 1 |
 | `0` | `world.read_distance` | leva à distância 1:1 e vira para o olho |
 | `ctrl+-` `ctrl+=` `ctrl+0` | `world.scale_down` / `world.scale_up` / `world.scale_reset` | escala visual |
-| `g` | `world.snap_toggle` | liga/desliga o encaixe forte (grade) neste arrasto |
+| `g` · `x` | `world.snap_toggle` · `world.magnets_toggle` | encaixe forte (grade) · sem ímã, até alternar de novo |
 | `w` · `d` · `a` | `world.to_wall` / `world.to_desk` / `world.to_air` | encosta na parede atrás · entra no slot de mesa mais perto · fica no ar aqui |
 | `p` | `world.dock` | ancora na vista (§2.7); de novo desancora |
-| `space` | `world.select_toggle` | marca/desmarca esta tela na seleção múltipla; `h`/`l` com `space` segurado pulam de tela em tela sem mover |
-| `G` · `shift+G` | `world.cluster` / `world.uncluster` | agrupa a seleção · desfaz o grupo |
+| `space` | `world.select_toggle` | marca/desmarca esta tela na seleção múltipla |
+| `tab` · `shift+tab` | `world.arrange_next` / `world.arrange_prev` | passa a arrumar a próxima / a anterior tela da sala, sem sair |
+| `c` · `C` | `world.cluster` / `world.uncluster` | agrupa a seleção · desfaz o grupo (não é `G`/`shift+G`: `G` já é `shift+g`) |
 | `s` | `world.layout_save` | salva o arranjo da sala (pede o nome na linha) |
 | `u` · `ctrl+r` | `world.undo` / `world.redo` | desfaz · refaz (também fora do ARRUMAR, no NAV) |
 | `enter` | `world.arrange_done` | confirma e volta ao modo de origem |
@@ -333,18 +392,23 @@ para o lugar livre mais perto no mesmo plano (≤ 200 ms) — a "física" de §2
 - **Selecionar**: `space` no ARRUMAR; `shift+clique` no NAV soma; arrastar a partir de espaço vazio no NAV
   desenha uma **laçada** em espaço de tela e seleciona as telas cujo centro cai nela. A seleção aparece como
   anel creme em cada tela e um contador no HUD ("3 telas").
-- **Mover junto**: com várias selecionadas, arrastar (mouse ou `hjkl`) move todas rigidamente; `alt` gira o
-  conjunto em volta do centro dele. Soltar aplica os ímãs ao conjunto, não a cada uma.
-- **Cluster** (`G`): a seleção vira um grupo com nome (padrão: os `app_id`, "firefox + foot"). Um cluster é
-  **uma estação** (`Station::Cluster`): `h`/`l` param diante do conjunto inteiro, `j`/`k` percorrem as telas
-  dele, `enter` dá FOCO na atual; arrastar qualquer membro move todos; `shift+G` desfaz. Persistido.
-- **Arranjo** (`s`, `world.layout_save {name}`): salva, por sala, as poses das telas no ar, ancoradas e dos
-  clusters, por `app_id` (+ `title` regex opcional), mais a largura das mesas. `world.layout_load {name}`
-  faz as telas presentes deslizarem para as poses (≤ 260 ms, escalonadas 30 ms entre si; corte com movimento
-  reduzido). Telas que não casam ficam onde estão. Um arranjo pode ter `spawn = [["firefox"], ["foot","-e","htop"]]`
-  para abrir o que falta — é a "cabine": arranjo + apps. Ficam em `~/.local/state/nekuroddo/layouts/<name>.json`
-  (`{"version": 1, …}`), listados no telefone (app **Arranjos**: carregar, salvar, apagar, renomear) e na
-  paleta (`arranjo <name>`). A **pergunta 3** (§7) decide se o `spawn` entra já na fase A.
+- **Mover junto**: com várias selecionadas, arrastar (`ctrl+arrastar` qualquer uma, ou `hjkl` no ARRUMAR)
+  move todas rigidamente; `alt` gira o conjunto em volta do centro dele. Soltar aplica os ímãs ao conjunto,
+  não a cada uma.
+- **Cluster** (`c` no ARRUMAR): a seleção vira um grupo com nome (padrão: os `app_id`, "firefox + foot"). Um
+  cluster é **uma estação** (`Station::Cluster`): `h`/`l` param diante do conjunto inteiro, `j`/`k` percorrem
+  as telas dele, `enter` dá FOCO na atual; arrastar qualquer membro move todos; `C` desfaz. Persistido.
+- **Arranjo** (`s`, `world.layout_save {name}`): salva, por sala, as poses das telas no ar, ancoradas, nas
+  mesas (mesa, posição na pilha, largura) e dos clusters, por `app_id` (+ `title` opcional, um padrão simples
+  com `*` e `?`, sem regex). `world.layout_load {name}` faz as telas **já abertas** deslizarem para as poses
+  (≤ 260 ms, escalonadas 30 ms entre si; corte com movimento reduzido). **Decisão do usuário: arranjo só
+  arruma o que está aberto; nada é lançado.** Telas abertas que o arranjo não cita ficam onde estão; o que o
+  arranjo cita e não está aberto vira um aviso ("faltam 2 do arranjo: firefox, mpv"), sem moldura nem
+  `spawn`. Quem quiser a "cabine" (arranjo + apps) a monta com `[[spawn]]` (fase B) ou com um script na IPC.
+  Casamento: entradas na ordem do arquivo; uma com `title` casa primeiro as telas cujo título casa; cada tela
+  aberta é usada uma vez; empate, a de id menor. Ficam em `~/.local/state/nekuroddo/layouts/<name>.json`
+  (`{"version": 1, …}`, nome `[a-z0-9_-]{1,32}`), listados no telefone (app **Arranjos**: carregar, salvar,
+  apagar, renomear) e na paleta (`arranjo <name>`). Carregar um arranjo é **uma** operação do desfazer.
 
 ### 2.7 Telas que seguem você (ancoradas)
 
@@ -353,9 +417,12 @@ ficam destacados durante o arrasto) ancoram a tela à vista. Ela deixa de estar 
 **sua** vista, num de 8 encaixes (4 cantos, 4 lados), com escala `[dock] scale = 0.33` por padrão (uma
 imagem-em-imagem) ou 1× (a tela inteira, legível).
 
-- **A 1:1 ela é composta em 2D exato** pelo caminho do Smithay, como a janela em FOCO, mas **sem foco de
-  teclado**. É o "segundo monitor" num monitor só: referência legível enquanto você digita em outra tela.
-  Várias ancoradas a 1× dividem o útil da saída pelos encaixes escolhidos (esquerda/direita = metades).
+- **Ela é sempre composta em 2D** pelo caminho do Smithay (nunca no passe 3D), na escala dela; **a 1× é 2D
+  exato**, como a janela em FOCO, mas **sem foco de teclado**. É o "segundo monitor" num monitor só:
+  referência legível enquanto você digita em outra tela; a 1× ela recebe o ponteiro (rolar, clicar) sem
+  tirar o teclado de quem o tem. Várias ancoradas a 1× dividem o útil da saída pelos encaixes escolhidos
+  (esquerda/direita = metades). `enter` (FOCO) numa ancorada a 0,33× a mostra a 1× no mesmo encaixe enquanto
+  durar o FOCO (120 ms), e `ctrl+]` a devolve à escala dela.
 - No **FOCO**, as ancoradas continuam visíveis e vivas (não escurecem; LOD "estação atual"); a janela em
   FOCO fica no útil restante ou por cima delas, conforme `[dock] focus = "beside" \| "over"` (padrão `beside`
   quando couber a 1:1, senão `over`).
@@ -365,7 +432,10 @@ imagem-em-imagem) ou 1× (a tela inteira, legível).
   esconde para quem prefere a vista limpa.
 - Limite `[dock] max = 4`. Persistidas por saída (faceta); uma saída que some devolve as suas à primária.
 - Conforto: fixas à vista, não têm vecção; a mudança de escala anima 120 ms; nenhuma ancorada pode cobrir o
-  rótulo do modo nem os selos (o HUD tem prioridade no mesmo canto; a ancorada desce).
+  rótulo do modo nem os selos (o HUD tem prioridade no mesmo canto; a ancorada desce). O overlay publica os
+  retângulos que o HUD ocupa (`hud_reserved`), e os encaixes são calculados fora deles; com o HUD de jogo
+  (§3.5) a regra é a mesma, na direção contrária também: **conteúdo 1:1 (FOCO ou ancorada a 1×) nunca é
+  coberto pelo HUD**, que recolhe para "pips" nas margens.
 
 ### 2.8 Ímãs e guias
 
@@ -382,14 +452,15 @@ imagem-em-imagem) ou 1× (a tela inteira, legível).
 | encaixe do HUD (ancorar) | bordas da saída, 48 px | idem | o encaixe acende |
 | outra tela (cluster) | só com `shift`, soltar em cima | — | as duas ganham o anel de grupo |
 
-`ctrl` desliga todos. A força do ímã é só na soltura e no `g` do ARRUMAR: enquanto você arrasta, a tela segue
-o ponteiro e o **fantasma** mostra onde ela vai parar. Isso evita o "puxão" que irrita em editores.
+`x` (ou o `ctrl` apertado de novo durante o arrasto, §2.3) desliga todos. A força do ímã é só na soltura e no
+`g` do ARRUMAR: enquanto você arrasta, a tela segue o ponteiro e o **fantasma** mostra onde ela vai parar.
+Isso evita o "puxão" que irrita em editores.
 
 ### 2.9 Desfazer
 
 `nkw-core/src/history.rs`: um anel de `[arrange] history = 50` operações (`Move`, `Resize`, `Scale`, `Dock`,
-`Undock`, `Cluster`, `Uncluster`, `LayoutLoad` com as poses anteriores, `Pin`, `ToDesk`, `ToWall`,
-`Placeholder`). `u` desfaz, `ctrl+r` refaz, com um toast curto ("desfeito: mover firefox"). Um arrasto inteiro
+`Undock`, `Cluster`, `Uncluster`, `LayoutLoad` com as poses anteriores, `Pin`, `ToDesk`, `ToWall`, `ToAir`,
+`Frame`). `u` desfaz, `ctrl+r` refaz, com um toast curto ("desfeito: mover firefox"). Um arrasto inteiro
 é uma operação; dez `h` seguidos no ARRUMAR em menos de 1 s são uma. Fechar janela não entra (o cliente se
 foi). A história é por sessão, não persiste.
 
@@ -409,7 +480,7 @@ Sem física de verdade; só o que dá a impressão de coisas com corpo, com as c
 ### 2.11 Estações, FOCO de qualquer pose, persistência
 
 - **Estações.** As telas no ar já são `Station::Air`, ordenadas na sala pela posição projetada no eixo dela.
-  Entram `Station::Cluster(id)`, `Station::Dock(slot)` e `Station::Placeholder(id)`, com a mesma ordem.
+  Entram `Station::Cluster(id)`, `Station::Dock(slot)` e `Station::Frame(id)`, com a mesma ordem.
   Uma tela ancorada não conta na ordem da sala (ela está em você).
 - **FOCO de qualquer orientação.** `onetoone.rs` ganha `pitch` e `scale`: a pose 1:1 fica sobre a normal da
   tela, à distância `scale · 0,001 · f / s`, com o pitch da tela (≤ 25°) e yaw dela; o ajuste submilimétrico
@@ -417,8 +488,9 @@ Sem física de verdade; só o que dá a impressão de coisas com corpo, com as c
   Se a pose cair dentro de um móvel ou parede (tela encostada), a câmera recua até o ponto livre mais perto na
   normal e o 2D continua exato (a troca quad→2D independe do caminho).
 - **Persistência** (`world.json` v2, com `persist::migrate` v1→v2): `Air` ganha `pitch_mdeg`, `scale_pct`,
-  `cluster`; `DockRec { app_id, output, slot, scale }`; `PlaceholderRec { pose, armed }`; `ClusterRec { name,
-  app_ids }`; `desk.tabbed`. Arranjos em `layouts/`. Escrita atômica com o debounce de 2 s, como hoje.
+  `cluster`; `DockRec { app_id, output, slot, scale_pct }`; `FrameRec { room, air, armed, app_id }`;
+  `ClusterRec { name, room, app_ids }`; `desk.tabbed` (reservado para a fase B). Arranjos em `layouts/`.
+  Escrita atômica com o debounce de 2 s, como hoje; a migração v1→v2 guarda o `.bak`.
 - **Memória de lugar** continua por `app_id` e passa a lembrar também pose no ar, ancoragem e escala.
 
 ### 2.12 Conforto e acessibilidade
@@ -431,23 +503,25 @@ Sem física de verdade; só o que dá a impressão de coisas com corpo, com as c
 - Toda animação ≤ 260 ms, cortada com movimento reduzido; a mola de assentar some com movimento reduzido.
 - Guias em alto contraste (tinta escura sobre creme) com a preferência já existente; o anel 1:1 também vira
   rótulo textual.
-- Tudo por teclado (ARRUMAR); `[mouse] drag = false` desliga o arrasto e `hover_selects = false` o hover.
+- Tudo por teclado (ARRUMAR, e o balão pelo `shift+f10`); `[mouse] drag = false` desliga o arrasto,
+  `drag_modifier` troca o `ctrl` por `alt`, só `world` ou nenhum, e `hover_selects = false` o hover.
 - O `esc` cancela em qualquer ponto e devolve a pose de origem; nada é destrutivo além de `Q`.
 
 ### 2.13 O que muda no código
 
 | crate | novo / muda | o quê |
 |---|---|---|
-| `nkw-core` | `arrange.rs` (novo) | `ArrangeOp`, movimento no plano da vista (unprojeção + interseção com o plano), limites de profundidade/pitch/escala, redimensionar → tamanho lógico com limites e presets, laçada em espaço de tela |
+| `nkw-core` | `arrange.rs`, `dock.rs`, `layouts.rs` (novos) | `AirPose`, movimento no plano da vista (unprojeção + interseção com o plano), limites de profundidade/pitch/escala, redimensionar → tamanho lógico com limites e presets, laçada em espaço de tela, `configure` a ≤ 10/s; encaixes das ancoradas fora do HUD; esquema e casamento dos arranjos |
 | `nkw-core` | `magnet.rs`, `history.rs` (novos) | §2.8, §2.9 |
-| `nkw-core` | `mode.rs` | `Kind::Arrange`, `Action::{Arrange, Nudge, …}`, `Effect::{ConfigureLive, DockChanged, …}`, seleção múltipla; `Pick::Placeholder`, `Pick::Dock` |
-| `nkw-core` | `strip.rs`, `onetoone.rs`, `persist.rs`, `carry.rs` | estações novas; pitch e escala no 1:1; v2 do arquivo; `drop_target` ganha HUD e cluster |
-| `nkw` | `wm/pointer.rs` (novo), `input.rs` | a máquina do ponteiro (§4, D15): `Idle → Hover → Pressed → Drag{Move, Resize, Rotate, Lasso} → Idle`, captura, modificadores, cursor |
-| `nkw` | `wm/world_ops.rs`, `world.rs` | comandos `world.*` novos; molduras; clusters; ancoradas; arranjos (`wm/layouts.rs`, novo) |
-| `nkw` | `frame.rs`, `render.rs` | composição 2D exata das ancoradas a 1:1; LOD das ancoradas; o FOCO ao lado delas |
-| `nkw-gl` / `overlay` | `draw.rs`, `overlay/guides.rs` (novo) | levantar/sombra, moldura vazia (malha), guias, anel 1:1, laçada, encaixes do HUD |
-| `nkw` | `backend/script_input.rs`, `script.rs` | `pointer`, `button middle`, `scroll`, `drag x y → x2 y2 [mods]`, `expect pose` para os testes headless |
-| core (Go) | `internal/app/world.go` | os comandos `world.*` novos no registro (`scope: client`), modo `world.arrange` no keymap, teclas padrão |
+| `nkw-core` | `pointer.rs` (novo) | a máquina do ponteiro, pura (D15): `Idle → Hover → Pressed → Drag{Move, Resize, Lasso, Carry} → Idle`, a tabela modo × alvo × botão × modificadores, a trava do modificador que começou o arrasto |
+| `nkw-core` | `mode.rs`, `ids.rs` | `Kind::Arrange`, `Action::{Arrange, ArrangeDone, Click}`, `Effect::{ArrangeStart, ArrangeCommit, ArrangeRevert}`; `FrameId`, `ClusterId` |
+| `nkw-core` | `strip.rs`, `onetoone.rs`, `persist.rs`, `rules.rs` | estações novas; escala e centro deslocado no 1:1 (FOCO ao lado das ancoradas); v2 do arquivo; `[mouse]`, `[arrange]`, `[dock]`; o `drop_target` do `g` fica como está, e o mouse e o ARRUMAR soltam pelo `magnet::snap` (que sabe de HUD e cluster) |
+| `nkw` | `pointer/` (novo), `input.rs`, `router/` | picking, captura, modificadores, rodinha, cursor, o modo de teclas `world.drag`, o balão |
+| `nkw` | `wm/world_ops.rs`, `world.rs`, `wm/layouts.rs` (novo) | comandos `world.*` novos; molduras; clusters; ancoradas; arranjos; a API de arrasto que o ponteiro chama |
+| `nkw` | `frame.rs`, `render.rs`, `scene.rs` | composição 2D das ancoradas (exata a 1×); o FOCO ao lado delas; levantar e sombra |
+| `nkw-gl` / `overlay` | `draw.rs`, `kit.rs`, `overlay/guides.rs` (novo) | moldura vazia (malha), alças, guias, anel 1:1, laçada, encaixes do HUD, o balão |
+| `nkw` | `backend/script_input.rs`, `script.rs` | `pointer_to`, `button middle`, `click`, `scroll`, `drag x y x2 y2 [ms] [mods]`, `expect near`, `expect pose` para os testes headless |
+| core (Go) | `internal/app/world.go`, `internal/core/keymap.go` | os comandos `world.*` novos no registro (`scope: client`), os modos `world.arrange`, `world.drag` e `world.menu` no keymap, teclas padrão |
 
 ## 3. Outras coisas desta fase
 
@@ -489,7 +563,143 @@ FOV só aqui de 40° a 90°), o HUD some, `enter` tira a foto (PNG em `~/Imagens
 olho com corte. O cofre tranca antes (regra do `--shot`) e `[photo] blur_screens = false` pixela o conteúdo
 das telas para compartilhar sem vazar. É o `--shot` com câmera livre: duas tardes.
 
-### 3.5 O que fica de fora, e por quê
+### 3.5 HUD de jogo (fase B, primeiro pacote da onda 6)
+
+**Decisão do usuário** (2026-10-24): o HUD do mundo absorve o papel da barra (hoje a waybar), com cara de
+**HUD de jogo** — cantos e bordas, não uma faixa: minimapa e bússola, a inbox como diário de missões,
+medidores de status, as salas como barra de atalhos. Isso revisa, para o status, a regra "diegético
+primeiro, HUD só selo" do [adendo dos objetos](plano-mundo-objetos.md): os objetos continuam (o relógio de
+parede, a vitrola, a bateria na recepção), mas a informação de barra passa a morar no HUD. `[hud] style =
+"game" | "cozy" | "minimal"`: `cozy` é a faixa da onda 4, `minimal` é só o rótulo do modo e os selos, `game` é
+este; `game` vira o padrão quando o usuário aprovar as capturas. Por que não entra na fase A: a onda 5 já
+ocupa os quatro pacotes paralelos que a máquina aguenta; o que a A precisa do HUD (os retângulos reservados,
+`hud_reserved`, que as ancoradas evitam) entra lá, e o HUD de jogo cabe depois sem retrabalho.
+
+**Zonas** (pixels lógicos a `[hud] scale = 1.0`, margem de 16 px, a 1920×1080; tudo escala com a saída e com
+o `font_scale`):
+
+```
++--------------------------------------------------------------------------------+
+| [TL] NAVEGAR . minha sala     [TC] --|-- bússola --|--          [TR] ( mini  ) |
+|      firefox - título             salas, portas, gatos            ( mapa  )   |
+|      selos: inbox 2 . ON AIR                                       14:05 sex   |
+|                                                              [R] MISSÕES       |
+|                                                              ! confirmar (1)   |
+|                                 (mira no ANDAR)              > alpha quer falar|
+|                                                                                |
+| [BL] vida  bateria ######-- 72%  [BC] [1 minha][2 alpha*][3 bib]  [BR] > faixa |
+|      enrg  CPU     ##------ 18%                                     vol ### BR  |
+|      mana  RAM     ####---- 9,1 G   (a caixa da CONVERSA ocupa    [][][] (3) g4 |
+|      xp    uso 5 h ###----- 41%      o BC quando aberta)                        |
++--------------------------------------------------------------------------------+
+```
+
+| zona | tamanho | o quê | quando |
+|---|---|---|---|
+| TL "onde estou" | ≤ 420 × 96 | rótulo do modo (existe), nome da sala com o ícone dela, a tela selecionada (`app_id` — título até 40 caracteres), os selos (existem) | sempre (no FOCO, só um pip) |
+| TC bússola | 480 × 28 | fita de rumo: portas e salas na direção em que estão, gatos esperando (✉), telas urgentes (!), objetos; o norte é a recepção | ANDAR; NAV se `[hud.compass] show = "always"` |
+| TR minimapa | 168 × 168 (círculo) + 40 | a sala vista de cima (mesas, telas, telas no ar, gatos como pontos na cor do contexto, portas, você como seta); gira com o rumo (`rotate = true`) ou norte fixo; relógio e dia embaixo; ícones no anel: rede, áudio, inibidor de ociosidade | sempre |
+| R diário de missões | 300 × ≤ 5 linhas | a inbox como missões (abaixo) | quando há algo; vazio, some |
+| BL medidores | 220 × 4 barras | bateria como "vida", CPU como "energia", RAM como "mana", uso de 5 h dos agents como "XP"; número sempre ao lado | `[hud.gauges] show = "always" \| "alert"` (padrão `always` no estilo `game`) |
+| BC barra de salas | 44 px por sala, até 9 | as salas como barra de atalhos de jogo (`1`…`9`, as teclas que já existem): inicial ou ícone, quantas telas, a atual com anel, ponto âmbar se há gato esperando ou tela urgente ali | NAV e ANDAR; some na CONVERSA (a caixa ocupa o lugar) e no FOCO |
+| BR bandeja e sistema | ≤ 360 × 88 | mini player (tocar/pausar, faixa até 28 caracteres, linha de progresso), volume, layout do teclado, ícones da bandeja (até 8, depois "+N"), sino com a contagem de notificações, agents ativos/bloqueados | sempre (no FOCO, pips) |
+| centro | — | mira (ANDAR), telefone, caixa da CONVERSA, balão, toasts (sobem para logo abaixo da bússola) | como hoje |
+
+**O que a waybar faz e onde vai** (para quem migra a config):
+
+| módulo da waybar | no HUD | zona | fonte |
+|---|---|---|---|
+| `niri/workspaces`, `sway/workspaces`, `hyprland/workspaces` | barra de salas | BC | o `World` |
+| `niri/window`, `sway/window` | a tela selecionada | TL | o `World` |
+| `clock` | relógio e dia | TR | `nkw-sys` (relógio, existe) |
+| `tray` | bandeja (StatusNotifierItem: ícone, ativar, ativar secundário, menu como página do telefone) | BR | `nkw-sys/sni.rs` (novo): *host* sempre; *watcher* quando o nome `org.kde.StatusNotifierWatcher` estiver livre (sessão própria sem waybar) |
+| `pulseaudio`, `wireplumber` | volume e mudo | BR | `nkw-sys` (PipeWire, existe) |
+| `network` | rede (barras, cabo/wi-fi; nunca o nome da rede no `dump`) | TR | `nkw-sys` (NetworkManager, existe) |
+| `battery`, `upower` | bateria (barra de vida) | BL | `nkw-sys` (UPower, existe) |
+| `cpu`, `memory` | barras de CPU e RAM | BL | `nkw-sys/proc.rs` (novo): `/proc/stat` e `/proc/meminfo` a cada 2 s, só com o HUD visível |
+| `temperature`, `disk` | opcionais (`[hud.gauges] extra = ["temp", "disk"]`) | BL | `/sys/class/hwmon`, `statvfs` |
+| `mpris` | mini player | BR | `nkw-sys` (MPRIS, existe) |
+| `idle_inhibitor` | olho no anel do minimapa quando há inibidor | TR | protocolo `idle-inhibit` (existe) |
+| `backlight` | barra transitória de brilho (3 s) | BL | `brightness.*` (existe) |
+| `keyboard-state`, `language` | layout do teclado ("BR", "US") | BR | o seat (XKB) |
+| `custom/*` com `exec` e `return-type = "json"` | **módulo custom com o mesmo protocolo JSON** (`text`, `alt`, `tooltip`, `class`, `percentage`) | a zona que a config disser | `[[hud.custom]] exec = [...], interval_s = 30, zone = "BR"` |
+| notificações (swaync, mako) | sino com contagem; as notificações viram missões | BR, R | daemon próprio na sessão (fase D); aninhado, só o que o mundo produz (carteiros, avisos do core), a menos que nenhum daemon tenha o nome |
+| agents (nosso) | ativos/bloqueados (BR), missões (R), uso de 5 h e custo (BL) | BR, R, BL | o plugin dos gatos (existe) |
+| `bluetooth`, `power-profiles-daemon` | fora desta fase (o custom cobre) | — | — |
+
+**Minimapa e bússola.** O minimapa reaproveita a folha do mapa (`o`, `overlay/map.rs`) em 168 px, recortada
+em círculo, com a sala atual centrada em você; no corredor, o andar inteiro. Redesenha só quando a pose muda
+≥ 5 cm ou ≥ 1°, ou quando a sala muda (no máximo 15 Hz no ANDAR, parado no NAV). A bússola projeta o rumo
+de cada marcador em relação ao `yaw` da câmera, com ±90° visíveis; os marcadores fora da fita aparecem como
+setinhas na ponta. Clicar no minimapa abre o mapa; clicar num marcador da bússola vai até ele (glide).
+
+**Diário de missões.** A inbox como lista de missões, na ordem: confirmação pedida (!), gato bloqueado,
+gato esperando você (✉), tela urgente, notificação. Até 5 linhas (ícone, texto ≤ 32 caracteres, idade "2
+min"); o resto vira "+N". Cada uma tem a sua ação: confirmação → CONVERSA com o gato; gato → ir até ele e
+conversar; tela urgente → ir até ela; notificação → abrir o app dela (a ação padrão da notificação).
+Missão resolvida sai riscada (400 ms; some na hora com movimento reduzido). A lista completa é o app
+**Inbox** do telefone.
+
+**Medidores.** Barras de 220 × 10 px com o rótulo e o número ao lado (nunca só cor): bateria vermelha
+abaixo de 20 % e com ícone de raio carregando; CPU média de 2 s; RAM usada/total; uso de 5 h com a marca
+do limite. `alert` só os mostra fora do nominal (bateria < 30 %, CPU > 80 % por 10 s, RAM > 85 %).
+
+**Convivência com barras layer-shell** (sessão própria, D14). Por saída, cada borda com zona exclusiva > 0
+empurra para dentro as zonas do HUD daquela borda. `[hud] with_bar = "hide_duplicates"` (padrão) esconde os
+widgets que fazem papel de barra (relógio, bandeja, barra de salas, rede, áudio, bateria, CPU/RAM, mídia,
+notificações, teclado) quando há uma barra exclusiva naquela saída e mantém o que a barra não tem (rótulo
+do modo, selos, minimapa sem os ícones do anel, bússola, missões, mira); `"keep"` mantém tudo; `"minimal"`
+deixa só o rótulo e os selos. Superfícies sem zona exclusiva (docks, notificações flutuantes) não mexem no
+HUD, mas ganham do HUD no ponteiro. Aninhado não há layer-shell dentro do `nkw`: a waybar continua no niri,
+fora da janela; com o `nkw` em tela cheia no niri, a waybar fica escondida e o HUD faz o papel dela.
+
+**FOCO, ancoradas e várias saídas.** No FOCO o HUD **nunca cobre o retângulo 1:1** nem uma ancorada a 1×:
+recolhe para pips nas margens livres (modo e sala, contagem de missões, bateria crítica); com a janela
+cobrindo a saída, nenhum HUD, só toast crítico (≤ 3 s). `world+z` mostra o HUD inteiro por cima por 3 s (ou
+até apertar de novo) — o "segurar tab" dos jogos. Várias saídas: o HUD completo na primária e pips nas
+outras (`[[output]] hud = "full" \| "pips" \| "none"`); a vista fixa (`role = "view"`) não tem HUD.
+
+**Teclado, mouse e telefone.** `z` (NAV) esconde e mostra o HUD (existe); `world+z`, a espiada no FOCO;
+`world+i` (`world.hud_focus`) entra no **modo HUD** (keymap `world.hud`): `h`/`l`/`j`/`k` passam pelos
+widgets na ordem das zonas, `enter` faz a ação (ativar um item da bandeja, ir até a missão, ir para a sala,
+tocar/pausar), `shift+f10` abre o menu do item (o menu da bandeja vira uma página do telefone), `1`…`5`
+escolhem a missão N, `esc` sai. Com o mouse, os widgets são clicáveis no NAV e no ANDAR com ponteiro livre
+(e no FOCO só durante a espiada); a rodinha sobre o volume muda o volume. A barra de salas usa as teclas
+`1`…`9` que já existem. O telefone ganha **Ajustes › HUD** (estilo, cada widget ligado/desligado, bússola,
+minimapa girando ou norte fixo, medidores, escala, `with_bar`, a lista dos módulos custom só para leitura).
+
+**Acessibilidade.** Alto contraste e escala de fonte valem para tudo; `[hud] scale` de 0,75 a 1,5; nenhuma
+informação só por cor (número ao lado de toda barra, ícone muda de forma); movimento reduzido: nada pulsa,
+o minimapa fica norte fixo e atualiza a 4 Hz, a bússola sem suavização, missões sem animação; tudo o que o
+HUD mostra existe como texto no telefone (Ajustes › HUD › "o que o HUD diz") e no `dump()`; tudo tem tecla
+(modo HUD). Leitor de tela (AT-SPI) fica fora deste ciclo, documentado.
+
+**Orçamento** (aninhado, máquina alvo; entra no `world-perf-budget.toml`):
+
+| métrica | cenário | alvo | falha acima de |
+|---|---|---|---|
+| ocioso com o HUD de jogo inteiro | S1 | ≤ 0,1 % de CPU, ≤ 1,5 wakeups/s (o minuto do relógio + o amostrador de 2 s + sinais D-Bus) | 0,5 % / 3/s |
+| composição do HUD | S7h: NAV com tudo ligado, missões mudando a cada 2 s | p50 ≤ 0,5 ms, p95 ≤ 1,0 ms | p95 1,5 ms |
+| ANDAR com minimapa e bússola | S3 | quadro p95 + ≤ 0,3 ms sobre o S3 sem HUD | + 0,6 ms |
+| RAM e binário | S6 | + ≤ 8 MB RSS; + ≤ 0,5 MB no binário | + 15 MB / + 1 MB |
+| módulos custom | — | intervalo ≥ 5 s (preso), tempo-limite 2 s, saída ≤ 4 KB, só com o HUD visível | — |
+
+Nenhum widget pede `Rate` em repouso; o HUD compõe só quando o `hud_hash` muda; ícones da bandeja são
+rasterizados uma vez por tamanho; os amostradores param com o HUD escondido (`z`) ou com o FOCO cobrindo a
+saída.
+
+**Privacidade e testes.** O `dump()` traz contagens, ids e estados, nunca título de mídia, nome de rede,
+título de item da bandeja ou corpo de notificação; as capturas usam só o `--demo` com `inject overlay {"hud":
+…}`; goldens `shot-hud-{game,contrast,focus-pips,with-bar,compass-walk,tray-menu}.nks`; a convivência com
+barra é testada headless com um testclient layer-shell na fase D.
+
+**Código (onda 6).** `crates/nkw/src/overlay/hud_game/` (zonas, widgets, minimapa, bússola, missões),
+widgets novos no kit `ui/` (o `Gauge` e as `Bars` já existem), `nkw-sys/src/{proc,sni}.rs`, o `Status` (S20)
+ganha `cpu_pct`, `ram_mb`, `volume`, `kbd_layout`, `notifications`, `tray`; `[hud.*]` no `world.toml`;
+Ajustes › HUD. Um pacote, ~1,5 semana; se a bandeja (SNI + dbusmenu) pesar, ela vira um segundo pacote da
+mesma onda.
+
+### 3.6 O que fica de fora, e por quê
 
 | ideia | motivo |
 |---|---|
@@ -525,6 +735,12 @@ gatos ou o mapa enquanto você trabalha na primária.
   puser à esquerda, à esquerda. Faceta que some devolve as ancoradas à primária.
 - **Custo**: um passe do mundo por faceta (uploads de textura uma vez por quadro; culling por frustum de cada
   faceta). Orçamento em §5.1.
+
+**Genérico** (a pergunta 1 ficou sem resposta): nada supõe um número ou uma disposição de monitores. A
+baia é calculada para 1..N saídas em quaisquer posições, escalas, taxas e rotações (o `yaw` de cada faceta
+sai do centro físico dela em relação à primária; uma saída acima ou abaixo vira `pitch` da faceta, limitado a
+±30°); o HUD segue `[[output]] hud`; a matriz de testes headless da D cobre 1 saída, 2 lado a lado, 1 + 1
+vertical, 3 em arco e 2 com escalas diferentes (1 e 1,5).
 
 **Por quê.** Em primeira pessoa, "workspaces por monitor" não têm significado: o lugar é um só e o monitor é
 um vidro. Facetas dão o que dois monitores dão de melhor (mais campo de visão, referência ao lado) sem duas
@@ -578,8 +794,9 @@ Cinco camadas, da mais barata à última:
 
 **Decisão.** Superfícies `top` e `overlay` (barras, notificações, lançadores) são compostas **em 2D sobre o
 mundo**, na faceta primária (ou na que o cliente pedir), com âncoras, margens e zona exclusiva pelo protocolo.
-Com uma barra `top` de zona exclusiva, a faixa de status do HUD some (`[hud] strip = "auto"`) e o rótulo do
-modo desce para fora da zona. O foco de teclado `exclusive`/`on_demand` vale pelas regras do protocolo
+Com uma barra de zona exclusiva, as zonas do HUD daquela borda recuam para fora dela e, com `[hud] with_bar =
+"hide_duplicates"` (padrão), os widgets que fazem papel de barra somem naquela saída (§3.5); no estilo
+`cozy`, a faixa de status some (`[hud] strip = "auto"`) e o rótulo do modo desce para fora da zona. O foco de teclado `exclusive`/`on_demand` vale pelas regras do protocolo
 (um lançador toma o teclado enquanto está aberto; `esc` nele devolve). `background` e `bottom` viram **o
 lado de fora**: a textura aparece pelas janelas das salas e pela porta da recepção (e é o fundo do modo
 plano); `swaybg` funciona e dá paisagem às janelas. **Por quê**: barras esperam pixel exato e cliques;
@@ -591,17 +808,33 @@ telefone, carteiros), e quem quer waybar tem waybar. **Descartada**: barra como 
 Prioridade, de cima para baixo, por evento:
 
 1. um **arrasto do mundo** ativo (§2.3) é dono do ponteiro;
-2. uma superfície **layer-shell** `overlay`/`top` sob o ponteiro;
-3. no **FOCO**, a janela e os seus popups (inclusive `pointer-constraints`), **exceto** com `world` segurado;
-4. o **pick 3D** (`wm/pointer.rs`): raio pelo pixel; alvos na ordem alça de redimensionar > aro/tela >
-   moldura vazia > objeto > gato > porta; o hover é recalculado só quando o alvo muda (como hoje) e a
-   seleção por hover segue `[mouse] hover_selects`;
-5. espaço vazio: botão do meio cria, direito abre o balão, esquerdo arrastando laça.
+2. uma superfície **layer-shell** `overlay`/`top` sob o ponteiro (sessão própria);
+3. a interface 2D do mundo sob o ponteiro: o balão, o telefone, a caixa da CONVERSA e, a partir da fase B, os
+   widgets do HUD;
+4. no **FOCO**, a janela e os seus popups (inclusive `pointer-constraints`) recebem tudo, `ctrl+clique`
+   inclusive, **exceto** os acordes `world+botão` (esquerdo move, direito redimensiona); clicar no mundo
+   escurecido em volta sai do FOCO (existe);
+5. as **ancoradas** (retângulos 2D): `ctrl+` ou `world+esquerdo` arrastando movem; a 1×, o resto vai ao
+   cliente dela (sem foco de teclado); abaixo de 1×, um clique seleciona;
+6. o **pick 3D** (`crates/nkw/src/pointer/`): raio pelo pixel; alvos na ordem alça de redimensionar > tela
+   (aro ou conteúdo) > moldura vazia > objeto, gato, porta, livro (o clique faz o que o rótulo do SALTO
+   faria); botão simples = clique (seleciona; duplo = FOCO), `shift+clique` soma à seleção, `ctrl+`/`world+`
+   arrastando move (`[mouse] drag_modifier`), alça arrastando redimensiona, `ctrl+`/`world+direito`
+   arrastando redimensiona pelo canto mais próximo, `alt+rodinha` escala; o hover é recalculado só quando o
+   alvo muda e a seleção por hover segue `[mouse] hover_selects` (fase B);
+7. espaço vazio: botão do meio cria, direito abre o balão, esquerdo arrastando laça (`shift`: soma).
 
-A máquina `Idle → Hover → Pressed{pos, pick, t} → Drag{Move | Resize(corner) | Rotate | Lasso} → Idle` é pura
-(`nkw-core/src/arrange.rs`) e testada por tabela; o `nkw` só traduz eventos e aplica. Botões e teclas
-pressionadas ao trocar de modo são soltos pelo hub (padrão que já existe para teclas). Cursor: `default`,
-`grab`/`grabbing`, `nwse-resize` etc. pelo `cursor-shape` ao host (aninhado) ou pelo tema (sessão).
+No ANDAR com a mira (ponteiro travado), os botões seguem a mira: esquerdo interage, direito pega (existem) e
+`ctrl+esquerdo` segurado carrega.
+
+A máquina `Idle → Hover → Pressed{pos, hit, mods, t} → Drag{Move | Resize(grip) | Lasso | Carry} → Idle` é
+pura (`nkw-core/src/pointer.rs`) e testada por tabela (modo × alvo × botão × modificadores → gesto), com a
+regra da trava: o modificador que começou o arrasto não vale como gesto até ser solto (§2.3). O `nkw` só
+traduz eventos e aplica: a matemática do arrasto (`arrange.rs`) e os ímãs (`magnet.rs`) ficam no `World`,
+que o ponteiro chama. Botões e teclas pressionadas ao trocar de modo são soltos pelo hub (padrão que já existe
+para teclas); um arrasto vivo numa troca de modo, na perda de foco da janela do host ou com o botão solto fora
+dela termina como `soltar`. Cursor: `default`, `grab`/`grabbing`, `nwse-resize` etc. pelo `cursor-shape` ao
+host (aninhado) ou pelo tema (sessão).
 
 ### D16 — Config canônica e IPC
 
@@ -618,16 +851,43 @@ pressionadas ao trocar de modo são soltos pelo hub (padrão que já existe para
   rodando via `nkw msg script -`. O Lua do core chega ao mundo como hoje (`nk.ui.scene`), e a IPC é para
   shell, waybar, kanshi e quem mais quiser. Segurança: só o usuário (modo 0600 no socket), sem rede.
 
-### D17 — Captura e portais
+### D17 — Captura, portais e compartilhamento de tela
 
-`wlr-screencopy-v1` **e** `ext-image-copy-capture-v1` implementados à mão no `nkw` (o Smithay não os traz;
-é o que niri e cosmic-comp fazem), com: fonte "saída" = o quadro composto, fonte "toplevel" = a textura da
-tela (exata, sem 3D), dano real, `block_out_from_capture` pinta a tela de creme na cópia, o cofre tranca ao
-iniciar qualquer sessão de captura (regra existente), ON AIR acende. Backend de portal: **`xdg-desktop-
-portal-wlr`** (ScreenCast e Screenshot; reconhece `XDG_CURRENT_DESKTOP=nkw` pela `nkw-portals.conf`) e
-**`-gtk`** (FileChooser, Settings, Notification, AppChooser). **Descartadas**: `-gnome` (exige as interfaces
-D-Bus do Mutter, que o niri implementa a um custo alto); portal próprio (cabe depois, para um seletor de
-janela diegético via SALTO).
+**Compartilhar a tela numa reunião é condição do go/no-go** (decisão do usuário, 2026-10-24).
+
+**Sessão própria.** `wlr-screencopy-v1` **e** `ext-image-copy-capture-v1` com `ext-image-capture-source-v1`
+(fonte de saída e fonte de toplevel, esta sobre `ext-foreign-toplevel-list-v1`) no `nkw`; à mão, como niri e
+cosmic-comp, ou pelos módulos do Smithay se a rev pinada já os tiver (verificar no primeiro dia da D). Fonte
+"saída" = o quadro composto **sem o HUD, os toasts e o balão** (`[capture] hud = false`, padrão; uma
+composição extra só enquanto houver sessão de captura, na taxa que o cliente pede); fonte "toplevel" = a
+textura da tela (exata, sem 3D, independe de onde ela está no mundo, inclusive em outra sala); dano real;
+cursor embutido ou como metadado, como o cliente pedir; `block_out_from_capture` pinta a tela de creme na
+cópia; o cofre tranca ao iniciar qualquer sessão de captura (regra existente); ON AIR acende **no HUD local**,
+nunca na cópia. Backend de portal: **`xdg-desktop-portal-wlr`** (ScreenCast e Screenshot; reconhece
+`XDG_CURRENT_DESKTOP=nkw` pela `nkw-portals.conf`; janela única pede a versão com `ext-image-copy-capture`,
+saída funciona também só com `wlr-screencopy`) e **`-gtk`** (FileChooser, Settings, Notification,
+AppChooser). O **seletor** do `-wlr` é o mundo: `chooser_type = "dmenu"` com `chooser_cmd = "nkw msg pick
+--dmenu"`, que recebe a lista de saídas e janelas e abre um SALTO diegético (rótulos nas telas e nas
+facetas); `esc` cancela o compartilhamento. O fluxo vai por PipeWire (dmabuf quando o cliente aceita, senão
+shm). Áudio do compartilhamento não é do portal (cada app trata o seu), documentado.
+
+**Aninhado** (como funciona hoje e o que a fase B soma):
+
+1. **O mundo inteiro**: os apps dentro do `nkw` falam com o portal da sessão do host (o do niri). O seletor é
+   o do niri, e ele compartilha a janela do `nkw` inteira (o mundo, com o HUD) ou uma saída do niri. Já
+   funciona e vai documentado em `mundo.md`.
+2. **Uma janela só**: o niri só vê a janela do `nkw`, então a fase B traz o **modo apresentação**
+   (`world.present`, `world+shift+p`): a tela escolhida em 1:1 ocupando a janela do `nkw` (configurada ao
+   tamanho dela), sem HUD, sem o mundo em volta, até `world+shift+p` de novo; compartilha-se a janela do `nkw`
+   no seletor do niri. O ON AIR aparece só por 2 s ao entrar (para não vazar na cópia).
+3. **Ferramentas de captura apontadas para o display aninhado** (`grim` com `WAYLAND_DISPLAY` do `nkw`)
+   funcionam a partir da D, quando os protocolos existirem; é o caminho para desenvolver e testar a captura sem
+   sair do niri. O portal `-wlr` não serve aninhado (o frontend da sessão escolhe o backend do niri).
+
+**Descartadas**: `-gnome` (exige as interfaces D-Bus do Mutter, que o niri implementa a um custo alto);
+portal próprio (o seletor via SALTO já resolve o que ele daria); compartilhar por uma saída virtual
+(`headless output`) no aninhado (custo de uma segunda composição sempre ligada, sem ganho sobre o modo
+apresentação).
 
 ### D18 — Licenças
 
@@ -635,7 +895,21 @@ Smithay e anvil MIT; `wayland-protocols` e `wlr-protocols` MIT; `xcursor` MIT; l
 `xdg-desktop-portal-wlr` MIT (processo separado); `-gtk` LGPL (processo separado). O **niri é GPL-3.0**: serve
 para listar recursos e entender comportamento (este documento); ao implementar, o código nasce das
 especificações dos protocolos e da API do Smithay, nunca da leitura do código do niri. Regra de review: um PR
-que implemente um protocolo cita a especificação e o módulo do Smithay, não o niri.
+que implemente um protocolo cita a especificação e o módulo do Smithay, não o niri. O mesmo vale para a
+waybar (MIT) no HUD: o protocolo JSON dos módulos custom é uma interface documentada, reimplementada; nenhum
+código copiado.
+
+### D19 — O HUD de jogo faz o papel da barra; barras de verdade continuam
+
+**Decisão.** O status de barra (salas, relógio, bandeja, áudio, rede, bateria, CPU/RAM, mídia, notificações,
+agentes) mora no **HUD de jogo** (§3.5), desenhado pelo overlay com o kit `ui/` próprio, em zonas de canto e
+borda, alimentado pelo `Status` dos plugins e por fontes novas do `nkw-sys` (CPU/RAM, StatusNotifierItem).
+Barras layer-shell continuam suportadas na sessão (D14) e, quando existem, mandam: o HUD recua da zona
+exclusiva e esconde o que a barra já mostra. Módulos custom aceitam o protocolo JSON da waybar, para quem
+migra. **Por quê**: o usuário quer o mundo com cara de jogo e não quer abrir mão do que a barra dá; o kit e o
+`Status` da onda 4 já são a base, e o HUD funciona igual aninhado e na sessão. **Descartadas**: a waybar dentro
+do mundo como quad 3D (D14); exigir a waybar (o mundo não teria status sem ela aninhado em tela cheia); um
+segundo processo de barra nosso (duplicaria o kit e a IPC).
 
 ## 5. Orçamentos e testes
 
@@ -653,6 +927,8 @@ Mesa), somam-se:
 | duas facetas | S8: NAV com 4 telas, 2 saídas 1080p | CPU por quadro p95 ≤ 3 ms; GPU ≤ 2 ms por faceta | p95 4,5 ms | `NKW_STATS` por saída |
 | arrasto | S9: arrasto roteirizado 60 s, 4 telas no ar | 60 fps, 0 perdidos, CPU p95 ≤ 2 ms; ≤ 10 `configure`/s no redimensionar | 2 perdidos seguidos | `NKW_STATS` + log do testclient |
 | latência de entrada | S2 na sessão | tecla no cliente < 1 ms; ponteiro→quadro ≤ 1 vblank | 2 vblanks | carimbo libinput → `presentation-time` |
+| compartilhar a saída | S13: ScreenCast 1080p60 pelo `-wlr` por 60 s, NAV com 4 telas vivas | 60 fps entregues, CPU extra p95 ≤ 1,5 ms por quadro capturado, 0 quadros com HUD ou cofre aberto na cópia | 2 ms / 1 quadro | `NKW_STATS` `capture_*` + o testclient de captura conferindo pixels |
+| compartilhar uma janela | S13w: fonte toplevel de um navegador de teste por 60 s, a tela em outra sala | taxa da janela, CPU extra p95 ≤ 0,5 ms, pixels iguais à textura (0 px) | 1 ms | idem |
 | partida da sessão | `nkw --session` até o 1º quadro | ≤ 600 ms | 1,2 s | `NKW_STATS` do `starttime` |
 | volta de VT / resume | `chvt` de volta, resume | quadro completo em ≤ 300 ms | 1 s | idem |
 | RAM | 8 janelas, 2 saídas, sessão | ≤ 130 MB RSS | 170 MB | como hoje |
@@ -663,12 +939,15 @@ Mesa), somam-se:
 | camada | o quê | onde |
 |---|---|---|
 | `nkw-core` puro | `arrange` (plano da vista, limites, redimensionar com presets e hints; tabela da máquina do ponteiro), `magnet` (cada alvo, tolerâncias, `ctrl`/`shift`), `history` (50 ops, coalescência de toques em 1 s, refazer), `onetoone` com pitch e escala (< 0,01 px numa grade), `persist` v1→v2 e arranjos (ida e volta, arquivo corrompido), estações novas na ordem da sala | `cargo test -p nkw-core`, ≥ 90 % de linhas (gate existente) |
-| headless + `--script` | ponteiro com `pointer`, `button left\|middle\|right`, `scroll`, `drag`, modificadores; asserções `expect pose <id> ≈` e no log do `nkw-testclient` (tamanhos de `configure` durante o arrasto ≤ 10/s, final exato); shots `shot-arr-*.nks` (guias, anel 1:1, laçada, moldura, ancorada em 2D exato: recorte == buffer, 0 px) | `make world-shot`, `make world-test` |
+| `nkw-core` puro, ponteiro | a tabela modo × alvo × botão × modificadores → gesto (`ctrl+arrastar` em qualquer ponto no NAV/ARRUMAR, só `world+` no FOCO, alça sem modificador, `ctrl+segurar` carrega no ANDAR com mira), a trava do modificador que começou o arrasto, limiar e duplo clique, cancelar por `esc`/direito/perda de foco | `cargo test -p nkw-core` |
+| headless + `--script` | ponteiro com `pointer_to`, `pointer`, `button left\|middle\|right`, `click`, `scroll`, `drag … [mods]`; asserções `expect pose <app_id> …`, `expect near` e no log do `nkw-testclient` (tamanhos de `configure` durante o arrasto ≤ 10/s, final exato); `ctrl+clique` no FOCO chega ao cliente (o testclient registra o botão e o modificador); shots `shot-arr-*.nks` (guias, anel 1:1, laçada, moldura, balão, ancorada em 2D exato: recorte == buffer, 0 px) | `make world-shot`, `make world-test` |
+| HUD de jogo (fase B) | zonas por tamanho de saída e escala (tabela pura), `with_bar` com zonas exclusivas falsas, pips no FOCO (nenhum pixel do HUD dentro do retângulo 1:1), widgets sem dado somem, `dump()` sem títulos nem nomes; goldens `shot-hud-*` | `cargo test -p nkw`, `make world-shot` |
+| captura (fase D) | o testclient ganha `--screencopy` e `--image-copy {output\|toplevel}`: pede um quadro e confere pixels (o HUD ausente na saída com `[capture] hud = false`, a janela exata na fonte toplevel, a tela bloqueada pintada de creme, o cofre trancado); `nkw msg pick --dmenu` com uma lista fixa na entrada | `make world-compat`, VKMS |
 | headless multi-saída | `--headless --outputs 2 --layout "1920x1080+0+0,1920x1080+1920+0"`: facetas, `send_output`, ancoradas por saída, hotplug simulado por `inject` | fase D |
 | DRM sem GPU (CI local) | **VKMS** (`modprobe vkms`) numa VM ou num VT livre: `nkw --session --drm /dev/dri/cardN --no-seat` roda S1, S9, S10 e S12; o conector *writeback* do VKMS lê o quadro de volta para golden (0 px de diferença no 1:1) | `make world-session-smoke` (precisa de `sudo` para o módulo; documentado) |
 | DRM de verdade | VT livre na máquina alvo (`chvt`, login, `nkw --session`): a lista do aceite da fase D, à mão, com checklist em `mundo.md`; S10/S11 medidos aqui | fim da fase D e semanalmente na E |
 | protocolos | o `nkw-testclient` ganha layer-shell (barra com zona exclusiva, lançador com teclado exclusivo), session-lock, idle-notify, screencopy (pede um quadro e confere o pixel), data-control, keyboard-shortcuts-inhibit; `make world-compat` roda tudo sem janela | fase D |
-| apps reais | a matriz de `mundo.md` ganha colunas "arrastar", "redimensionar ao vivo", "captura" e, na sessão, "IME", "DnD", "layer-shell" (waybar, mako, fuzzel, swaybg, swaylock, swayidle, wl-clipboard, grim, kanshi) | `make world-compat-nested`, e na sessão |
+| apps reais | a matriz de `mundo.md` ganha colunas "arrastar", "redimensionar ao vivo", "captura" e, na sessão, "IME", "DnD", "layer-shell" (waybar, mako, fuzzel, swaybg, swaylock, swayidle, wl-clipboard, grim, kanshi) e "compartilhar" (tela inteira e janela num navegador de teste e num app Electron com perfil descartável, chamada de teste de 30 min) | `make world-compat-nested`, e na sessão |
 | desempenho | S8–S12 em `world-perf.sh` com as linhas novas no `world-perf-budget.toml`; números por fase no `log.md` | `make world-perf` |
 | fuzz leve | tempestade de `configure`/commit do testclient durante um arrasto; perda e volta do dispositivo DRM simuladas no VKMS (unbind/bind) | fase D |
 | conforto | 10 minutos arrumando telas com o mouse e 10 com o teclado, com os padrões, sem desconforto, assinado pelo usuário (como o aceite da fase 3) | fase A |
@@ -678,36 +957,53 @@ Mesa), somam-se:
 Esforço em semanas de um dev com agents, com as ondas de pacotes paralelos como nas ondas 2–4. Cada fase
 é uma branch `mundo/fase-X-<slug>`, termina com números no `log.md` e é aceita pelo usuário.
 
-### Fase A — Telas no espaço (aninhado, 3–4 semanas)
+### Fase A — Telas no espaço (aninhado, 3–4 semanas, onda 5 em quatro pacotes)
 
-**Entregas**: §2 inteiro: moldura vazia e `N`/`shift+N`/botão do meio/balão/`a` no telefone; arrasto com o
-mouse (plano da vista, rodinha, `shift`/`alt`/`ctrl`, cancelar); redimensionar com alças e presets, `configure`
-a ≤ 10 Hz; ARRUMAR por teclado; seleção múltipla, laçada, clusters; arranjos (salvar/carregar/apagar, telefone
-› Arranjos, paleta); ancoradas com 2D exato a 1:1; ímãs e guias; desfazer; sensação; `onetoone` com pitch e
-escala; `world.json` v2; `--script` com ponteiro completo; comandos no core e modo `world.arrange`;
-`mundo.md` ("Arrumar as telas"), `teclas.md`, `comandos.md`.
+**Entregas**: §2 inteiro: moldura vazia e `N`/`ctrl+n`/botão do meio/balão/`a` no telefone; arrasto com o
+mouse por `ctrl+arrastar` em qualquer ponto (NAV, ARRUMAR, ANDAR com ponteiro livre) e `world+arrastar` em
+todo modo (o único no FOCO), `ctrl+segurar` carregando no ANDAR com mira, plano da vista, rodinha,
+`shift`/`alt`/`x`/`g`, a trava do modificador, cancelar; redimensionar com alças e presets, `configure` a ≤ 10
+Hz; ARRUMAR por teclado; seleção múltipla, laçada, clusters; arranjos **das telas abertas** (salvar, carregar,
+apagar, renomear; telefone › Arranjos; paleta); ancoradas sempre em 2D, exatas a 1×, fora dos retângulos do
+HUD (`hud_reserved`); ímãs e guias; desfazer; sensação; `onetoone` com escala; `world.json` v2; `--script`
+com ponteiro completo; comandos no core e os modos `world.arrange`, `world.drag`, `world.menu`; `mundo.md`
+("Arrumar as telas"), `teclas.md`, `comandos.md`.
 
 **Aceite**:
-- `--script`: arrastar uma tela de uma mesa para o ar, redimensionar, girar, ancorar e desfazer tudo, com
-  `expect pose` em cada passo e 0 erros de protocolo no testclient;
+- `--script`: arrastar uma tela de uma mesa para o ar com `ctrl+arrastar` a partir do meio do conteúdo,
+  redimensionar pela alça, girar, ancorar e desfazer tudo, com `expect pose` em cada passo e 0 erros de
+  protocolo no testclient; um `ctrl+clique` no FOCO chega ao testclient com o `ctrl`, e um `world+arrastar` no
+  FOCO sai do FOCO e move a tela;
+- um arranjo que cita uma tela fechada carrega o resto e avisa a falta, sem lançar nada;
 - FOCO pixel-exato (0 px) a partir de 12 poses no ar (yaw × pitch × escala) e de uma ancorada;
 - S9: 60 fps, 0 quadros perdidos, CPU p95 ≤ 2 ms; ≤ 10 `configure`/s durante o redimensionar;
 - um arranjo com 5 telas salva e carrega igual (ida e volta, poses ao milímetro);
 - 10 + 10 minutos de arrumação sem desconforto, assinados;
 - `nkw-core` ≥ 90 %; S1 e S4 sem regressão (> 20 % falha).
 
-### Fase B — Paridade de WM, aninhado (3 semanas)
+### Fase B — HUD de jogo e paridade de WM, aninhado (4–5 semanas, ondas 6 e 7)
 
-**Entregas**: `nkw msg` com consultas, ações e `event-stream`; recarga a quente do `world.toml`; regras v2;
-mesa fechada (abas); salas pelo telefone e IPC, `[[room]]`; `[[spawn]]`; `world.screenshot`; hover e clique
-configuráveis, `warp_to_focus`; urgência no aro; `[animations]`; `nkw msg debug` e sobreposição de tempo de
-quadro; `--flat` (modo plano, que a fase D usa como rede); `color-scheme` do portal; mapa com miniaturas e
-arrasto; backend SCTK **se** o critério de D4 bater (keyboard-shortcuts-inhibit para `super` aninhado).
+**Entregas**: **primeiro pacote da onda 6: o HUD de jogo** (§3.5, D19): zonas, minimapa, bússola, diário de
+missões, medidores, barra de salas, bandeja (StatusNotifierItem), mini player, volume, layout do teclado,
+notificações, agents, módulos custom no protocolo da waybar, modo HUD (`world+i`), espiada no FOCO
+(`world+z`), Ajustes › HUD, `[hud.*]`. Depois: `nkw msg` com consultas, ações e `event-stream`; recarga a
+quente do `world.toml`; regras v2; mesa fechada (abas); salas pelo telefone e IPC, `[[room]]`; `[[spawn]]`;
+`world.screenshot`; **modo apresentação** (`world.present`, compartilhar uma janela só pelo portal do niri);
+hover e clique configuráveis, `warp_to_focus`; urgência no aro; `[animations]`; `nkw msg debug` e
+sobreposição de tempo de quadro; `--flat` (modo plano, que a fase D usa como rede); `color-scheme` do
+portal; mapa com miniaturas e arrasto; backend SCTK **se** o critério de D4 bater (keyboard-shortcuts-inhibit
+para `super` aninhado). Onda 6: HUD, IPC + recarga, regras + `[[spawn]]` + salas + mesa fechada, screenshot +
+modo apresentação + urgência + animações; onda 7: o resto.
 
-**Aceite**: `nkw msg screens --json` lista o que o `dump` lista; um script em shell move uma janela de sala
-pela IPC; editar `world.toml` muda a velocidade do ANDAR sem reiniciar e um erro de sintaxe vira toast; uma
-regra `title` manda a janela certa para o ar; waybar lê `event-stream` (módulo custom) sem engasgar; `--flat`
-passa a lista do dia a dia da fase 1; orçamentos verdes.
+**Aceite**: com o `nkw` em tela cheia no niri e a waybar escondida atrás, o usuário diz que não sente falta
+dela por uma semana (relógio, bandeja, áudio, rede, bateria, CPU/RAM, mídia e notificações do mundo no HUD);
+os orçamentos do HUD (§3.5) verdes e nenhum pixel do HUD dentro do retângulo 1:1 no FOCO; um módulo custom da
+config da waybar do usuário roda sem mudança; compartilhar uma janela numa chamada de teste pelo modo
+apresentação e o mundo inteiro pela janela do `nkw`; `nkw msg screens --json` lista o que o `dump` lista; um
+script em shell move uma janela de sala pela IPC; editar `world.toml` muda a velocidade do ANDAR sem
+reiniciar e um erro de sintaxe vira toast; uma regra `title` manda a janela certa para o ar; waybar lê
+`event-stream` (módulo custom) sem engasgar; `--flat` passa a lista do dia a dia da fase 1; orçamentos
+verdes.
 
 ### Fase C — DECORAR, notas, foto (2 semanas)
 
@@ -721,9 +1017,11 @@ S1 e S3 sem regressão.
 ### Fase D — Sessão própria atrás de `--session` (6–8 semanas)
 
 **Entregas**: `Backend` (D12) e `backend/udev.rs` (DRM atômico, planos, scanout direto, cursor por hardware,
-VRR); libinput e `[input]`; libseat, VT, suspend/resume; hotplug e `DrmOutputManager`; facetas e vistas (D11),
-`[[output]]`, `wlr-output-management`, `ext-foreign-toplevel-list`; layer-shell (D14); `ext-session-lock`;
-`ext-idle-notify` e DPMS; `wlr-screencopy` + `ext-image-copy-capture`, `nkw-portals.conf` (D17); gama;
+VRR); libinput e `[input]`; libseat, VT, suspend/resume; hotplug e `DrmOutputManager`; facetas e vistas (D11,
+genéricas para 1..N saídas), `[[output]]` (com `hud`), `wlr-output-management`, `ext-foreign-toplevel-list`;
+layer-shell (D14) e o HUD recuando dela (D19); `ext-session-lock`; `ext-idle-notify` e DPMS; `wlr-screencopy`
++ `ext-image-copy-capture` + `ext-image-capture-source` (saída e toplevel), captura sem HUD, `nkw msg pick
+--dmenu` como seletor do `-wlr`, `nkw-portals.conf` (D17), S13/S13w; gama;
 `keyboard-shortcuts-inhibit`; `input-method-v2` + `text-input-v3` + `virtual-keyboard`; `ext-data-control`;
 XCursor e imagens de cursor dos clientes; daemon de notificações próprio → carteiros; `[[spawn]]` do agente
 polkit; `nkw.desktop`, `nkw-session`, unidades; D13 inteiro (panic hook, `--safe`, reinício, queda ao greeter);
@@ -735,8 +1033,13 @@ polkit; `nkw.desktop`, `nkw-session`, unidades; D13 inteiro (panic hook, `--safe
 - `swaylock` tranca e destranca; `swayidle` apaga e acende; suspend e resume com a sessão trancada;
 - `chvt` para outro VT e de volta em ≤ 300 ms; um crash provocado (`nkw msg debug panic`) volta ao greeter
   em ≤ 5 s com `crash-*.json` gravado e, na partida seguinte, as molduras no lugar;
-- compartilhar a tela e uma única janela num navegador pelo portal; `grim` tira screenshot; o cofre tranca
-  ao começar;
+- **compartilhar a tela inteira e uma única janela** numa chamada de teste de 30 min num navegador (perfil
+  descartável) e num app Electron, pelo portal, escolhendo pelo SALTO; a cópia sem HUD e com a tela marcada
+  `block_out_from_capture` em creme; a janela compartilhada continua exata quando muda de sala; `grim` tira
+  screenshot; o cofre tranca ao começar;
+- waybar na sessão: o HUD recua da zona exclusiva e esconde o que ela mostra (`hide_duplicates`), em cima,
+  embaixo e do lado;
+- a matriz headless de saídas (1, 2 lado a lado, 1 + 1 vertical, 3, escalas mistas) verde;
 - waybar, mako, fuzzel e swaybg funcionam; `cliphist` captura; fcitx5 escreve japonês num GTK4 em FOCO;
 - `wlsunset` muda a gama; `kanshi` muda modo e escala;
 - orçamentos de §5.1 verdes: scanout ≥ 95 %, cursor sem recompor, ocioso 0,1 %, trancado 0 quadros.
@@ -755,11 +1058,16 @@ assina o go/no-go (§6.7).
 ### 6.6 Ordem, e por quê
 
 **A → B → C → D → E.** A fase A vai primeiro porque é o pedido, roda aninhada (risco zero para a sessão), é
-visível em dias e assenta a máquina do ponteiro de que D precisa. B vem antes de D porque IPC, recarga,
-regras e modo plano são **pré-requisitos** da sessão (kanshi/waybar falam IPC; o modo plano é a rede de
-D13) e ainda são aninhados. C é pequena e aproveita A quente; pode ser trocada de lugar com B se o usuário
-preferir "mais lugar" a "mais WM". D só começa com A e B aceitas e com a pergunta 4 (§7) respondida. E é
-o único lugar em que a sessão vira padrão, e só com o go/no-go.
+visível em dias e assenta a máquina do ponteiro de que D precisa. O **HUD de jogo abre a fase B** e não a A:
+a onda 5 já usa os quatro pacotes paralelos que a máquina do usuário aguenta, e a A só precisa do HUD os
+retângulos reservados, que entram nela; aninhado em tela cheia, o HUD é o que deixa a waybar dispensável, e
+por isso vem antes do resto da paridade. B vem antes de D porque IPC, recarga, regras e modo plano são
+**pré-requisitos** da sessão (kanshi/waybar falam IPC; o modo plano é a rede de D13) e ainda são aninhados;
+o modo apresentação dá o compartilhamento de uma janela já no aninhado. C é pequena e aproveita A quente;
+pode ser trocada de lugar com B se o usuário preferir "mais lugar" a "mais WM". D começa com A e B aceitas;
+a pergunta 4 ficou sem resposta e a premissa é que a sessão própria continua no roteiro, porque o
+compartilhamento pelo portal e o go/no-go dependem dela. E é o único lugar em que a sessão vira padrão, e só
+com o go/no-go.
 
 **Riscos** desta fase e as mitigações:
 
@@ -779,6 +1087,11 @@ o único lugar em que a sessão vira padrão, e só com o go/no-go.
 | captura vazar o cofre ou telas sensíveis | cofre tranca ao iniciar captura; `block_out_from_capture`; ON AIR visível |
 | fork do Smithay (movimento relativo) perdurar | PR upstream nesta fase; se recusado, o SCTK da B o substitui |
 | multi-saída dobrar o custo de GPU | culling por faceta, uploads únicos, vista fixa a ≤ 4 Hz; S8 com orçamento |
+| `ctrl+arrastar` pegar quem queria só clicar com `ctrl` | limiar de 6 px; no FOCO o `ctrl` é do app; `drag_modifier` configurável; a trava do modificador testada por tabela |
+| o HUD de jogo pesar no ocioso ou cobrir conteúdo | amostradores de 2 s só com o HUD visível, nada de `Rate` em repouso, S1/S3/S7h com orçamento; regra dura de não cobrir o 1:1 |
+| bandeja (StatusNotifierItem + dbusmenu) ser um poço | ícone, ativar e menu como página do telefone; o resto do dbusmenu (ícones de item, submenus fundos) fica para depois; pode virar pacote próprio na onda 6 |
+| `xdg-desktop-portal-wlr` instalado não ter janela única (`ext-image-copy-capture`) | verificar a versão no primeiro dia da D; saída inteira funciona com `wlr-screencopy`; janela única entra no go/no-go, então a versão mínima vai para `instalacao.md` |
+| compartilhar vazar o HUD, o cofre ou uma tela marcada | composição de captura sem HUD por padrão, cofre tranca ao iniciar, `block_out_from_capture`, teste de pixels no testclient |
 
 ### 6.7 Go/no-go para a sessão virar padrão
 
@@ -788,25 +1101,35 @@ Ao fim da E, a sessão `nkw` só vira a padrão do greeter se **todos** valerem:
 2. os orçamentos de §5.1 verdes em três medições em semanas distintas;
 3. a lista do aceite da D refeita verde na versão final;
 4. um crash provocado volta ao greeter em ≤ 5 s com o estado salvo, três vezes seguidas;
-5. os apps do dia a dia do usuário (terminal, navegador, editor, chat, reunião com compartilhamento de tela)
-   na matriz com ✓ ou ◐ documentado, nenhum ✗;
-6. a sessão niri continua instalada e funcional como alternativa, e a doc diz como voltar a ela.
+5. os apps do dia a dia do usuário (terminal, navegador, editor, chat, reunião) na matriz com ✓ ou ◐
+   documentado, nenhum ✗;
+6. **compartilhamento de tela em reunião** (decisão do usuário): tela inteira e janela única, pelo portal, num
+   navegador e num app Electron, em três chamadas reais de pelo menos 30 min em dias distintos, sem queda,
+   sem o HUD nem o cofre na cópia; e o caminho aninhado documentado (o mundo inteiro pelo niri, uma janela
+   pelo modo apresentação) testado uma vez na versão final;
+7. a sessão niri continua instalada e funcional como alternativa, e a doc diz como voltar a ela.
 
 Faltando qualquer um: a sessão fica opcional (`nkw` no greeter como segunda opção), o aninhado continua
 suportado, e a próxima fase decide se insiste ou para.
 
-## 7. Perguntas abertas
+## 7. Perguntas
 
-1. **Monitores**: você usa dois ou mais? Lado a lado, um vertical? A resposta valida o modelo "um olho,
-   várias facetas" (D11) e diz se a vista fixa (`role = "view"`) precisa estar na primeira entrega da D.
-2. **Arrastar no NAV**: botão esquerdo arrastando em qualquer ponto da tela move (proposto), ou só o aro e
-   `world+arrastar`, como nos WMs 2D? A primeira é mais direta; a segunda nunca move nada sem querer.
-3. **Arranjos**: só arrumam as telas que existem, ou também abrem os apps que faltam (`spawn`), virando uma
-   "cabine" que restaura a sessão de trabalho? Isso muda o escopo da fase A em uns 3 dias.
+Respondidas em 2026-10-24 (detalhe na seção "Decisões do usuário"):
+
+- **2. Arrastar no NAV** — `ctrl+arrastar` em qualquer ponto da tela; clique simples seleciona (no FOCO, é
+  do app); `world+arrastar` em todo modo e o único no FOCO.
+- **3. Arranjos** — só as janelas já abertas; nada é lançado.
+- **5. Barras** — HUD de jogo que absorve o papel da barra; barras layer-shell continuam na sessão, planas, com
+  o HUD escondendo o que elas cobrem.
+- **6. Captura** — compartilhar tela e janela numa reunião é condição do go/no-go; aninhado, pelo niri e pelo
+  modo apresentação.
+
+Ainda abertas (com a premissa em uso até a resposta):
+
+1. **Monitores**: você usa dois ou mais? Lado a lado, um vertical? *Premissa*: multimonitor genérico (D11 para
+   1..N); a resposta só decide se a vista fixa (`role = "view"`) entra na primeira entrega da D.
 4. **Sessão própria**: você quer entrar no mundo pelo greeter neste ciclo (fase D, 6–8 semanas) ou prefere
-   parar na C e seguir aninhado por mais tempo? É a pergunta 5 do plano original, ainda aberta, e é a que mais
-   pesa no total.
-5. **Barras**: você roda waybar (ou outra barra) hoje? Se sim, barra plana em 2D sobre o mundo (D14) basta,
-   ou a faixa do HUD deve absorver o que você tem na barra (módulos custom via `nkw msg`)?
-6. **Captura**: compartilhar tela ou janela numa reunião é condição para o go/no-go (proposto que sim, via
-   `xdg-desktop-portal-wlr`), ou pode ficar para depois da sessão virar padrão?
+   parar na C e seguir aninhado por mais tempo? *Premissa*: a D continua no roteiro, porque o compartilhamento
+   de janela pelo portal e o go/no-go dependem dela.
+7. **HUD de jogo como padrão** (nova): depois das capturas da onda 6, o estilo `game` vira o padrão no lugar do
+   `cozy`, ou fica como opção?
