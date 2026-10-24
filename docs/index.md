@@ -34,6 +34,7 @@ O `index.md` e o `log.md` são arquivos reservados da spec.
 | [plano-mundo.md](plano-mundo.md) | Plan | O mundo (`nkw`): WM 3D aconchegante em primeira pessoa no estilo Animal Crossing, com os agentes como gatos — modos NAV/ANDAR/FOCO/CONVERSA, Smithay + GLES, fases e orçamentos |
 | [mundo.md](mundo.md) | Guide | Guia do mundo (`nkw`): instalar e rodar aninhado, modos e teclas, HUD e telefone, ANDAR, recepção e objetos, biblioteca e cofre, apps (compatibilidade, X11, portais, IME), `world.toml`, Lua, privacidade, desempenho |
 | [plano-mundo-objetos.md](plano-mundo-objetos.md) | Plan | Adendo do mundo: widgets como objetos (vitrola, relógio, bateria, carteiro, bandeja…), sensação, áudio por proximidade com portas, o cofre e o roteiro atualizado |
+| [plano-mundo-wm.md](plano-mundo-wm.md) | Plan | O mundo como WM de verdade: lacunas frente ao niri, telas no espaço (criar, arrastar, redimensionar, grupos, arranjos, ancoradas), sessão própria, multimonitor, layer-shell, IPC, roteiro e go/no-go |
 | [gui.md](gui.md) | Guide | Guia do GUI nativo (`nkg`, Rust + Bevy): o escritório, o zoom no terminal, a inbox, teclado e desempenho |
 | [gui-web.md](gui-web.md) | Guide | O GUI anterior, em navegador (legado) |
 | [fontes-de-dados.md](fontes-de-dados.md) | Reference | O que o nekuroddo lê de `~/.claude` e como calcula custo |
