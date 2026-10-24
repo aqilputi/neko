@@ -9,6 +9,11 @@
 //!
 //! [launch]
 //! terminal = "foot"         # or ["foot", "-e", "tmux"]
+//! isolate = ["firefox", "zen-browser", "chromium"]  # "abrir isolado"
+//! xwayland = "auto"         # on | off (`--xwayland` wins)
+//!
+//! [launch.env]              # extra env for every child (wins over the defaults)
+//! GDK_SCALE = "1"
 //!
 //! [keys]
 //! focus_escape = "ctrl+]"
@@ -71,12 +76,73 @@ impl Rule {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Launch {
     /// the terminal of `world.terminal`
     #[serde(default, deserialize_with = "argv")]
     pub terminal: Option<Vec<String>>,
+    /// apps that get the "abrir isolado" choice (a profile of their own
+    /// under the state dir)
+    #[serde(default = "default_isolate")]
+    pub isolate: Vec<String>,
+    /// X11 apps through `xwayland-satellite` (`--xwayland` wins)
+    #[serde(default)]
+    pub xwayland: XwaylandMode,
+    /// extra environment for every child (after the launcher's defaults)
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+impl Default for Launch {
+    fn default() -> Launch {
+        Launch {
+            terminal: None,
+            isolate: default_isolate(),
+            xwayland: XwaylandMode::default(),
+            env: BTreeMap::new(),
+        }
+    }
+}
+
+/// The apps `[launch] isolate` lists when the file says nothing.
+pub const ISOLATE_DEFAULT: [&str; 3] = ["firefox", "zen-browser", "chromium"];
+
+fn default_isolate() -> Vec<String> {
+    ISOLATE_DEFAULT.map(String::from).to_vec()
+}
+
+/// `[launch] xwayland` / `--xwayland`: X11 apps through
+/// `xwayland-satellite`, started on demand.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum XwaylandMode {
+    /// when the binary is on `PATH`
+    #[default]
+    Auto,
+    /// always (a toast once when the binary is missing)
+    On,
+    Off,
+}
+
+impl XwaylandMode {
+    /// `"auto" | "on" | "off"` (the CLI's spelling).
+    pub fn parse(s: &str) -> Option<XwaylandMode> {
+        match s.trim() {
+            "auto" => Some(XwaylandMode::Auto),
+            "on" => Some(XwaylandMode::On),
+            "off" => Some(XwaylandMode::Off),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            XwaylandMode::Auto => "auto",
+            XwaylandMode::On => "on",
+            XwaylandMode::Off => "off",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -298,6 +364,67 @@ impl WalkTables {
     }
 }
 
+/// The `[walk]` keys [`WalkConfig::set`] takes at runtime.
+pub const WALK_SET_KEYS: [&str; 7] = [
+    "turn",
+    "mouse_look",
+    "comfort_vignette",
+    "speed",
+    "run_mul",
+    "snap_deg",
+    "eye_height",
+];
+
+impl WalkConfig {
+    /// A runtime change of one key (the phone's Ajustes, `world.walk_set`):
+    /// numbers clamped like the file's; `Err` (pt-BR) on an unknown key or
+    /// a value of the wrong kind, leaving the config as it was.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let (key, value) = (key.trim(), value.trim());
+        let num = |lo: f32, hi: f32| -> Result<f32, String> {
+            value
+                .parse::<f32>()
+                .ok()
+                .filter(|x| x.is_finite())
+                .map(|x| x.clamp(lo, hi))
+                .ok_or_else(|| format!("walk.{key}: {value:?} não é um número"))
+        };
+        let flag = || match value {
+            "true" | "on" | "1" | "sim" => Ok(true),
+            "false" | "off" | "0" | "não" => Ok(false),
+            _ => Err(format!("walk.{key}: {value:?} (true ou false)")),
+        };
+        match key {
+            "turn" => {
+                self.turn = match value {
+                    "smooth" => TurnMode::Smooth,
+                    "snap" => TurnMode::Snap,
+                    _ => return Err(format!("walk.turn: {value:?} (smooth ou snap)")),
+                }
+            }
+            "mouse_look" => self.mouse_look = flag()?,
+            "comfort_vignette" => self.comfort_vignette = flag()?,
+            "speed" => self.speed = num(1.0, 5.0)?,
+            "run_mul" => self.run_mul = num(1.0, 3.0)?,
+            "eye_height" => self.eye_height = num(1.2, 1.8)?,
+            "snap_deg" => {
+                let x = num(0.0, 360.0)?;
+                self.snap_deg = [15.0f32, 30.0, 45.0]
+                    .into_iter()
+                    .min_by(|a, b| (a - x).abs().total_cmp(&(b - x).abs()))
+                    .unwrap_or(30.0);
+            }
+            _ => {
+                return Err(format!(
+                    "walk: chave desconhecida {key:?} ({})",
+                    WALK_SET_KEYS.join(", ")
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Config {
     /// Under reduced motion the turn snaps unless `[walk] turn` says
     /// otherwise (§3.11).
@@ -418,6 +545,86 @@ turntable = true
         // a wrong type is an error like any other
         assert!(parse("[walk]\nspeed = \"rápido\"\n").is_err());
         assert!(parse("[walk]\non_exit = \"jump\"\n").is_err());
+    }
+
+    #[test]
+    fn launch_table() {
+        let c = parse("").unwrap();
+        assert_eq!(c.launch.isolate, ["firefox", "zen-browser", "chromium"]);
+        assert_eq!(c.launch.xwayland, XwaylandMode::Auto);
+        assert!(c.launch.env.is_empty());
+        let c = parse(
+            "[launch]\nisolate = [\"acme-browser\"]\nxwayland = \"off\"\n\
+             [launch.env]\nGDK_BACKEND = \"x11\"\nNKW_T = \"1\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.launch.isolate, ["acme-browser"]);
+        assert_eq!(c.launch.xwayland, XwaylandMode::Off);
+        assert_eq!(c.launch.env["GDK_BACKEND"], "x11");
+        assert_eq!(c.launch.env.len(), 2);
+        assert_eq!(c.launch.terminal, None);
+        let c = parse("[launch]\nisolate = []\nxwayland = \"on\"\n").unwrap();
+        assert!(c.launch.isolate.is_empty(), "an empty list turns it off");
+        assert_eq!(c.launch.xwayland, XwaylandMode::On);
+        for bad in [
+            "[launch]\nxwayland = \"sometimes\"\n",
+            "[launch]\nenv = 3\n",
+            "[launch]\nisolate = \"firefox\"\n",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+        for (s, m) in [
+            ("auto", Some(XwaylandMode::Auto)),
+            (" on ", Some(XwaylandMode::On)),
+            ("off", Some(XwaylandMode::Off)),
+            ("x", None),
+        ] {
+            assert_eq!(XwaylandMode::parse(s), m, "{s}");
+            if let Some(m) = m {
+                assert_eq!(XwaylandMode::parse(m.as_str()), Some(m));
+            }
+        }
+    }
+
+    #[test]
+    fn walk_set_at_runtime() {
+        let mut w = WalkConfig::default();
+        type Row = (&'static str, &'static str, fn(&WalkConfig) -> bool);
+        let ok: [Row; 14] = [
+            ("turn", "snap", |w| w.turn == TurnMode::Snap),
+            ("turn", "smooth", |w| w.turn == TurnMode::Smooth),
+            ("mouse_look", "false", |w| !w.mouse_look),
+            ("mouse_look", "on", |w| w.mouse_look),
+            ("comfort_vignette", "true", |w| w.comfort_vignette),
+            ("comfort_vignette", "off", |w| !w.comfort_vignette),
+            ("speed", "3.5", |w| w.speed == 3.5),
+            ("speed", "9", |w| w.speed == 5.0),
+            ("run_mul", "0", |w| w.run_mul == 1.0),
+            ("snap_deg", "45", |w| w.snap_deg == 45.0),
+            ("snap_deg", "20", |w| w.snap_deg == 15.0),
+            ("eye_height", "1.6", |w| w.eye_height == 1.6),
+            ("eye_height", "3", |w| w.eye_height == 1.8),
+            (" speed ", " 2 ", |w| w.speed == 2.0),
+        ];
+        for (k, v, check) in ok {
+            assert_eq!(w.set(k, v), Ok(()), "{k}={v}");
+            assert!(check(&w), "{k}={v}: {w:?}");
+        }
+        let before = w;
+        for (k, v) in [
+            ("turn", "jump"),
+            ("mouse_look", "talvez"),
+            ("speed", "rápido"),
+            ("speed", "NaN"),
+            ("eye_height", "inf"),
+            ("colour", "red"),
+            ("on_exit", "stay"),
+        ] {
+            let e = w.set(k, v).unwrap_err();
+            assert!(!e.is_empty(), "{k}");
+            assert_eq!(w, before, "{k}={v}: unchanged");
+        }
+        assert!(w.set("colour", "x").unwrap_err().contains("colour"));
     }
 
     #[test]

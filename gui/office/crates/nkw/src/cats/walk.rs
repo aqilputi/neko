@@ -427,6 +427,12 @@ impl Walks {
             return Some(RECEPTIONIST);
         }
         let w = self.q.ordered().into_iter().next()?;
+        self.cat_of(w, o)
+    }
+
+    /// The cat a queued walker is: its villager, or the postman carrying
+    /// its letter.
+    pub fn cat_of(&self, w: &q::Walker, o: &Office) -> Option<CatId> {
         match w.kind {
             Kind::Mail => self.postmen.get(&w.key).copied(),
             _ => o.by_session(&w.session_id).map(|v| v.cat),

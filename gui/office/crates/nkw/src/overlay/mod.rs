@@ -7,11 +7,15 @@
 //! `Want::Continuous` (none under reduced motion). No `Rate` wish, ever.
 
 pub mod andar;
+pub mod apps;
 pub mod cache;
 pub mod draw;
 pub mod hud;
 pub mod inject;
+pub mod look;
 pub mod map;
+pub mod phone;
+pub mod prefs;
 pub mod project;
 
 use std::collections::BTreeMap;
@@ -26,17 +30,28 @@ use serde_json::Value;
 use crate::ext::{
     Ctx, DialogView, HudInput, OverlayElem, PaletteItem, Pickable, Plugin, Req, Source, ToastKind,
 };
-use crate::router::{KeyEv, table};
+use crate::router::{KeyEv, names, table};
+use crate::ui::phone::{PhoneApp, PhonePage, PhoneState, PhoneView};
+use crate::ui::{Node, Theme};
 use cache::Cache;
 use draw::{Fonts, Px, Row, Spec};
 use hud::Toast;
 use map::MapState;
+use nk_cats::keys::Bind;
+use phone::Phone;
+use prefs::{Prefs, Strip};
 use project::View;
 
 /// Where the mode label sits, logical px from the top-left.
 pub const LABEL_POS: (i32, i32) = (16, 16);
+/// The status strip's right/top margin, logical px.
+pub const STRIP_MARGIN: i32 = 16;
 /// Element ids (stable per role).
 pub const LABEL_ID: u64 = 1;
+pub const STRIP_ID: u64 = 2;
+pub const PHONE_ID: u64 = 600;
+/// The library's selected-book tags wear the selection look.
+pub const SELECTED_TAGS: std::ops::RangeInclusive<u64> = 0x11b0_0100..=0x11b0_01ff;
 const CHIP_ID: u64 = 10;
 const TOAST_ID: u64 = 100;
 const DIALOG_ID: u64 = 200;
@@ -96,6 +111,27 @@ pub struct Overlay {
     /// `inject overlay {"aimed"|"carrying"|"vignette": …}` (tests, shots)
     forced: Forced,
     stats: Stats,
+    /// the phone, while open (it rides COMANDOS)
+    phone: Option<Phone>,
+    /// `--demo`: the phone's dump may show the typed query
+    demo: bool,
+    /// the keymap mode the phone was opened from (Ajuda's first section)
+    phone_origin: &'static str,
+    prefs: Prefs,
+    /// `<state-dir>/ui.toml`; `None` under `--demo`
+    prefs_path: Option<std::path::PathBuf>,
+    /// `[hud] strip` of `world.toml`
+    hud_strip: Strip,
+    /// `world.hud` (`z`): the label, the strip and the chips hidden
+    hud_hidden: bool,
+    /// `inject overlay {"los": bool|null}`: the tags' line of sight forced
+    los: Option<bool>,
+    /// the bindings in effect (Ajuda; the phone's printable keys)
+    binds: Vec<Bind>,
+    world_mod: &'static str,
+    focus_escape: String,
+    /// `world.palette_run {name, …}`: the next palette opens on it
+    palette_ask: Option<(String, BTreeMap<String, String>)>,
 }
 
 /// What a script forces over the hub's/World's values (`null` releases).
@@ -121,6 +157,12 @@ struct Stats {
     hand: bool,
     /// the map's library shelves
     shelves: usize,
+    /// the status strip is drawn
+    strip: bool,
+    /// tags left out this frame because a wall is in the way
+    tags_hidden: usize,
+    /// the tags' rects as placed (logical px)
+    tag_rects: Vec<(i32, i32, i32, i32)>,
 }
 
 /// The keys while a screen is in hand (ANDAR), bottom-centre.
@@ -128,8 +170,28 @@ pub const HAND_HINT: &str = "g solta · [ ] distância · - = tamanho";
 
 impl Overlay {
     pub fn new(cli: &crate::cli::Cli) -> Overlay {
-        let _ = cli;
+        let focus_escape = cli
+            .focus_escape
+            .clone()
+            .unwrap_or_else(|| crate::ext::FOCUS_ESCAPE.to_string());
+        let prefs_path = prefs::path(cli);
+        let hud_strip = prefs::world_toml(cli)
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| prefs::hud_strip(&t))
+            .unwrap_or_default();
         Overlay {
+            phone: None,
+            demo: cli.demo,
+            phone_origin: "normal.world",
+            prefs: prefs::load(prefs_path.as_deref()),
+            prefs_path,
+            hud_strip,
+            hud_hidden: false,
+            los: None,
+            binds: crate::router::fallback_binds(cli.world_mod, &focus_escape),
+            world_mod: cli.world_mod.name(),
+            focus_escape,
+            palette_ask: None,
             fonts: None,
             cache: Cache::new(),
             hinting: None,
@@ -176,13 +238,160 @@ impl Overlay {
         self.extra_items = items;
     }
 
+    /// The phone's state while it is open (S21, for the hub's `hud_input`).
+    pub fn phone_state(&self) -> Option<PhoneState> {
+        self.phone.as_ref().map(|p| p.st.clone())
+    }
+
+    /// The bindings in effect (`Router::binds`, after every keymap
+    /// change): Ajuda lists them and the phone's printable keys resolve in
+    /// them. Until the hub hands them in, the S9 table.
+    pub fn set_help(&mut self, binds: Vec<Bind>) {
+        self.binds = binds;
+        self.dirty = true;
+    }
+
+    /// The theme the prefs ask for.
+    pub fn theme(&self) -> Theme {
+        self.prefs.theme()
+    }
+
+    /// Reduced motion for the overlay's own animations: the Ajustes
+    /// override, else the hub's.
+    fn reduced(&self, ctx: &Ctx) -> bool {
+        self.prefs.reduced_motion.unwrap_or(ctx.reduced_motion)
+    }
+
+    /// The strip's mode: Ajustes, else `[hud] strip`.
+    fn strip_mode(&self) -> Strip {
+        self.prefs.strip.unwrap_or(self.hud_strip)
+    }
+
+    /// Apply the phone's own acts (`phone.pref`) and pass the rest on.
+    fn local(&mut self, reqs: Vec<Req>, ctx: &Ctx) -> Vec<Req> {
+        let mut out = Vec::new();
+        for r in reqs {
+            match r {
+                Req::Command { name, args } if name == phone::ACT_PREF => self.pref(&args, ctx),
+                other => out.push(other),
+            }
+        }
+        out
+    }
+
+    /// A pref toggled in Ajustes: applied now, saved (never under `--demo`).
+    fn pref(&mut self, args: &BTreeMap<String, String>, ctx: &Ctx) {
+        let p = &mut self.prefs;
+        match args.get("key").map(String::as_str) {
+            Some("reduced_motion") => {
+                p.reduced_motion = Some(!p.reduced_motion.unwrap_or(ctx.reduced_motion));
+            }
+            Some("contrast") => p.high_contrast = !p.high_contrast,
+            Some("font_scale") => p.font_step(args.get("dir").map(String::as_str) != Some("down")),
+            Some("strip") => p.strip = Some(p.strip.unwrap_or(self.hud_strip).next()),
+            _ => return,
+        }
+        self.dirty = true;
+        if let Err(e) = prefs::save(self.prefs_path.as_deref(), &self.prefs) {
+            tracing::warn!("ui.toml: {e}");
+        }
+    }
+
+    /// A printable key while the phone is up: the search line or the
+    /// selected item's keys, else the phone's table (the live keymap).
+    fn phone_key(&mut self, ev: &KeyEv, ctx: &Ctx) -> Vec<Req> {
+        let text = ev
+            .utf8
+            .as_deref()
+            .filter(|_| !ev.mods.ctrl && !ev.mods.alt && !ev.mods.logo);
+        let Some(ph) = self.phone.as_mut() else {
+            return Vec::new();
+        };
+        if let Some(r) = ph.text(&ev.name, text) {
+            return self.local(r, ctx);
+        }
+        let cmd = self
+            .binds
+            .iter()
+            .find(|b| b.mode == "world.phone" && b.keys.iter().any(|k| k == &ev.name))
+            .map(|b| b.command.clone());
+        match cmd {
+            Some(c) => self.command(&c, &BTreeMap::new(), ctx).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Open the phone on `app` (home when `None`) over COMANDOS.
+    fn open_phone(&mut self, app: Option<String>, ctx: &Ctx) -> Vec<Req> {
+        let mode = ctx.world.mode();
+        if self.phone.is_none() {
+            self.phone_origin = names::mode_of(mode, self.submode());
+        }
+        self.map = None;
+        self.palette = None;
+        self.palette_ask = None;
+        let mut ph = Phone::new(None);
+        if let Some(a) = app {
+            let r = ph.open_app(&a);
+            if !r.is_empty() {
+                // an action app (the map): nothing to open
+                return r;
+            }
+        }
+        self.phone = Some(ph);
+        if mode.kind() == Some(Kind::Palette) {
+            Vec::new()
+        } else {
+            vec![Req::Action(Action::Palette)]
+        }
+    }
+
+    /// The phone's commands (S26 `world.phone_*`); `None` when closed.
+    fn phone_command(&mut self, name: &str, ctx: &Ctx) -> Option<Vec<Req>> {
+        let ph = self.phone.as_mut()?;
+        let r = match name {
+            "world.phone_left" => ph.nav(Dir::Left),
+            "world.phone_right" => ph.nav(Dir::Right),
+            "world.phone_up" => ph.nav(Dir::Up),
+            "world.phone_down" => ph.nav(Dir::Down),
+            "world.phone_open" => ph.enter(),
+            "world.phone_back" => ph.back(),
+            "world.phone_close" => ph.close(),
+            "world.phone_search" => ph.search(),
+            n => ph.app_n(n.strip_prefix("world.phone_app_")?.parse().ok()?),
+        };
+        Some(self.local(r, ctx))
+    }
+
+    /// The overlay's own apps' pages (Mapa, Ajustes, Ajuda).
+    fn own_page(&self, app: &str, ctx: &Ctx) -> Option<PhonePage> {
+        match app {
+            apps::MAPA => Some(apps::mapa()),
+            apps::AJUSTES => Some(apps::ajustes(
+                &self.prefs,
+                &apps::Facts {
+                    walk: ctx.world.walk_config(),
+                    world_mod: self.world_mod,
+                    focus_escape: &self.focus_escape,
+                    hub_reduced: ctx.reduced_motion,
+                    persisted: self.prefs_path.is_some(),
+                },
+            )),
+            apps::AJUDA => Some(apps::ajuda(&self.binds, self.phone_origin)),
+            _ => None,
+        }
+    }
+
     /// `Route::Text`: a key typed into the overlay (palette, line, SALTO,
-    /// the map).
+    /// the map, the phone).
     pub fn key(&mut self, ev: &KeyEv, ctx: &Ctx) -> Vec<Req> {
         if !ev.pressed {
             return Vec::new();
         }
         self.dirty = true;
+        if self.phone.is_some() && ctx.world.mode().kind() == Some(Kind::Palette) {
+            return self.phone_key(ev, ctx);
+        }
         if self.map.is_some() {
             return self.map_key(ev, ctx);
         }
@@ -212,8 +421,12 @@ impl Overlay {
         }
     }
 
-    /// `Some("map")` while the map is open.
+    /// `Some("phone")` while the phone is open, `Some("map")` while the map
+    /// is.
     pub fn submode(&self) -> Option<&'static str> {
+        if self.phone.is_some() {
+            return Some("phone");
+        }
         self.map.map(|_| "map")
     }
 
@@ -363,6 +576,18 @@ impl Overlay {
         out
     }
 
+    /// COMANDOS opens: the list, or straight on the asked command's prompt.
+    fn open_palette(&mut self) {
+        let items = self.items();
+        self.palette = Some(match self.palette_ask.take() {
+            Some((name, preset)) => {
+                let specs = self.arg_specs.get(&name).cloned().unwrap_or_default();
+                Palette::ask(items, &name, specs, preset)
+            }
+            None => Palette::new(items, ""),
+        });
+    }
+
     fn palette_run(&mut self) -> Vec<Req> {
         let Some(p) = self.palette.as_mut() else {
             return Vec::new();
@@ -404,7 +629,19 @@ impl Overlay {
         let view = View::of(ctx.world);
         let out = view.size;
         let now = ctx.now;
-        let reduced = ctx.reduced_motion;
+        let reduced = self.reduced(ctx);
+        let theme = self.theme();
+        let strip_mode = self.strip_mode();
+        // the phone's apps and page: the hub's gathering, else (no hub,
+        // unit tests) the overlay's own apps
+        let own = self.phone.as_ref().map(|ph| PhoneView {
+            state: ph.st.clone(),
+            apps: apps::apps(),
+            page: ph.st.app.as_deref().and_then(|a| self.own_page(a, ctx)),
+        });
+        if let Some(ph) = self.phone.as_mut() {
+            ph.view = hud.phone.clone().or(own);
+        }
         let walking = ctx.world.mode().walking();
         let carrying = walking && self.carrying(ctx);
         let vignette = if walking { self.vignette(ctx) } else { 0.0 };
@@ -444,6 +681,25 @@ impl Overlay {
                 f.put(RING_ID, &ring, Placer::At(t.rect.0, t.rect.1));
             }
             f.put(MAP_ID, &spec, Placer::Raw(0, 0));
+        }
+
+        // the phone (over COMANDOS, centred)
+        if let Some(ph) = self.phone.as_mut() {
+            let o = (out.x as i32, out.y as i32);
+            let node = phone::node(ph, &hud.status, o, &theme, f.fonts);
+            let spec = Spec::Ui {
+                node,
+                w: o.0,
+                h: o.1,
+                theme: theme.clone(),
+            };
+            let size = f.size(&spec);
+            f.put_over(
+                PHONE_ID,
+                &spec,
+                Placer::At((o.0 - size.0) / 2, (o.1 - size.1) / 2),
+                true,
+            );
         }
 
         // COMANDOS
@@ -606,10 +862,13 @@ impl Overlay {
         // toasts, bottom-left, the newest at the bottom
         // (above the dialogue box while one is open)
         let mut y = dialog_top.map_or(out.y as i32 - 16, |t| t - 8);
+        let cell = f.fonts.face(theme.px(draw::PX_UI)).cw as i32;
         for (i, t) in self.toasts.iter().enumerate().rev() {
-            let spec = Spec::Toast {
-                text: t.text.clone(),
-                error: t.kind == ToastKind::Error,
+            let spec = Spec::Ui {
+                node: look::toast(&t.text, t.kind, &theme, cell),
+                w: look::TOAST_MAX_W,
+                h: out.y as i32,
+                theme: theme.clone(),
             };
             let size = f.size(&spec);
             y -= size.1;
@@ -621,33 +880,72 @@ impl Overlay {
             y -= 8;
         }
 
-        // HUD: the mode label (not in FOCO, not over the map), the badges
+        // HUD: the mode label (not in FOCO, not over the map), the badges,
+        // the status strip at the right; `world.hud` hides all three
+        let ui = |node: Node, w: i32, h: i32| Spec::Ui {
+            node,
+            w,
+            h,
+            theme: theme.clone(),
+        };
+        let (ow, oh) = (out.x as i32, out.y as i32);
         let mut x = LABEL_POS.0;
-        if f.focus.is_none() && self.map.is_none() {
-            let spec = Spec::Label {
-                text: hud.mode_label.to_string(),
+        if !self.hud_hidden && f.focus.is_none() && self.map.is_none() {
+            let label = if self.phone.is_some() {
+                "TELEFONE"
+            } else {
+                hud.mode_label
             };
+            let spec = ui(look::label(label, &theme), ow, oh);
             let r = f.put(LABEL_ID, &spec, Placer::Raw(LABEL_POS.0, LABEL_POS.1));
             x += r.2 + 8;
-            stats.label = Some(hud.mode_label);
+            stats.label = Some(label);
         }
-        for (i, b) in hud.badges.iter().enumerate() {
-            let (text, bg, fg) = hud::chip(b);
-            let spec = Spec::Chip { text, bg, fg };
-            let w = f.size(&spec).0;
-            let r = f.put(CHIP_ID + i as u64, &spec, Placer::Raw(x, LABEL_POS.1 + 2));
-            if r.2 > 0 {
-                stats.badges += 1;
+        if !self.hud_hidden {
+            for (i, b) in hud.badges.iter().enumerate() {
+                let spec = ui(look::chip(b, &theme), ow, oh);
+                let (w, h) = f.size(&spec);
+                let lh = f.size(&ui(look::label("A", &theme), ow, oh)).1;
+                let y = LABEL_POS.1 + (lh - h) / 2;
+                let r = f.put(CHIP_ID + i as u64, &spec, Placer::Raw(x, y));
+                if r.2 > 0 {
+                    stats.badges += 1;
+                }
+                x += w + 6;
             }
-            x += w + 6;
+        }
+        if !self.hud_hidden
+            && self.map.is_none()
+            && self.phone.is_none()
+            && let Some(node) = look::strip(&hud.status, strip_mode, &theme)
+        {
+            let spec = ui(node, ow, oh);
+            let (w, _) = f.size(&spec);
+            let r = f.put(
+                STRIP_ID,
+                &spec,
+                Placer::Raw(ow - STRIP_MARGIN - w, STRIP_MARGIN),
+            );
+            stats.strip = r.2 > 0;
         }
 
-        // name tags (not in FOCO, not over the map): 80 ms in, 120 ms out
-        // once they leave their reading radius (addendum §3.1)
+        // name tags (not in FOCO, not over the map, not behind a wall): 80
+        // ms in, 120 ms out once they leave their reading radius (addendum
+        // §3.1); placed so none covers another, the nearest keeps its spot
         if f.focus.is_none() && self.map.is_none() {
-            let vis = project::visible_tags(&view, &hud.tags);
+            let mut vis = project::visible_tags(&view, &hud.tags);
+            let before = vis.len();
+            let forced = self.los;
+            vis.retain(|(i, _, _)| {
+                let t = &hud.tags[*i];
+                forced
+                    .unwrap_or_else(|| ctx.world.line_of_sight(view.cam, t.pos, ctx.visible_rooms))
+            });
+            stats.tags_hidden = before - vis.len();
             stats.tags = vis.len();
-            let shown = self.fades.update(
+            let dist: BTreeMap<u64, f32> =
+                vis.iter().map(|(i, _, d)| (hud.tags[*i].id, *d)).collect();
+            let mut shown = self.fades.update(
                 now,
                 reduced,
                 vis.iter().map(|(i, q, _)| {
@@ -655,18 +953,25 @@ impl Overlay {
                     (t.id, t.text.clone(), t.rgb, *q)
                 }),
             );
+            // nearest first (fading-out ones last)
+            let d = |id: u64| dist.get(&id).copied().unwrap_or(f32::MAX);
+            shown.sort_by(|a, b| d(a.id).total_cmp(&d(b.id)).then(a.id.cmp(&b.id)));
+            let mut specs = Vec::new();
             for s in shown {
-                let tag = Spec::Tag {
-                    text: s.text,
-                    rgb: s.rgb,
-                };
+                let metres = dist.get(&s.id).copied().unwrap_or(10.0);
+                let sel = SELECTED_TAGS.contains(&s.id);
+                let tag = ui(look::tag(&s.text, s.rgb, metres, sel, &theme), ow, oh);
                 let size = f.size(&tag);
-                let spec = draw::faded(tag, s.level);
-                let at = (
-                    s.at.x.round() as i32 - size.0 / 2,
-                    s.at.y.round() as i32 - size.1 - 6,
-                );
-                f.put(TAG_ID + (s.id & 0xf_ffff), &spec, Placer::At(at.0, at.1));
+                // the box sits above its anchor: centre it there
+                let anchor = Vec2::new(s.at.x, s.at.y - 6.0 - size.1 as f32 / 2.0);
+                specs.push((s.id, anchor, size, draw::faded(tag, s.level)));
+            }
+            let items: Vec<(u64, Vec2, (i32, i32))> =
+                specs.iter().map(|t| (t.0, t.1, t.2)).collect();
+            let placed = project::place_labels(&items, out);
+            for ((id, _, _, spec), (_, at)) in specs.iter().zip(placed) {
+                let r = f.put(TAG_ID + (id & 0xf_ffff), spec, Placer::Raw(at.0, at.1));
+                stats.tag_rects.push(r);
             }
         } else {
             // they fade in again afterwards
@@ -740,10 +1045,23 @@ impl Frame<'_> {
     /// Add `spec` as element `id`; returns its rect (w, h 0 when it would
     /// cover the FOCO window and was left out).
     fn put(&mut self, id: u64, spec: &Spec, at: Placer) -> (i32, i32, i32, i32) {
+        self.put_over(id, spec, at, false)
+    }
+
+    /// [`Frame::put`]; `over_focus`: drawn even over the FOCO window (the
+    /// phone, which the user opened over it on purpose).
+    fn put_over(
+        &mut self,
+        id: u64,
+        spec: &Spec,
+        at: Placer,
+        over_focus: bool,
+    ) -> (i32, i32, i32, i32) {
         let g = self.cache.get(spec, self.s, self.fonts);
         let size = g.size;
         let pos = at.place(size, self.out);
         if let Some(r) = self.focus
+            && !over_focus
             && intersects(r, (pos.0, pos.1, size.0, size.1))
         {
             return (pos.0, pos.1, 0, 0);
@@ -833,11 +1151,16 @@ impl Plugin for Overlay {
     fn tick(&mut self, ctx: &Ctx) -> Vec<Req> {
         let now = ctx.now;
         let n = self.toasts.len();
-        self.toasts.retain(|t| !t.gone(now, ctx.reduced_motion));
+        let reduced = self.reduced(ctx);
+        self.toasts.retain(|t| !t.gone(now, reduced));
         if self.toasts.len() != n {
             self.dirty = true;
         }
         let mode = ctx.world.mode();
+        if self.phone.is_some() && mode.kind() != Some(Kind::Palette) {
+            self.phone = None;
+            self.dirty = true;
+        }
         self.sync_line(matches!(mode.kind(), Some(Kind::Talk { line: true, .. })));
         let plain_nav = mode.overlay.is_none() && mode.base == Base::Nav;
         if self.map.is_some() && !plain_nav {
@@ -863,7 +1186,7 @@ impl Plugin for Overlay {
 
     fn wishes(&self, ctx: &Ctx) -> Vec<Wish> {
         let now = ctx.now;
-        let reduced = ctx.reduced_motion;
+        let reduced = self.reduced(ctx);
         let mut w = Vec::new();
         if self.dirty {
             w.push(Wish::compose(Want::Once));
@@ -900,16 +1223,58 @@ impl Plugin for Overlay {
         Overlay::submode(self)
     }
 
+    fn phone_apps(&self, ctx: &Ctx) -> Vec<PhoneApp> {
+        let _ = ctx;
+        apps::apps()
+    }
+
+    fn phone_page(&self, app: &str, st: &PhoneState, ctx: &Ctx) -> Option<PhonePage> {
+        let _ = st;
+        self.own_page(app, ctx)
+    }
+
     fn command(
         &mut self,
         name: &str,
         args: &BTreeMap<String, String>,
         ctx: &Ctx,
     ) -> Option<Vec<Req>> {
-        let _ = args;
         self.dirty = true;
         let act = |a: Action| Some(vec![Req::Action(a)]);
+        if name.starts_with("world.phone_")
+            && let Some(r) = self.phone_command(name, ctx)
+        {
+            return Some(r);
+        }
         match name {
+            // the phone (S21): open, or close when open (`world+n` again)
+            "world.phone" if self.phone.is_some() && args.get("app").is_none() => {
+                Some(vec![Req::Action(Action::Back)])
+            }
+            "world.phone" => Some(self.open_phone(args.get("app").cloned(), ctx)),
+            "world.help" => Some(self.open_phone(Some(apps::AJUDA.into()), ctx)),
+            "world.hud" => {
+                self.hud_hidden = !self.hud_hidden;
+                Some(Vec::new())
+            }
+            n if n == phone::ACT_PREF => {
+                self.pref(args, ctx);
+                Some(Vec::new())
+            }
+            // the palette already on a command's first argument prompt
+            // (W5's session keys); the other args ride along
+            "world.palette_run" if args.contains_key("name") => {
+                let mut rest = args.clone();
+                let target = rest.remove("name").unwrap_or_default();
+                self.phone = None;
+                self.palette_ask = Some((target, rest));
+                if ctx.world.mode().kind() == Some(Kind::Palette) {
+                    self.open_palette();
+                    Some(Vec::new())
+                } else {
+                    act(Action::Palette)
+                }
+            }
             "world.hint" => act(Action::Hint { focus: false }),
             "world.hint_focus" => act(Action::Hint { focus: true }),
             "world.palette" => {
@@ -987,13 +1352,23 @@ impl Plugin for Overlay {
                 });
             }
             Effect::HideHints => self.hinting = None,
+            // the phone rides COMANDOS: no list while it is up
+            Effect::OpenPalette if self.phone.is_some() => {}
             Effect::OpenPalette => {
-                let items = self.items();
-                self.palette = Some(Palette::new(items, ""));
+                self.open_palette();
+                // an asked command with nothing left to ask runs now
+                if matches!(
+                    self.palette.as_ref().map(|p| p.step()),
+                    Some(Step::Run { .. })
+                ) {
+                    return self.palette_run();
+                }
             }
             Effect::ClosePalette => {
                 self.palette = None;
                 self.apps_only = false;
+                self.phone = None;
+                self.palette_ask = None;
             }
             _ => {}
         }
@@ -1002,6 +1377,38 @@ impl Plugin for Overlay {
 
     fn inject(&mut self, json: &Value, ctx: &Ctx) -> Vec<Req> {
         self.dirty = true;
+        let mut out = Vec::new();
+        if let Some(p) = json.get("prefs") {
+            // runtime only (shots): never saved
+            self.prefs.apply_json(p);
+        }
+        if let Some(v) = json.get("los") {
+            self.los = v.as_bool();
+        }
+        if let Some(v) = json.get("hud_hidden") {
+            self.hud_hidden = v.as_bool().unwrap_or(false);
+        }
+        if let Some(p) = json.get("phone") {
+            if p.is_null() {
+                if self.phone.is_some() {
+                    out.push(Req::Action(Action::Back));
+                }
+            } else {
+                let app = p.get("app").and_then(Value::as_str).map(String::from);
+                out.extend(self.open_phone(app, ctx));
+                if let (Some(ph), Some(sub)) =
+                    (self.phone.as_mut(), p.get("sub").and_then(Value::as_str))
+                {
+                    ph.st.sub = Some(sub.to_string());
+                }
+            }
+        }
+        if let Some(pg) = json.get("phone_page") {
+            let page = inject::phone_page(pg);
+            if let Some(ph) = self.phone.as_mut() {
+                ph.forced = page;
+            }
+        }
         if let Some(d) = json.get("dialog") {
             self.injected_dialog = inject::dialog(d);
         }
@@ -1023,7 +1430,7 @@ impl Plugin for Overlay {
         if let Some(v) = json.get("vignette") {
             self.forced.vignette = v.as_f64().map(|a| a as f32);
         }
-        Vec::new()
+        out
     }
 
     fn dump(&self) -> Value {
@@ -1083,6 +1490,19 @@ impl Plugin for Overlay {
             "hints": hints,
             "palette": palette,
             "map": self.map.map(|m| serde_json::json!({"floor": m.floor, "sel": m.sel, "shelves": self.stats.shelves})),
+            "submode": self.submode(),
+            // S21: the phone's truth (`dump().mode` says COMANDOS)
+            "phone": self.phone.as_ref().map(|p| p.dump(self.demo)),
+            "strip": self.stats.strip,
+            "hud_hidden": self.hud_hidden,
+            "prefs": {
+                "contrast": if self.prefs.high_contrast { "high" } else { "normal" },
+                "font_scale_pct": self.prefs.font_scale_pct,
+                "strip": self.strip_mode().as_str(),
+                "reduced_motion": self.prefs.reduced_motion,
+                "saved": self.prefs_path.is_some(),
+            },
+            "tags_dropped_los": self.stats.tags_hidden,
         })
     }
 }

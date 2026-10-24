@@ -28,7 +28,10 @@ pub mod feel;
 pub mod inbox;
 pub mod monitor;
 pub mod office;
+pub mod phone;
 pub mod screens;
+pub mod session;
+pub mod status;
 pub mod talk;
 pub mod walk;
 
@@ -55,6 +58,10 @@ pub const AMBIENT_HZ: f32 = 15.0;
 pub const ANIMATE_M: f32 = 12.0;
 /// Name badges are hidden beyond this distance.
 pub const BADGE_M: f32 = 7.0;
+/// A name tag floats this far above the cat's head joint (S24).
+pub const HEAD_TAG_M: f32 = 0.22;
+/// The `!` / `zZ` mark floats this far above the name tag.
+pub const MARK_UP_M: f32 = 0.12;
 /// The command names of keys bound to Lua functions (S19).
 pub const LUA_KEY: &str = "lua.key:";
 /// The receptionist's coat seed.
@@ -104,6 +111,17 @@ pub struct Cats {
     pub feel: feel::Feel,
     /// the library room (its desk 0 is the librarian's), as of the last tick
     library: Option<RoomId>,
+    /// the receptionist's tour: the balloon shown (S24)
+    pub tour: Option<u8>,
+    /// today's cost and the usage of the last snapshot (the strip's)
+    ledger: status::Ledger,
+    /// the fixture's keymap (the core's session rows) is still to be sent
+    fixture_keys: bool,
+    /// the cat last handed to the palette for a missing argument (and when)
+    handoff: Option<(CatId, Time)>,
+    /// the phone's sub-page cat, as last drawn (and when): set from the
+    /// `&self` page hook, so a `Cell`
+    phone_cat: std::cell::Cell<Option<(CatId, Time)>>,
 }
 
 impl Cats {
@@ -135,10 +153,16 @@ impl Cats {
             next_tag: 1,
             feel: feel::Feel::default(),
             library: None,
+            tour: None,
+            ledger: status::Ledger::default(),
+            fixture_keys: false,
+            handoff: None,
+            phone_cat: std::cell::Cell::new(None),
         };
         if c.source == Source::Fixture {
             c.walks.offset_ms = fixture_epoch_ms();
             if cli.demo {
+                c.fixture_keys = true;
                 c.load_fixture(demo::Fixture::Demo, 0.0);
                 // the demo starts with everyone at their desks
                 let now = c.clock_ms(0.0);
@@ -181,6 +205,7 @@ impl Cats {
         now: Time,
     ) -> office::Change {
         let change = self.office.apply(snap, rows, now);
+        self.ledger = status::Ledger::of(snap);
         if change.layout || !change.added.is_empty() || !change.removed.is_empty() {
             self.sync = Some(self.office.contexts());
         }
@@ -250,6 +275,20 @@ impl Cats {
                     args: BTreeMap::new(),
                 });
             }
+            Call::RunWith {
+                name,
+                session,
+                args,
+            } => {
+                let tag = self.next_tag;
+                self.next_tag += 1;
+                let _ = link.tx.send(ToCore::Run {
+                    tag,
+                    name,
+                    session,
+                    args,
+                });
+            }
             Call::Confirm { token, yes } => {
                 let tag = self.next_tag;
                 self.next_tag += 1;
@@ -284,6 +323,11 @@ impl Cats {
                 json!({"call": "reply", "session": session, "reply": text})
             }
             Call::Run { name, session } => json!({"call": "run", "name": name, "session": session}),
+            Call::RunWith {
+                name,
+                session,
+                args,
+            } => json!({"call": "run", "name": name, "session": session, "args": args}),
             Call::Confirm { token, yes } => json!({"call": "confirm", "token": token, "yes": yes}),
         };
         self.record(v);
@@ -407,6 +451,18 @@ impl Cats {
 
     fn still(&self, ctx: &Ctx) -> bool {
         self.reduced_motion || ctx.reduced_motion || ctx.world.frozen
+    }
+
+    /// A seated cat's name tag: `HEAD_TAG_M` above the head joint of its
+    /// pose at rest (the ambient motion does not move the tag), under the
+    /// monitor's bottom edge instead of over its screen (S24).
+    fn seated_tag_at(&self, cat: CatId, seat: &nkw_core::Pose) -> Vec3 {
+        let (_, pose, _, _, _) = self.look(cat);
+        let j = body::joints(&catpose::pose_params(pose));
+        nkw_gl::rig::cat_frames(&j, seat_root(seat))
+            .head
+            .transform_point3(Vec3::ZERO)
+            + Vec3::Y * HEAD_TAG_M
     }
 
     /// The joints of a cat at `now`.
@@ -1023,6 +1079,9 @@ impl Plugin for Cats {
             .map(Req::SyncContexts)
             .into_iter()
             .collect();
+        if std::mem::take(&mut self.fixture_keys) {
+            reqs.push(Req::Keymap(demo::keymap()));
+        }
         reqs.extend(self.talk_tick(ctx));
         reqs.extend(self.feel_tick(ctx));
         let now_ms = self.clock_ms(ctx.now);
@@ -1143,6 +1202,9 @@ impl Plugin for Cats {
         if name.starts_with(LUA_KEY) {
             return Some(self.lua_key(name, ctx));
         }
+        if let Some(r) = self.session_command(name, args, ctx) {
+            return Some(r);
+        }
         self.talk_command(name, args, ctx)
     }
 
@@ -1165,7 +1227,7 @@ impl Plugin for Cats {
     fn tags(&self, ctx: &Ctx) -> Vec<Tag> {
         let mut tags = Vec::new();
         for (_, _, cat, seat) in self.seated(ctx) {
-            let over = seat.pos + Vec3::Y * 0.95;
+            let over = self.seated_tag_at(cat, &seat);
             let Some(v) = self.office.get(cat) else {
                 if cat == RECEPTIONIST && self.walks.confirm.is_some() {
                     tags.push(question_tag(over));
@@ -1196,7 +1258,7 @@ impl Plugin for Cats {
             if let Some(m) = mark {
                 tags.push(Tag {
                     id: tag_id(cat, 1),
-                    pos: over + Vec3::Y * 0.12,
+                    pos: over + Vec3::Y * MARK_UP_M,
                     text: m.into(),
                     rgb: v.ctx_rgb,
                     max_m: BADGE_M,
@@ -1214,8 +1276,7 @@ impl Plugin for Cats {
             }
         }
         for x in self.walks.walks.iter().filter(|x| !x.home) {
-            let (p, _, _) = x.at3(ctx.now);
-            let over = p + Vec3::Y * 0.95;
+            let over = walker_tag_at(x, ctx.now);
             let label = match self.office.get(x.cat) {
                 Some(v) => v.label().to_string(),
                 None if x.postman => "carteiro".into(),
@@ -1229,10 +1290,40 @@ impl Plugin for Cats {
                 max_m: BADGE_M,
             });
             if x.cat == RECEPTIONIST {
-                tags.push(question_tag(over + Vec3::Y * 0.12));
+                tags.push(question_tag(over + Vec3::Y * MARK_UP_M));
             }
         }
         tags
+    }
+
+    fn phone_apps(&self, ctx: &Ctx) -> Vec<crate::ui::phone::PhoneApp> {
+        let _ = ctx;
+        phone::apps(&self.office, self.walks.counts().0)
+    }
+
+    fn phone_page(
+        &self,
+        app: &str,
+        st: &crate::ui::phone::PhoneState,
+        ctx: &Ctx,
+    ) -> Option<crate::ui::phone::PhonePage> {
+        let (page, cat) = phone::page(app, st, &self.office, &self.walks)?;
+        // the sub-page's cat: an argument-less session command that comes
+        // back from COMANDOS lands on it (`session::target_cat`)
+        if let Some(c) = cat {
+            self.phone_cat.set(Some((c, ctx.now)));
+        }
+        Some(page)
+    }
+
+    fn palette_items(&self, ctx: &Ctx) -> Vec<crate::ext::PaletteItem> {
+        let _ = ctx;
+        session::palette_items()
+    }
+
+    fn status(&self, ctx: &Ctx) -> crate::ext::Status {
+        let _ = ctx;
+        status::status_of(&self.office, self.walks.counts().0, &self.ledger)
     }
 
     fn badges(&self, ctx: &Ctx) -> Vec<Badge> {
@@ -1340,6 +1431,16 @@ impl Plugin for Cats {
                 None => tracing::warn!("inject cats: no seated cat {}", cat.0),
             }
         }
+        if let Some(b) = json.get("keymap") {
+            // a core's `/v1/keymap` (tests: other rows than the fixture's)
+            match serde_json::from_value::<Vec<nk_client::Binding>>(b.clone()) {
+                Ok(b) => reqs.push(Req::Keymap(b)),
+                Err(e) => tracing::warn!("inject cats: keymap: {e}"),
+            }
+        }
+        if json.get("tour").and_then(Value::as_bool) == Some(true) {
+            reqs.extend(self.start_tour(ctx));
+        }
         if let Some(name) = json.get("cmd").and_then(Value::as_str) {
             let args = json
                 .get("args")
@@ -1405,6 +1506,7 @@ impl Plugin for Cats {
             "monitors": self.mons.values().filter(|m| m.tex.is_some() || m.raster.is_some()).count(),
             "feel": self.feel.dump(self.now),
             "librarian": self.library.map(|_| LIBRARIAN.0),
+            "tour": self.tour,
             "walkers": self.walks.walks.iter().map(|x| {
                 let (p, yaw, moving) = x.at3(self.now);
                 json!({"cat": x.cat.0, "key": x.key, "pos": [p.x, p.y, p.z], "yaw": yaw,
@@ -1423,6 +1525,19 @@ impl Plugin for Cats {
         }
         self.link = None;
     }
+}
+
+/// A walker's name tag: above its head joint (on four legs or sitting
+/// before you), in the gait's neutral stance so the tag does not bob.
+fn walker_tag_at(x: &walk::Walk, now: Time) -> Vec3 {
+    let (p, yaw, moving) = x.at3(now);
+    let j = body::joints(&catpose::SIT);
+    let root = body::root(p, yaw);
+    let head = match moving {
+        true => nkw_gl::rig::cat_walking_frames(&j, &nkw_gl::rig::Gait::NEUTRAL, root).head,
+        false => nkw_gl::rig::cat_frames(&j, root).head,
+    };
+    head.transform_point3(Vec3::ZERO) + Vec3::Y * HEAD_TAG_M
 }
 
 fn question_tag(pos: Vec3) -> Tag {
@@ -1608,6 +1723,87 @@ pub(crate) mod tests {
         let texts: Vec<_> = tags.iter().map(|t| t.text.as_str()).collect();
         assert_eq!(texts, ["alpha", "zZ", "bravo", "demo"]);
         assert!(tags.iter().all(|t| t.max_m == BADGE_M));
+    }
+
+    #[test]
+    fn name_tags_sit_above_the_head_below_the_monitor() {
+        let (w, cats) = fixture_world();
+        let acme = room(&w, "acme");
+        let tags = with_ctx(&w, &[acme], 0.0, |ctx| cats.tags(ctx));
+        for (desk, label) in [(0, "acme"), (1, "api-gateway")] {
+            let seat = w.cat_seat(acme, desk).unwrap();
+            let cat = w.rooms.iter().find(|r| r.id == acme).unwrap().desks[desk]
+                .cat
+                .unwrap();
+            let (_, pose, _, _, _) = cats.look(cat);
+            let j = body::joints(&catpose::pose_params(pose));
+            let head = nkw_gl::rig::cat_frames(&j, seat_root(&seat))
+                .head
+                .transform_point3(Vec3::ZERO);
+            let tag = tags.iter().find(|t| t.text == label).unwrap();
+            assert!(
+                tag.pos.distance(head + Vec3::Y * HEAD_TAG_M) < 0.02,
+                "{label}: {} vs head {head}",
+                tag.pos
+            );
+            // seen from the desk's station, the tag is under the monitor's
+            // bottom edge (the cat sits nearer than its screen)
+            let (place, logical) = w.monitor_place(acme, desk).unwrap();
+            let bottom = place.center - Vec3::Y * (logical.y * nkw_core::onetoone::M_PER_PX / 2.0);
+            let cam = nkw_gl::draw::Camera {
+                pose: w.desk_pose(acme, desk).unwrap(),
+                fov_y: crate::world::FOV_Y,
+                near: 0.05,
+                far: 60.0,
+                aspect: 16.0 / 9.0,
+            };
+            let ndc_y = |p: Vec3| {
+                let c = cam.proj() * cam.view() * p.extend(1.0);
+                c.y / c.w
+            };
+            assert!(
+                ndc_y(tag.pos) < ndc_y(bottom),
+                "{label}: {} under {}",
+                ndc_y(tag.pos),
+                ndc_y(bottom)
+            );
+        }
+        // the mark rides 0.12 m above the name
+        let name = tags.iter().find(|t| t.text == "api-gateway").unwrap();
+        let mark = tags.iter().find(|t| t.text == "!").unwrap();
+        assert!((mark.pos - name.pos - Vec3::Y * MARK_UP_M).length() < 1e-4);
+    }
+
+    #[test]
+    fn a_walkers_tag_rides_its_head() {
+        let (mut w, mut cats) = fixture_world();
+        cats.load_fixture(demo::Fixture::Busy, 0.0);
+        let ctxs = cats.take_sync().unwrap();
+        w.sync_contexts(&ctxs, 0.0);
+        let rooms = w.visible_rooms(&[]);
+        // let them get up and start walking
+        for i in 0..40 {
+            let now = i as f64 * 0.25;
+            with_ctx(&w, &rooms, now, |ctx| cats.tick(ctx));
+        }
+        let now = 10.0;
+        let x = cats.walks.walks.iter().find(|x| !x.home).expect("a walker");
+        let (p, yaw, moving) = x.at3(now);
+        let j = body::joints(&catpose::SIT);
+        let root = body::root(p, yaw);
+        let head = match moving {
+            true => nkw_gl::rig::cat_walking_frames(&j, &nkw_gl::rig::Gait::NEUTRAL, root).head,
+            false => nkw_gl::rig::cat_frames(&j, root).head,
+        }
+        .transform_point3(Vec3::ZERO);
+        let id = tag_id(x.cat, 3);
+        let tags = with_ctx(&w, &rooms, now, |ctx| cats.tags(ctx));
+        let t = tags.iter().find(|t| t.id == id).unwrap();
+        assert!(
+            t.pos.distance(head + Vec3::Y * HEAD_TAG_M) < 0.02,
+            "{} vs {head}",
+            t.pos
+        );
     }
 
     #[test]

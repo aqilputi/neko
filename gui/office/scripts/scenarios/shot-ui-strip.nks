@@ -1,0 +1,19 @@
+# The status strip (W2, S21) in NAV at acme: `always` shows every field the plugins know
+# (fixture: 14:05, 3 waiting, $ 12,34, battery 42 %, 3 bars). The badges stay under the label.
+key J
+wait 500
+inject objects {"status": {"clock": [14, 5], "battery": [42, false], "net": [true, 3], "playing": true}}
+inject cats {"fixture":"busy"}
+inject overlay {"prefs": {"strip": "always"}}
+wait 600
+expect json /ext/overlay/strip true
+shot ${OUT}/shot-ui-strip.png
+inject overlay {"prefs": {"strip": "auto"}}
+wait 300
+shot ${OUT}/shot-ui-strip-auto.png
+key z
+wait 300
+expect json /ext/overlay/hud_hidden true
+expect json /ext/overlay/strip false
+dump ${OUT}/dump-ui-strip.json
+quit

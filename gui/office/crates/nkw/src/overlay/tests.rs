@@ -34,6 +34,8 @@ fn hud(w: &World) -> HudInput {
         tags: Vec::new(),
         pickables: Vec::new(),
         aimed: false,
+        status: crate::ext::Status::default(),
+        phone: None,
     }
 }
 
@@ -88,7 +90,8 @@ fn hud_element_count_by_state() {
     let els = with(&w, 0.0, |c| o.elements(c, &h));
     assert_eq!(ids(&els), [LABEL_ID]);
     assert_eq!(els[0].pos, LABEL_POS);
-    h.badges = vec![Badge::Inbox(3), Badge::BatteryLow(12)];
+    // a wide second chip (wider than the label it moves into in FOCO)
+    h.badges = vec![Badge::Inbox(3), Badge::Updates(12)];
     let els = with(&w, 0.0, |c| o.elements(c, &h));
     assert_eq!(ids(&els), [LABEL_ID, CHIP_ID, CHIP_ID + 1]);
     assert!(els[1].pos.0 > els[0].pos.0, "chips right of the label");
@@ -848,3 +851,5 @@ fn tags_fade_in_and_out_on_at_wishes() {
     assert!(el(&els, TAG_ID + 7).is_none());
     assert!(with(&w, 2.12, |c| o.wishes(c)).is_empty());
 }
+
+mod w2;

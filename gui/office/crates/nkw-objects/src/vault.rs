@@ -258,120 +258,10 @@ impl Vault {
     }
 }
 
-/// What goes in the vault, on normalised paths relative to a library
-/// root. The defaults can only grow.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Policy {
-    pub roots: Vec<String>,
-    pub globs: Vec<String>,
-}
-
-impl Policy {
-    pub fn default_policy() -> Policy {
-        Policy {
-            roots: [
-                ".ssh",
-                ".gnupg",
-                ".password-store",
-                ".local/share/keyrings",
-                ".config/gcloud",
-                ".aws",
-                ".kube",
-                ".docker/config.json",
-            ]
-            .map(String::from)
-            .to_vec(),
-            globs: ["**/.env", "**/.env.*", "**/*.pem", "**/id_*"]
-                .map(String::from)
-                .to_vec(),
-        }
-    }
-
-    /// Adds `extra`'s roots and globs; never removes anything.
-    pub fn grow(&mut self, extra: &Policy) {
-        for r in &extra.roots {
-            let r = normalize(r).join("/");
-            if !r.is_empty() && !self.roots.contains(&r) {
-                self.roots.push(r);
-            }
-        }
-        for g in &extra.globs {
-            if !g.is_empty() && !self.globs.contains(g) {
-                self.globs.push(g.clone());
-            }
-        }
-    }
-
-    /// Whether `rel` (or any directory above it) is a vault path.
-    pub fn is_vault(&self, rel: &str) -> bool {
-        let segs = normalize(rel);
-        let roots: Vec<Vec<&str>> = self.roots.iter().map(|r| normalize(r)).collect();
-        let globs: Vec<Vec<&str>> = self
-            .globs
-            .iter()
-            .map(|g| g.split('/').filter(|s| !s.is_empty()).collect())
-            .collect();
-        (1..=segs.len()).any(|n| {
-            let prefix = &segs[..n];
-            roots
-                .iter()
-                .any(|r| !r.is_empty() && r.as_slice() == prefix)
-                || globs.iter().any(|g| glob_match(g, prefix))
-        })
-    }
-}
-
-/// Splits a relative path into segments, resolving `.` and `..` (never
-/// above the root) and ignoring leading or doubled slashes.
-fn normalize(rel: &str) -> Vec<&str> {
-    let mut out: Vec<&str> = Vec::new();
-    for s in rel.split('/') {
-        match s {
-            "" | "." => {}
-            ".." => {
-                out.pop();
-            }
-            s => out.push(s),
-        }
-    }
-    out
-}
-
-/// `**` matches any number of segments; `*` within a segment any run of
-/// characters.
-fn glob_match(pat: &[&str], path: &[&str]) -> bool {
-    match pat.split_first() {
-        None => path.is_empty(),
-        Some((&"**", rest)) => (0..=path.len()).any(|k| glob_match(rest, &path[k..])),
-        Some((p, rest)) => match path.split_first() {
-            Some((s, prest)) => seg_match(p.as_bytes(), s.as_bytes()) && glob_match(rest, prest),
-            None => false,
-        },
-    }
-}
-
-fn seg_match(p: &[u8], s: &[u8]) -> bool {
-    match p.split_first() {
-        None => s.is_empty(),
-        Some((b'*', rest)) => (0..=s.len()).any(|k| seg_match(rest, &s[k..])),
-        Some((c, rest)) => s.first() == Some(c) && seg_match(rest, &s[1..]),
-    }
-}
-
-/// A library entry: name and metadata only. There is, by construction, no
-/// field for content.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Entry {
-    pub rel: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub mtime: i64,
-}
-
-/// Shelf and vault: disjoint, and together every entry.
-pub fn partition<'a>(p: &Policy, entries: &'a [Entry]) -> (Vec<&'a Entry>, Vec<&'a Entry>) {
-    entries.iter().partition(|e| !p.is_vault(&e.rel))
-}
+/// What goes in the vault, and the library entry it partitions: one
+/// definition, in `nkw_core::library` (wave 4 moved the duplicate there).
+/// `Policy::{default_policy, grow, is_vault}` come with the type.
+pub use nkw_core::library::{Entry, Policy, partition};
 
 #[cfg(test)]
 mod tests {
@@ -580,131 +470,22 @@ mod tests {
     }
 
     #[test]
-    fn policy_default_roots_and_globs() {
-        let pol = Policy::default_policy();
-        for rel in [
-            ".ssh",
-            ".ssh/id_ed25519",
-            ".gnupg/x",
-            ".password-store/acme/site.gpg",
-            ".local/share/keyrings/login.keyring",
-            ".config/gcloud/credentials.db",
-            ".aws/credentials",
-            ".kube/config",
-            ".docker/config.json",
-            ".env",
-            "a/b/.env.local",
-            "demo/.env",
-            "cert.pem",
-            "proj/tls/server.pem",
-            "backup/id_rsa",
-            "backup/id_rsa.pub",
-            "a/../.ssh/known_hosts",
-            "./.ssh",
-            "/.aws//config",
-        ] {
-            assert!(pol.is_vault(rel), "{rel} is vault");
-        }
-        for rel in [
-            "",
-            "src/main.rs",
-            ".sshx",
-            "notes/.ssh-tips.md",
-            ".docker/daemon.json",
-            "env",
-            ".envrc",
-            "pem.txt",
-            "my_id_card.png",
-            ".config/acme",
-            ".ssh/../notes.txt",
-            "../.bashrc",
-        ] {
-            assert!(!pol.is_vault(rel), "{rel} is shelf");
-        }
-    }
-
-    #[test]
-    fn grow_only_adds() {
-        let mut pol = Policy::default_policy();
-        let before = pol.clone();
-        pol.grow(&Policy {
-            roots: vec![],
-            globs: vec![],
-        });
-        assert_eq!(pol, before);
-        pol.grow(&Policy {
-            roots: vec![
-                ".config/acme-secrets".into(),
-                ".ssh".into(),
-                "./x/../.vault/".into(),
-            ],
-            globs: vec!["**/*.key".into(), "**/.env".into()],
-        });
-        for r in &before.roots {
-            assert!(pol.roots.contains(r));
-        }
-        for g in &before.globs {
-            assert!(pol.globs.contains(g));
-        }
-        assert_eq!(pol.roots.len(), before.roots.len() + 2, "no duplicates");
-        assert_eq!(pol.globs.len(), before.globs.len() + 1);
-        assert!(pol.is_vault(".config/acme-secrets/token"));
-        assert!(pol.is_vault(".vault/a"));
-        assert!(pol.is_vault("deploy/site.key"));
-        assert!(pol.is_vault(".ssh/config"), "defaults still hold");
-    }
-
-    fn entry(rel: &str) -> Entry {
-        Entry {
-            rel: rel.into(),
-            is_dir: false,
-            size: 1,
-            mtime: 0,
-        }
-    }
-
-    #[test]
-    fn partition_is_disjoint_and_complete() {
-        let pol = Policy::default_policy();
-        let entries: Vec<Entry> = [
-            ".ssh",
-            ".ssh/id_demo",
-            "src",
-            "src/lib.rs",
-            ".env",
-            "README.md",
-            "k/id_demo",
-        ]
-        .map(entry)
-        .to_vec();
+    fn the_policy_is_the_core_one() {
+        // re-exports, not copies: the same types and the same function
+        let pol: nkw_core::library::Policy = Policy::default_policy();
+        assert!(pol.is_vault(".ssh/id_demo"));
+        assert!(!pol.is_vault("projeto/notas.md"));
+        let entries: Vec<nkw_core::library::Entry> = [".env", "notas.md"]
+            .map(|r| Entry {
+                rel: r.into(),
+                is_dir: false,
+                size: 1,
+                mtime: 0,
+                hidden: r.starts_with('.'),
+            })
+            .to_vec();
         let (shelf, vault) = partition(&pol, &entries);
-        assert_eq!(shelf.len() + vault.len(), entries.len());
-        for e in &entries {
-            let s = shelf.iter().any(|x| std::ptr::eq(*x, e));
-            let v = vault.iter().any(|x| std::ptr::eq(*x, e));
-            assert!(s ^ v, "{} in exactly one", e.rel);
-        }
-        let names: Vec<&str> = vault.iter().map(|e| e.rel.as_str()).collect();
-        assert_eq!(names, [".ssh", ".ssh/id_demo", ".env", "k/id_demo"]);
-    }
-
-    #[test]
-    fn an_entry_has_no_content_fields() {
-        // exhaustive destructuring: adding a field (say, bytes) breaks this
-        let Entry {
-            rel,
-            is_dir,
-            size,
-            mtime,
-        } = Entry {
-            rel: "id_demo".into(),
-            is_dir: false,
-            size: 411,
-            mtime: 0,
-        };
-        assert_eq!(
-            (rel.as_str(), is_dir, size, mtime),
-            ("id_demo", false, 411, 0)
-        );
+        assert_eq!((shelf.len(), vault.len()), (1, 1));
+        assert_eq!(vault[0].rel, ".env");
     }
 }

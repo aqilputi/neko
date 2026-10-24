@@ -4,7 +4,8 @@
 //! nkw [--demo] [--headless] [--script FILE|-] [--shot PATH.png] [--reduced-motion] [--preset64]
 //!     [--size WxH] [--scale S] [--seconds N] [--socket NAME] [--gl-debug]
 //!     [--core auto|none|demo|URL] [--world-mod ctrl+alt|super] [--focus-escape KEY]
-//!     [--mouse-look on|off] [--state-dir DIR] [--no-sys] [-- CMD ARGS...]
+//!     [--mouse-look on|off] [--state-dir DIR] [--no-sys] [--xwayland auto|on|off]
+//!     [--text-input] [-- CMD ARGS...]
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -23,7 +24,11 @@ pub mod exit {
 pub const USAGE: &str = "usage: nkw [--demo] [--headless] [--script FILE|-] [--shot PATH.png] \
 [--reduced-motion] [--preset64] [--size WxH] [--scale S] [--seconds N] [--socket NAME] \
 [--gl-debug] [--core auto|none|demo|URL] [--world-mod ctrl+alt|super] [--focus-escape KEY] \
-[--mouse-look on|off] [--state-dir DIR] [--no-sys] [-- CMD ARGS...]";
+[--mouse-look on|off] [--state-dir DIR] [--no-sys] [--xwayland auto|on|off] [--text-input] \
+[-- CMD ARGS...]";
+
+/// `--xwayland` / `[launch] xwayland` (S20/S22): one type, the config's.
+pub use nkw_core::rules::XwaylandMode;
 
 /// `--core`: where the cats come from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +94,10 @@ pub struct Cli {
     pub state_dir: Option<PathBuf>,
     /// `--no-sys`: no D-Bus/PipeWire adapters (implied by `--demo`)
     pub no_sys: bool,
+    /// `--xwayland auto|on|off` (wins over `[launch] xwayland`; W3 reads it)
+    pub xwayland: Option<XwaylandMode>,
+    /// `--text-input`: advertise text-input-v3 (an evaluation flag, W4)
+    pub text_input: bool,
 }
 
 impl Default for Cli {
@@ -114,6 +123,8 @@ impl Default for Cli {
             mouse_look: None,
             state_dir: None,
             no_sys: false,
+            xwayland: None,
+            text_input: false,
         }
     }
 }
@@ -184,6 +195,11 @@ impl Cli {
             .or(cfg.filter(|k| !k.trim().is_empty()))
             .unwrap_or(crate::ext::FOCUS_ESCAPE)
             .to_string()
+    }
+
+    /// The satellite's mode: `--xwayland`, else the config's.
+    pub fn xwayland_or(&self, cfg: XwaylandMode) -> XwaylandMode {
+        self.xwayland.unwrap_or(cfg)
     }
 
     /// ANDAR's mouse-look: `--mouse-look`, else `[walk] mouse_look`.
@@ -281,6 +297,16 @@ pub fn parse<S: AsRef<str>>(args: &[S], env_reduced: bool) -> Result<Cli, UsageE
                     _ => return err(format!("bad --mouse-look {v:?} (on|off)")),
                 });
             }
+            "--xwayland" => {
+                let v = value(a)?;
+                cli.xwayland = Some(match v.as_str() {
+                    "auto" => XwaylandMode::Auto,
+                    "on" => XwaylandMode::On,
+                    "off" => XwaylandMode::Off,
+                    _ => return err(format!("bad --xwayland {v:?} (auto|on|off)")),
+                });
+            }
+            "--text-input" => cli.text_input = true,
             "--state-dir" => {
                 let v = value(a)?;
                 if v.is_empty() {
@@ -430,6 +456,30 @@ mod tests {
                 vec!["--mouse-look", "on"],
                 Box::new(|c| c.mouse_look == Some(true)),
             ),
+            (
+                vec!["--xwayland", "off"],
+                Box::new(|c| {
+                    c.xwayland == Some(XwaylandMode::Off)
+                        && c.xwayland_or(XwaylandMode::On) == XwaylandMode::Off
+                }),
+            ),
+            (
+                vec!["--xwayland", "on"],
+                Box::new(|c| c.xwayland == Some(XwaylandMode::On)),
+            ),
+            (
+                vec!["--xwayland", "auto"],
+                Box::new(|c| c.xwayland == Some(XwaylandMode::Auto)),
+            ),
+            (
+                vec![],
+                Box::new(|c| {
+                    c.xwayland.is_none()
+                        && !c.text_input
+                        && c.xwayland_or(XwaylandMode::Off) == XwaylandMode::Off
+                }),
+            ),
+            (vec!["--text-input"], Box::new(|c| c.text_input)),
         ];
         for (args, check) in cases {
             let c = ok(&args);
@@ -464,6 +514,8 @@ mod tests {
             (&["--focus-escape", " "], "bad --focus-escape"),
             (&["--mouse-look", "maybe"], "bad --mouse-look"),
             (&["--mouse-look"], "needs a value"),
+            (&["--xwayland", "maybe"], "bad --xwayland"),
+            (&["--xwayland"], "needs a value"),
         ];
         for (args, want) in cases {
             let e = parse(args, false).unwrap_err();

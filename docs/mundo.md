@@ -389,18 +389,25 @@ o que esperar dele e como o lançador ajuda.
 
 ### Compatibilidade
 
-<!-- PLACEHOLDER (W7 → integrador): a matriz vem da auditoria empírica do W4 (`target/compat/matrix.md`,
-     colada no tmp/seam-changes.md como "compat audit, day 1"). Ela ainda não estava pronta quando esta seção
-     foi escrita. Substituir a tabela abaixo pela matriz, só com `app_id`s (nunca títulos de janela), valores
-     ✓ ✗ ◐ — e até 8 palavras por célula. -->
+Auditoria de 2026-10-24, aninhada no niri (Intel Iris Xe), cada app com perfil descartável e sessão D-Bus
+própria, nunca com os seus perfis. A coluna "cursor" mostra a mudança desta onda: antes o mundo ignorava o
+cursor de todo app.
 
-**(matriz pendente — chega com a auditoria desta onda.)** A tabela tem uma linha por app testado com perfis
-descartáveis (`foot`, `kitty`, `weston-terminal`, `gtk4-demo`, `gtk4-widget-factory`, `nautilus`, `firefox`,
-`zen-browser`, `chromium`, `chromium` pelo X11, `mpv`, `discord`) e uma coluna por coisa que pode dar errado:
+| app (`app_id`) | abre | teclas no FOCO | acentos | menus / fecham com `ctrl+]` | cursor | escala 1,25 | 2ª vez |
+|---|---|---|---|---|---|---|---|
+| `foot`, `kitty` | ✓ | ✓ | ✓ | — | ✓ forma do app | ✓ fracionária | — |
+| `weston-terminal` | ✓ | ✓ | ✓ | — | ✗ desenha o próprio | ◐ escala 1, esticado | — |
+| `org.gtk.WidgetFactory4`, nautilus | ✓ | ✓ | ◐ não conferido | ✓ / ✓ | ✓ | ✓ (só o widget-factory) | ✓ janela nova no mundo |
+| `firefox`, `zen` | ✓ | ✓ | ◐ não conferido | firefox ✓ / ✓; zen sem menu em about:blank | ✓ | ✓ (só o firefox) | ✓ janela nova |
+| `chromium` (com ou sem ozone) | ✓ | ✓ | ◐ não conferido | ✓ / ✓ | ✓ | ✓ | ◐ aba nova na mesma janela |
+| `Chromium` pelo X11 (`xwayland-satellite`) | ✓ | ✓ | ◐ não conferido | ✓ / ◐ | ✓ protocolo ligado | — | ◐ aba nova |
+| `mpv` (dmabuf; `--fs` em tela cheia) | ✓ | ✓ | ◐ não conferido | — | ✓ | ✓ | — |
+| discord | ✗ não abre em 20 s com perfil novo (baixa o app antes) | | | | | | |
 
-| app (`app_id`) | abre e desenha | teclado no FOCO | popups e menus | área de transferência | cursor | escala 1,25 | seletor de arquivo | instância única |
-|---|---|---|---|---|---|---|---|---|
-| … | … | … | … | … | … | … | … | … |
+Também desta onda: colar com o botão do meio (seleção primária) entre apps do mundo, travar o ponteiro para
+o app em FOCO que pedir (jogos, ferramentas 3D), e o mpv se marca como vídeo. Sem erros de protocolo em nenhum
+app que abriu. Ainda não testado: copiar de um app para fora do mundo, arrastar e soltar dentro de uma janela,
+seletor de arquivo e IME (não há nenhum nesta máquina).
 
 `✓` funciona, `◐` funciona com ressalva, `✗` não funciona, `—` não se aplica. `make world-compat` roda a parte
 sem janela (o `nkw-testclient` exercita cada protocolo, e os apps instalados entram quando presentes);

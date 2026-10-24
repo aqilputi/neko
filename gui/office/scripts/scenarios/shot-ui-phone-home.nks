@@ -1,0 +1,20 @@
+# The phone (W2, S21): `tab` in NAV opens it over COMANDOS (dump().mode says COMANDOS, the label
+# TELEFONE); the home grid of every plugin's apps in their order, the status header. `l` moves.
+key J
+wait 500
+inject cats {"fixture":"busy"}
+wait 300
+key Tab
+wait 400
+expect mode COMANDOS
+expect json /ext/overlay/phone/app null
+expect json /ext/overlay/submode "phone"
+key l
+wait 300
+expect json /ext/overlay/phone/sel 1
+shot ${OUT}/shot-ui-phone-home.png
+key Escape
+wait 400
+expect mode NAV
+dump ${OUT}/dump-ui-phone-home.json
+quit

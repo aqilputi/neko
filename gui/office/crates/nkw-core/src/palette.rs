@@ -43,6 +43,30 @@ pub enum Step {
     Closed,
 }
 
+/// The indices of `texts` that match `query` (fuzzy, smart case), best
+/// first, ties in their order; an empty query keeps them all in order.
+/// The phone's live search filters its lists with it.
+pub fn fuzzy_rank(query: &str, texts: &[&str]) -> Vec<usize> {
+    if query.trim().is_empty() {
+        return (0..texts.len()).collect();
+    }
+    let mut config = Config::DEFAULT;
+    config.prefer_prefix = true;
+    let mut m = Matcher::new(config);
+    let pat = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
+    let mut buf = Vec::new();
+    let mut scored: Vec<(u32, usize)> = texts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| {
+            pat.score(Utf32Str::new(t, &mut buf), &mut m)
+                .map(|s| (s, i))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    scored.into_iter().map(|t| t.1).collect()
+}
+
 pub struct Palette {
     items: Vec<Item>,
     query: Line,
@@ -73,6 +97,43 @@ impl Palette {
             answers: BTreeMap::new(),
             asked_from: String::new(),
         }
+    }
+
+    /// The palette already on `name`'s first argument prompt (`world.palette_run
+    /// {name, …}`): `specs` are its arguments (name, prompt), `preset` the
+    /// answers given beforehand (they ride along into `Step::Run`). No
+    /// argument to ask: `Step::Run` at once.
+    pub fn ask(
+        items: Vec<Item>,
+        name: &str,
+        specs: Vec<(String, String)>,
+        preset: BTreeMap<String, String>,
+    ) -> Palette {
+        let mut one: Vec<Item> = items.into_iter().filter(|i| i.name == name).collect();
+        if one.is_empty() {
+            one.push(Item {
+                name: name.to_string(),
+                title: String::new(),
+                keys: Vec::new(),
+                group: 0,
+            });
+        }
+        let mut p = Palette::new(one, "");
+        p.asked_from = name.to_string();
+        p.answers = preset;
+        p.step = if specs.is_empty() {
+            Step::Run {
+                name: name.to_string(),
+                args: std::mem::take(&mut p.answers),
+            }
+        } else {
+            Step::Args {
+                name: name.to_string(),
+                asked: 0,
+            }
+        };
+        p.specs = specs;
+        p
     }
 
     /// Edit the line: the query while `Open` (the highlight goes back to the
@@ -369,5 +430,51 @@ mod tests {
         assert_eq!(p.step(), &Step::Closed);
         p.complete();
         assert_eq!(p.enter(&specs), Step::Closed);
+    }
+
+    #[test]
+    fn ask_starts_on_the_first_argument_and_carries_presets() {
+        let specs = vec![("name".to_string(), "nome › ".to_string())];
+        let preset = BTreeMap::from([("cat".to_string(), "7".to_string())]);
+        let mut p = Palette::ask(items(), "session.rename", specs, preset.clone());
+        assert_eq!(
+            p.step(),
+            &Step::Args {
+                name: "session.rename".into(),
+                asked: 0
+            }
+        );
+        assert_eq!(p.prompt(), Some("nome › "));
+        assert_eq!(
+            names(&p),
+            ["session.rename"],
+            "the list shows the one command"
+        );
+        p.edit(|l| l.insert("novo"));
+        let Step::Run { name, args } = p.enter(&no_args) else {
+            panic!()
+        };
+        assert_eq!(name, "session.rename");
+        assert_eq!(args["name"], "novo");
+        assert_eq!(args["cat"], "7", "the preset rides along");
+        // no argument to ask: it runs at once
+        let q = Palette::ask(items(), "session.stop", vec![], preset);
+        assert!(matches!(q.step(), Step::Run { args, .. } if args["cat"] == "7"));
+    }
+
+    #[test]
+    fn fuzzy_rank_orders_indices_best_first() {
+        let texts = ["parar a sessão", "nova sessão", "ir para acme", "foot"];
+        assert_eq!(fuzzy_rank("", &texts), [0, 1, 2, 3], "empty: all, in order");
+        let r = fuzzy_rank("sess", &texts);
+        assert_eq!(r.len(), 2);
+        assert!(r.contains(&0) && r.contains(&1));
+        assert_eq!(fuzzy_rank("foot", &texts), [3]);
+        assert!(fuzzy_rank("zzzq", &texts).is_empty());
+        assert_eq!(
+            fuzzy_rank("sess", &texts),
+            fuzzy_rank("sess", &texts),
+            "stable"
+        );
     }
 }

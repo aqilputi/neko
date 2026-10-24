@@ -20,6 +20,8 @@ use crate::router::sym;
 
 #[path = "wm/world_ops.rs"]
 mod ops;
+#[path = "wm/sight.rs"]
+mod sight;
 #[path = "wm/walk.rs"]
 mod walk;
 pub use nkw_core::TurnMode;
@@ -143,6 +145,11 @@ pub enum Cmd {
         /// go there (`world.library`); `false`: a restore only makes it
         go: bool,
     },
+    /// `world.walk_set {key, value}`: a runtime `[walk]` change (S22)
+    WalkSet {
+        key: ShortName,
+        value: ShortName,
+    },
 }
 
 impl Cmd {
@@ -170,7 +177,8 @@ impl Cmd {
             "world.band" => Cmd::Band(args.get("band")?.parse().ok().filter(|b| *b <= 8)?),
             "world.first" => Cmd::First,
             "world.last" => Cmd::Last,
-            "world.talk" => Cmd::Talk,
+            // `world.talk {cat}` is the cats' (S24): a cat anywhere
+            "world.talk" if !args.contains_key("cat") => Cmd::Talk,
             "world.talk_next" => Cmd::TalkNext,
             "world.talk_reply" => Cmd::TalkReply,
             "world.talk_sit" => Cmd::TalkSit,
@@ -213,6 +221,10 @@ impl Cmd {
             "world.nearer" => Cmd::Nearer,
             "world.farther" => Cmd::Farther,
             "world.library" => Cmd::Library { go: true },
+            WALK_SET => Cmd::WalkSet {
+                key: ShortName::new(args.get("key")?.trim()),
+                value: ShortName::new(args.get("value")?.trim()),
+            },
             GOTO_SCREEN => Cmd::GotoScreen(ScreenId(args.get("screen")?.parse().ok()?)),
             n => {
                 if let Some(k) = n.strip_prefix("world.room_") {
@@ -320,6 +332,15 @@ impl Cmd {
             Cmd::Nearer => "world.nearer",
             Cmd::Farther => "world.farther",
             Cmd::Library { .. } => "world.library",
+            Cmd::WalkSet { key, value } => {
+                return (
+                    WALK_SET,
+                    BTreeMap::from([
+                        ("key".to_string(), key.as_str().to_string()),
+                        ("value".to_string(), value.as_str().to_string()),
+                    ]),
+                );
+            }
         };
         (n, BTreeMap::new())
     }
@@ -338,6 +359,9 @@ pub const PRESSED: &str = "pressed";
 fn pressed(args: &BTreeMap<String, String>) -> bool {
     args.get(PRESSED).is_none_or(|v| v.trim() != "false")
 }
+
+/// `world.walk_set {key, value}` (the phone's Ajustes; not persisted).
+pub const WALK_SET: &str = "world.walk_set";
 
 /// `world.goto_screen {screen}` (the palette's "ir para" items use
 /// `world.goto_screen:<id>` and `world.goto_room:<id>`).
@@ -479,6 +503,8 @@ pub struct World {
     vignette: (Time, bool, f32),
     /// when the last frame was drawn (the vignette's ramp wants frames)
     last_frame: Time,
+    /// the walls of `line_of_sight`, per layout (S22)
+    los: sight::LosCache,
 }
 
 impl World {
@@ -522,6 +548,7 @@ impl World {
             carry: None,
             vignette: (f64::NEG_INFINITY, false, 0.0),
             last_frame: f64::NEG_INFINITY,
+            los: Default::default(),
         };
         w.next_room = w.rooms.iter().map(|r| r.id.0 + 1).max().unwrap_or(0);
         w.station = match w.rooms.first().map(|r| r.desks.is_empty()) {
@@ -561,13 +588,13 @@ impl World {
             Station::Desk { room, .. } | Station::Door(room) => self.room_index(room).unwrap_or(0),
             Station::Air(s) => match self.locate(s) {
                 Some((r, _, _)) => r,
-                None => self.room_at(self.camera.pos).unwrap_or(0),
+                None => self.room_index_at(self.camera.pos).unwrap_or(0),
             },
-            _ => self.room_at(self.camera.pos).unwrap_or(0),
+            _ => self.room_index_at(self.camera.pos).unwrap_or(0),
         }
     }
 
-    fn room_at(&self, p: Vec3) -> Option<usize> {
+    fn room_index_at(&self, p: Vec3) -> Option<usize> {
         let slots = self.slots();
         slots.iter().position(|s| {
             let inside_x = p.x >= s.x0 && p.x <= s.x0 + s.len;
@@ -1014,6 +1041,14 @@ impl World {
                     None => Vec::new(),
                 }
             }
+            Cmd::WalkSet { key, value } => {
+                self.layout_gen -= 1;
+                if let Err(e) = self.walk_set(key.as_str(), value.as_str()) {
+                    self.note = Some((now, e));
+                    self.pending.push(Wish::compose(Want::Once));
+                }
+                Vec::new()
+            }
             other => self.wm_command(other, now),
         }
     }
@@ -1147,7 +1182,9 @@ impl World {
         } else {
             self.obstacles.insert(room, extra);
         }
-        let here = self.room_at(self.camera.pos).unwrap_or(self.current_room());
+        let here = self
+            .room_index_at(self.camera.pos)
+            .unwrap_or(self.current_room());
         if self.walking.is_some() && self.rooms.get(here).is_some_and(|r| r.id == room) {
             let grid = self.room_grid(here);
             if let Some(w) = self.walking.as_mut() {
@@ -1177,7 +1214,9 @@ impl World {
     /// `walk.on_exit = auto` (§3.5): a station close by and ahead, else
     /// stay where you are.
     fn walk_exit(&mut self, now: Time) {
-        let room = self.room_at(self.camera.pos).unwrap_or(self.current_room());
+        let room = self
+            .room_index_at(self.camera.pos)
+            .unwrap_or(self.current_room());
         let to = walk_exit::exit(self.walk_cfg.on_exit, &self.camera, &self.spots(room));
         self.station = to.station;
         if to.cut {
@@ -1402,7 +1441,9 @@ impl World {
             }
         }
         if self.walking.is_some() {
-            let here = self.room_at(self.camera.pos).unwrap_or(self.current_room());
+            let here = self
+                .room_index_at(self.camera.pos)
+                .unwrap_or(self.current_room());
             let grid = self.room_grid(here);
             if let Some(w) = self.walking.as_mut() {
                 w.grid = grid;

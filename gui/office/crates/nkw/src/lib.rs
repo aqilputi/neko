@@ -21,6 +21,7 @@ pub mod input;
 pub mod keys;
 pub mod objects;
 pub mod overlay;
+pub mod protocols;
 pub mod render;
 pub mod router;
 pub mod scene;
@@ -29,6 +30,7 @@ pub mod shell;
 pub mod shot;
 pub mod state;
 pub mod stats;
+pub mod ui;
 pub mod wm;
 pub mod world;
 

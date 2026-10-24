@@ -53,6 +53,7 @@ fn mode_for(keymap_mode: &str) -> (Mode, Option<&'static str>) {
         "world.hint" => hint(),
         "world.palette" => palette(),
         "world.library" => return (nav(), Some("library")),
+        "world.phone" => return (palette(), Some("phone")),
         m => panic!("{m}"),
     };
     (m, None)
@@ -141,8 +142,13 @@ fn every_s9_row_resolves_in_its_mode() {
                 assert_eq!(got, Route::Pending, "{mode} {key}");
             }
         }
+        let printable = ev(&name).utf8.is_some();
         let want = if *mode == "world.walk" && HELD_CMDS.contains(c) {
             held(c, true)
+        } else if *mode == "world.phone" && printable {
+            // the phone's printables are text (an item's keys, the search
+            // line); the overlay resolves them in its copy of the table
+            Route::Text(ev(&name))
         } else {
             cmd(c)
         };
@@ -240,7 +246,7 @@ fn text_only_in_text_modes() {
     );
     // NAV, ANDAR, CONVERSA: never text
     for m in [nav(), walk(), talk(false)] {
-        assert_eq!(router.route(&m, None, &ev("z")), Route::Swallow, "{m:?}");
+        assert_eq!(router.route(&m, None, &ev("v")), Route::Swallow, "{m:?}");
     }
     // the map: everything not global is the overlay's
     for k in ["h", "o", "enter", "esc"] {
@@ -570,7 +576,7 @@ fn library_submode_and_chain() {
     assert_eq!(router.dump()["mode"], "world.library");
     assert_eq!(router.dump()["submode"], "library");
     // printable keys are not text in the library
-    assert_eq!(router.route(&nav(), library(), &ev("z")), Route::Swallow);
+    assert_eq!(router.route(&nav(), library(), &ev("v")), Route::Swallow);
     // the core's normal mode is in the chain
     router.set_bindings(vec![binding("normal", &["x"], "session.stop")]);
     assert_eq!(
@@ -612,4 +618,86 @@ fn dump_names_the_submode() {
     assert_eq!(router.dump()["mode"], "world.map");
     router.route(&nav(), None, &ev("h"));
     assert_eq!(router.dump()["submode"], serde_json::Value::Null);
+}
+
+/// S26: the phone's chain (`world → world.phone → *`, only inside COMANDOS
+/// with the overlay's `phone` sub-mode), its keys, and the new NAV/ANDAR
+/// rows.
+#[test]
+fn phone_rows_and_chain() {
+    let mut router = r();
+    let ph = Some("phone");
+    let rows: &[(&str, Route)] = &[
+        ("enter", cmd("world.phone_open")),
+        ("backspace", cmd("world.phone_back")),
+        ("esc", cmd("world.phone_close")),
+        ("tab", cmd("world.phone_close")),
+        ("left", cmd("world.phone_left")),
+        ("right", cmd("world.phone_right")),
+        ("down", cmd("world.phone_down")),
+        ("up", cmd("world.phone_up")),
+        // the global layer first
+        ("ctrl+alt+l", cmd("world.focus_right")),
+        ("ctrl+alt+n", cmd("world.phone")),
+        // printables are text
+        ("j", Route::Text(ev("j"))),
+        ("3", Route::Text(ev("3"))),
+        ("/", Route::Text(ev("/"))),
+        ("x", Route::Text(ev("x"))),
+        ("space", Route::Text(ev("space"))),
+    ];
+    for (k, want) in rows {
+        assert_eq!(&router.route(&palette(), ph, &ev(k)), want, "{k}");
+    }
+    assert_eq!(router.dump()["mode"], "world.phone");
+    assert_eq!(router.dump()["submode"], "phone");
+    assert_eq!(names::chain("world.phone"), ["world", "world.phone", "*"]);
+    // the sub-mode means nothing outside COMANDOS
+    assert_eq!(router.route(&nav(), ph, &ev("j")), cmd("world.down"));
+    // the plain palette is the palette's
+    assert_eq!(
+        router.route(&palette(), None, &ev("enter")),
+        cmd("world.palette_run")
+    );
+    // tab opens it from NAV and ANDAR; world+n from anywhere, FOCO too
+    assert_eq!(router.route(&nav(), None, &ev("tab")), cmd("world.phone"));
+    assert_eq!(router.route(&walk(), None, &ev("tab")), cmd("world.phone"));
+    assert_eq!(
+        router.route(&focus(), None, &ev("ctrl+alt+n")),
+        cmd("world.phone")
+    );
+    assert_eq!(
+        router.route(&focus(), None, &ev("tab")),
+        Route::Forward,
+        "FOCO: the app's tab"
+    );
+    assert_eq!(router.route(&nav(), None, &ev("?")), cmd("world.help"));
+    assert_eq!(router.route(&nav(), None, &ev("z")), cmd("world.hud"));
+}
+
+#[test]
+fn bindings_of_is_the_live_keymap() {
+    let mut router = r();
+    let nav_rows = router.bindings_of("normal.world");
+    assert!(
+        nav_rows
+            .iter()
+            .any(|(k, t)| k == &["tab"] && t == "telefone")
+    );
+    assert!(nav_rows.iter().any(|(k, t)| k == &["?"] && t == "ajuda"));
+    assert_eq!(
+        router.bindings_of("world.focus"),
+        [(vec!["ctrl+]".to_string()], "sai do FOCO".to_string())]
+    );
+    // the core's keymap with its own help text, a Lua key
+    let mut b = binding("normal.world", &["n"], "lua.key:normal.world:n");
+    b.help.desc = "meu atalho".into();
+    router.set_bindings(vec![b, binding("normal.world", &["tab"], "world.phone")]);
+    let rows = router.bindings_of("normal.world");
+    assert!(rows.contains(&(vec!["n".to_string()], "meu atalho".to_string())));
+    assert!(rows.contains(&(vec!["tab".to_string()], "telefone".to_string())));
+    assert!(
+        router.binds().iter().any(|b| b.mode == "world.phone"),
+        "fallback rows kept"
+    );
 }

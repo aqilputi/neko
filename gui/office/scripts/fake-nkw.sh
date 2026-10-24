@@ -10,6 +10,7 @@
 #   FAKE_NKW_FIRST_MS    summary first frame (120)
 #   FAKE_NKW_EXT_US      summary ext_tick_us_p95 (40)
 #   FAKE_NKW_RATES       summary rate_wishes_max (1)
+#   FAKE_NKW_IMPORT_US / FAKE_NKW_COMPOSE_US   summary import/compose p50 (100 / 200)
 #   FAKE_NKW_DRAWS / FAKE_NKW_TRIS      per-frame counters (40 / 20000)
 #   FAKE_NKW_KEY_LAT_US  injected key → client log delay (300)
 #   FAKE_NKW_EXIT        exit code (0)
@@ -119,8 +120,9 @@ while ((now < end)); do
 done
 
 if [ "${FAKE_NKW_NO_SUMMARY:-0}" != 1 ]; then
-	printf 'nkw-stats {"summary":true,"frames":%d,"world_passes":%d,"p50_us":%d,"p95_us":%d,"dropped":%d,"first_frame_ms":%d,"rss_kb":%d,"ext_tick_us_p95":%d,"rate_wishes_max":%d}\n' \
+	printf 'nkw-stats {"summary":true,"frames":%d,"world_passes":%d,"p50_us":%d,"p95_us":%d,"dropped":%d,"first_frame_ms":%d,"rss_kb":%d,"ext_tick_us_p95":%d,"rate_wishes_max":%d,"import_us_p50":%d,"compose_us_p50":%d}\n' \
 		"$frames" "$frames" "${FAKE_NKW_P50_US:-600}" "${FAKE_NKW_P95_US:-1200}" "${FAKE_NKW_DROPPED:-0}" \
-		"${FAKE_NKW_FIRST_MS:-120}" "${FAKE_NKW_RSS_KB:-61440}" "${FAKE_NKW_EXT_US:-40}" "${FAKE_NKW_RATES:-1}" >&2
+		"${FAKE_NKW_FIRST_MS:-120}" "${FAKE_NKW_RSS_KB:-61440}" "${FAKE_NKW_EXT_US:-40}" "${FAKE_NKW_RATES:-1}" \
+		"${FAKE_NKW_IMPORT_US:-100}" "${FAKE_NKW_COMPOSE_US:-200}" >&2
 fi
 exit "${FAKE_NKW_EXIT:-0}"

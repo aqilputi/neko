@@ -235,6 +235,19 @@ impl Router {
             .collect()
     }
 
+    /// The bindings of one keymap mode as (keys, title), live (Lua rebinds
+    /// included): titles from the core's `help.desc`, else the S9 table's,
+    /// else the command. The phone's Ajuda lists them.
+    pub fn bindings_of(&self, mode: &str) -> Vec<(Vec<String>, String)> {
+        crate::overlay::apps::bindings_of(&self.binds, mode)
+    }
+
+    /// Every binding in effect (the overlay keeps a copy for its help and
+    /// the phone's printable keys: `Overlay::set_help`).
+    pub fn binds(&self) -> &[Bind] {
+        &self.binds
+    }
+
     pub fn dump(&self) -> Value {
         serde_json::json!({
             "world_mod": self.world_mod.name(),
@@ -304,6 +317,20 @@ fn keymap_binds(b: &[nk_client::Binding], wm: WorldMod, focus_escape: &str) -> V
     for x in b {
         for k in &x.keys {
             push(&mut out, &x.mode, k, &x.command, wm);
+        }
+        // the core's own help text wins over the table's title
+        if !x.help.desc.is_empty() {
+            let mode = if x.keys.iter().any(|k| names::is_global(k)) {
+                "world"
+            } else {
+                x.mode.as_str()
+            };
+            if let Some(o) = out
+                .iter_mut()
+                .find(|o: &&mut Bind| o.mode == mode && o.command == x.command)
+            {
+                o.help = x.help.desc.clone();
+            }
         }
     }
     let named: HashSet<&str> = b.iter().map(|x| x.mode.as_str()).collect();

@@ -20,6 +20,7 @@ use smithay::backend::renderer::utils::{
 };
 use smithay::backend::renderer::{Bind, ExportMem, Renderer, Texture, TextureMapping};
 use smithay::backend::winit::WinitGraphicsBackend;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Physical, Point, Rectangle, Scale, Size, Transform};
 
 use nkw_core::{Kind as ModeKind, ScreenId, Time, Want, schedule};
@@ -171,9 +172,33 @@ fn external(f: Option<Fourcc>) -> bool {
     )
 }
 
+/// What the host window's cursor shows (S20): the system default, nothing,
+/// or a named shape a client asked for (`wp_cursor_shape_v1`, W4).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HostCursor {
+    #[default]
+    Default,
+    Hidden,
+    Named(smithay::input::pointer::CursorIcon),
+}
+
+impl HostCursor {
+    /// `dump()["host"]["cursor"]`: `"default"`, `"hidden"` or the icon's
+    /// CSS name.
+    pub fn name(&self) -> &'static str {
+        match self {
+            HostCursor::Default => "default",
+            HostCursor::Hidden => "hidden",
+            HostCursor::Named(i) => i.name(),
+        }
+    }
+}
+
 /// What one composed frame cost (µs) and drew.
 #[derive(Default)]
 struct Cost {
+    import_us: u64,
+    hud_us: u64,
     cull_us: u64,
     submit_us: u64,
     compose_us: u64,
@@ -241,9 +266,11 @@ impl Nkw {
                 frame: self.stats.frames + 1,
                 pass: if plan.world_pass { "world" } else { "compose" },
                 update_us,
+                import_us: cost.import_us,
                 cull_us: cost.cull_us,
                 submit_us: cost.submit_us,
                 compose_us: cost.compose_us,
+                hud_us: cost.hud_us,
                 draws: cost.draws,
                 tris: cost.tris,
                 gpu_us: cost.gpu_us,
@@ -256,6 +283,30 @@ impl Nkw {
         self.send_frames();
         let _ = self.dh.flush_clients();
         self.wake();
+    }
+
+    /// Show `c` on the host window (winit); headless: only recorded
+    /// (`dump()["host"]["cursor"]`). The walk's pointer lock hides the
+    /// cursor on its own and wins while it holds.
+    pub fn set_host_cursor(&mut self, c: HostCursor) {
+        if self.host_cursor == c {
+            return;
+        }
+        self.host_cursor = c;
+        if let Host::Winit(b) = &self.gfx.host {
+            let w = b.window();
+            match c {
+                HostCursor::Hidden => w.set_cursor_visible(false),
+                HostCursor::Default => {
+                    w.set_cursor(smithay::input::pointer::CursorIcon::Default.into());
+                    w.set_cursor_visible(!self.pointer_locked);
+                }
+                HostCursor::Named(i) => {
+                    w.set_cursor(i.into());
+                    w.set_cursor_visible(!self.pointer_locked);
+                }
+            }
+        }
     }
 
     /// Ask for a frame when the wishes want one, else arm the next wakeup.
@@ -280,10 +331,18 @@ impl Nkw {
             || matches!(self.world.mode().kind(), Some(ModeKind::Hint { .. }))
             || self.ext.cats.dialog().is_some()
             || self.ext.objects.dialog().is_some()
+            || self.phone_state().is_some()
+    }
+
+    /// The phone's state while the overlay has it open (S21).
+    pub fn phone_state(&self) -> Option<crate::ui::phone::PhoneState> {
+        self.ext.overlay.phone_state()
     }
 
     fn render(&mut self, world_pass: bool, now: Time, hud: Option<HudInput>) -> Cost {
         let mut cost = Cost::default();
+        // the client surfaces this frame shows (presentation feedback, S23)
+        let mut presented: Vec<WlSurface> = Vec::new();
         let out_px = [self.world.out.width_px, self.world.out.height_px];
         let scale = self.world.out.scale as f64;
         let sky = nkw_gl::draw::sky_for_band(self.world.band);
@@ -335,12 +394,15 @@ impl Nkw {
                     self.gfx.full_damage || render::lod(&self.world, *id) != render::Lod::Hidden
                 })
                 .collect();
+            let t_import = Instant::now();
             let renderer = self.gfx.renderer();
             for ((_, w), show) in self.windows.iter().zip(&shown) {
                 if *show && let Some(tl) = w.toplevel() {
                     let _ = import_surface_tree(renderer, tl.wl_surface());
+                    presented.push(tl.wl_surface().clone());
                 }
             }
+            cost.import_us = t_import.elapsed().as_micros() as u64;
             let ctx = renderer.context_id();
             let mut commits: HashMap<ScreenId, CommitCounter> = HashMap::new();
             let texs: HashMap<ScreenId, ClientTex> = self
@@ -432,7 +494,7 @@ impl Nkw {
                 render::WorldDamage::Full
             };
             self.gfx.commits = commits;
-            cost.cull_us = t.elapsed().as_micros() as u64;
+            cost.cull_us = (t.elapsed().as_micros() as u64).saturating_sub(cost.import_us);
             if damage == render::WorldDamage::None {
                 // the texture already shows this list: no GL work at all
                 self.gfx.skipped_passes += 1;
@@ -473,6 +535,7 @@ impl Nkw {
         for layer in render::layers(&self.world, fading) {
             match layer {
                 Layer::Hud => {
+                    let t_hud = Instant::now();
                     // built once per frame: the HUD-change check may have it
                     let hud = match hud.take() {
                         Some(h) => h,
@@ -494,6 +557,7 @@ impl Nkw {
                         }
                     }
                     self.gfx.hud_placed = placed;
+                    cost.hud_us = t_hud.elapsed().as_micros() as u64;
                 }
                 Layer::FocusCat(cat) => {
                     let got = {
@@ -563,6 +627,11 @@ impl Nkw {
                     let e: Vec<WaylandSurfaceRenderElement<GlowRenderer>> =
                         w.render_elements(r, loc, Scale::from(scale), 1.0);
                     elems.extend(e.into_iter().map(Elem::Surface));
+                    if let Some(tl) = w.toplevel()
+                        && !presented.contains(tl.wl_surface())
+                    {
+                        presented.push(tl.wl_surface().clone());
+                    }
                 }
                 Layer::World => {
                     if let Some((_, _, buf)) = &self.gfx.world_buf {
@@ -589,6 +658,7 @@ impl Nkw {
         let shots = std::mem::take(&mut self.shots);
         let size = Size::<i32, Physical>::from((out_px[0] as i32, out_px[1] as i32));
         let mut captured: Option<Vec<u8>> = None;
+        let mut shown = false;
         let gfx = &mut self.gfx;
         match &mut gfx.host {
             Host::Winit(b) => {
@@ -617,20 +687,21 @@ impl Nkw {
                             .make_current_with_surface(&*surface)
                     };
                 }
-                if bound
-                    && (damage.is_some() || !shots.is_empty())
-                    && let Err(e) = b.submit(damage.as_deref())
-                {
-                    eprintln!("nkw: submit: {e:?}");
+                if bound && (damage.is_some() || !shots.is_empty()) {
+                    match b.submit(damage.as_deref()) {
+                        Ok(()) => shown = true,
+                        Err(e) => eprintln!("nkw: submit: {e:?}"),
+                    }
                 }
             }
             Host::Headless { renderer, target } => match renderer.bind(target) {
                 Ok(mut fb) => {
-                    if let Err(e) =
-                        gfx.damage
-                            .render_output(&mut **renderer, &mut fb, 1, &elems, clear)
+                    match gfx
+                        .damage
+                        .render_output(&mut **renderer, &mut fb, 1, &elems, clear)
                     {
-                        eprintln!("nkw: compose: {e:?}");
+                        Ok(_) => shown = true,
+                        Err(e) => eprintln!("nkw: compose: {e:?}"),
                     }
                     if !shots.is_empty() {
                         captured = read_back(&mut **renderer, &fb, size, false);
@@ -641,6 +712,12 @@ impl Nkw {
         }
         cost.compose_us = t.elapsed().as_micros() as u64;
         self.gfx.check("compose");
+        if shown {
+            let at = std::time::Duration::from_micros(stats::mono_us());
+            let refresh = self.period();
+            let seq = self.stats.frames + 1;
+            self.protos_presented(&presented, at, refresh, seq);
+        }
         if !shots.is_empty() {
             match captured {
                 Some(px) => {
@@ -681,6 +758,10 @@ impl Nkw {
             // ANDAR only (the aim is the walker's crosshair)
             aimed: self.world.walking.is_some()
                 && (self.world.aim().is_some() || self.ext.objects.aimed(&ctx).is_some()),
+            status: ps
+                .iter()
+                .fold(ext::Status::default(), |a, p| a.merge(p.status(&ctx))),
+            phone: self.phone_state().map(|st| ext::phone_view(&ps, st, &ctx)),
         }
     }
 

@@ -54,6 +54,10 @@ pub enum Choice {
     No,
     /// "Ver o cofre" (the librarian)
     SeeVault,
+    /// the tour: "Próximo" / "Pular" / "Entendi" (the last balloon)
+    TourNext,
+    TourSkip,
+    TourDone,
 }
 
 impl Choice {
@@ -77,6 +81,9 @@ impl Choice {
             Choice::Yes => "Sim".into(),
             Choice::No => "Não".into(),
             Choice::SeeVault => "Ver o cofre".into(),
+            Choice::TourNext => "Próximo".into(),
+            Choice::TourSkip => "Pular".into(),
+            Choice::TourDone => "Entendi".into(),
         }
     }
 }
@@ -98,6 +105,8 @@ pub enum Who {
     Librarian,
     /// a session that left during the conversation (its label)
     Gone(String),
+    /// the receptionist's first-run tour, balloon N (0-based, < `TOUR.len()`)
+    Tour(u8),
 }
 
 /// The §6.4 row a session is in.
@@ -115,7 +124,18 @@ pub enum Row {
     Receptionist,
     Librarian,
     Gone,
+    Tour,
 }
+
+/// The receptionist's tour (S24): one balloon per step, ≤ 2 lines each.
+pub const TOUR: [&str; 6] = [
+    "Bem-vinda(o)! h e l andam entre as mesas; J e K trocam de sala.",
+    "enter senta na tela (FOCO). Para levantar: ctrl+].",
+    "t conversa com o gato da mesa: ele conta o que está fazendo.",
+    "w anda livre pelo mundo (ANDAR); esc volta para as mesas.",
+    "tab abre o telefone: gatos, inbox, mapa, apps, ajustes.",
+    ": abre os comandos e ? mostra todas as teclas. Bom trabalho!",
+];
 
 /// The row of a session (the same precedence as its pose).
 pub fn row_of(s: &Session) -> Row {
@@ -181,6 +201,14 @@ pub fn opening(who: &Who) -> (Row, String, Vec<Choice>) {
             vec![Choice::SeeVault],
         ),
         Who::Gone(label) => (Row::Gone, format!("{label} foi embora."), Vec::new()),
+        Who::Tour(step) => {
+            let i = (*step as usize).min(TOUR.len() - 1);
+            let choices = match i + 1 == TOUR.len() {
+                true => vec![Choice::TourDone],
+                false => vec![Choice::TourNext, Choice::TourSkip],
+            };
+            (Row::Tour, TOUR[i].to_string(), choices)
+        }
         Who::Session(s) => {
             let row = row_of(s);
             let (text, choices) = match row {
@@ -273,6 +301,13 @@ pub enum Call {
     Reply { session: String, text: String },
     /// `POST /v1/commands/{name}` with the session as context
     Run { name: String, session: String },
+    /// the same with arguments (the session keys, the phone's acts);
+    /// `session` empty: no session context (`session.new`)
+    RunWith {
+        name: String,
+        session: String,
+        args: std::collections::BTreeMap<String, String>,
+    },
     /// `POST /v1/confirm/{token}`
     Confirm { token: String, yes: bool },
 }
@@ -295,6 +330,9 @@ pub enum Step {
     /// end the conversation, then run a command by name (the vault's
     /// stand, `world.goto_object {name}`)
     Command(String, Vec<(String, String)>),
+    /// the tour: the next balloon (`Some(step)`), or its end (`None`: the
+    /// conversation ends; `world.tour_done` goes out once, on the way back)
+    Tour(Option<u8>),
     /// end the conversation (`Action::Back`)
     End,
 }
@@ -337,6 +375,11 @@ pub fn on_choice(who: &Who, c: &Choice, pending: Option<&str>) -> Step {
             "world.goto_object".into(),
             vec![("name".into(), "cofre".into())],
         ),
+        Choice::TourNext => match who {
+            Who::Tour(s) if (*s as usize) + 1 < TOUR.len() => Step::Tour(Some(s + 1)),
+            _ => Step::Tour(None),
+        },
+        Choice::TourSkip | Choice::TourDone => Step::Tour(None),
         Choice::Later | Choice::Back | Choice::Ok => Step::End,
     }
 }
@@ -690,6 +733,55 @@ mod tests {
                 yes: false
             })
         );
+    }
+
+    #[test]
+    fn the_tour_is_six_short_balloons_with_next_and_skip() {
+        assert_eq!(TOUR.len(), 6);
+        for (i, t) in TOUR.iter().enumerate() {
+            // ≤ 2 lines of the box (≈ 64 characters a line)
+            assert!(t.chars().count() <= 128, "{i}: {t}");
+            let (row, text, c) = opening(&Who::Tour(i as u8));
+            assert_eq!(row, Row::Tour);
+            assert_eq!(text, *t);
+            match i {
+                5 => assert_eq!(labels(&c), ["Entendi"]),
+                _ => assert_eq!(labels(&c), ["Próximo", "Pular"]),
+            }
+        }
+        // the keys it teaches, in order
+        for (i, keys) in [
+            &["h", "l", "J", "K"][..],
+            &["enter", "ctrl+]"],
+            &["t "],
+            &["w "],
+            &["tab"],
+            &[":"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            for k in *keys {
+                assert!(TOUR[i].contains(k), "{i}: {k}");
+            }
+        }
+        // past the end: the last balloon
+        assert_eq!(opening(&Who::Tour(9)).1, TOUR[5]);
+    }
+
+    #[test]
+    fn tour_choices_step_then_end() {
+        let rows = [
+            (0u8, Choice::TourNext, Step::Tour(Some(1))),
+            (4, Choice::TourNext, Step::Tour(Some(5))),
+            (5, Choice::TourNext, Step::Tour(None)),
+            (5, Choice::TourDone, Step::Tour(None)),
+            (2, Choice::TourSkip, Step::Tour(None)),
+        ];
+        for (step, c, want) in rows {
+            assert_eq!(on_choice(&Who::Tour(step), &c, None), want, "{step} {c:?}");
+        }
+        assert_eq!(on_line(&Who::Tour(0), "oi"), None);
     }
 
     #[test]

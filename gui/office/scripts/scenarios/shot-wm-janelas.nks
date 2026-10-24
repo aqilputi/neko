@@ -1,0 +1,14 @@
+# The phone's Janelas (W3, S22): every screen of the world with room · mesa · app_id;
+# enter glides there (and closes the phone), Q closes the window, M sends it to a room.
+spawn ${TESTCLIENT} --app-id demo.alpha --color 6699cc --no-frame-wait
+spawn ${TESTCLIENT} --app-id demo.bravo --color cc9966 --no-frame-wait
+wait json /screens/1/app_id "demo.bravo" 3000
+wait 300
+inject overlay {"phone": {"app": "janelas"}}
+wait 400
+expect mode COMANDOS
+expect json /ext/overlay/phone/app "janelas"
+expect json /ext/overlay/phone/items 2
+shot ${OUT}/shot-wm-janelas.png
+dump ${OUT}/dump-wm-janelas.json
+quit

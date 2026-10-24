@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 pub mod clock;
 mod dbus;
 pub mod demo;
+pub mod idle;
 pub mod pidmap;
 mod psi;
 #[cfg(feature = "pipewire")]

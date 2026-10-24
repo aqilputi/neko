@@ -54,14 +54,14 @@ check "processo morto não amostra" bash -c "! (source '$HERE/world-perf.sh'; pr
 # ---- NKW_STATS parsing ----
 cat >"$TMP/stderr" <<'EOF'
 uma linha qualquer do nkw
-nkw-stats {"t_us":10,"frame":1,"pass":"world","update_us":1,"cull_us":1,"submit_us":1,"compose_us":0,"draws":12,"tris":900,"gpu_us":null}
+nkw-stats {"t_us":10,"frame":1,"pass":"world","update_us":1,"import_us":2100,"cull_us":1,"submit_us":1,"compose_us":0,"draws":12,"tris":900,"gpu_us":null}
 nkw-stats {"t_us":20,"frame":2,"pass":"compose","update_us":1,"cull_us":1,"submit_us":1,"compose_us":5,"draws":30,"tris":100,"gpu_us":1500}
 nkw-stats {"t_us":30,"frame":3,"pass":"world","update_us":2500,"cull_us":1,"submit_us":1,"compose_us":0,"draws":5,"tris":50,"gpu_us":null}
 nkw-stats {"inject":{"key":"Return","t_us":1000}}
 nkw-stats {"inject":{"key":"a","t_us":2000}}
 nkw-stats {"inject":{"key":"a","t_us":3000}}
 nkw-stats quebrado {
-nkw-stats {"summary":true,"frames":2,"world_passes":1,"p50_us":800,"p95_us":2500,"dropped":1,"first_frame_ms":140,"rss_kb":51200,"compose_hud_changes":3,"look_events":7,"ext_plugin_us_p95":{"cats":1500,"wm":10}}
+nkw-stats {"summary":true,"frames":2,"world_passes":1,"p50_us":800,"p95_us":2500,"dropped":1,"first_frame_ms":140,"rss_kb":51200,"compose_hud_changes":3,"look_events":7,"ext_plugin_us_p95":{"cats":1500,"wm":10},"import_us_p50":300,"compose_us_p50":450}
 EOF
 cat >"$TMP/client.json" <<'EOF'
 {"ev":"configure","w":640,"h":480,"states":[],"t_us":5}
@@ -76,7 +76,9 @@ check "máximos por quadro" jqe '.draws_max == 30 and .tris_max == 900 and .gpu_
 check "latência casa tecla com tecla (Return fica no mundo)" \
 	jqe '.keys_injected == 3 and .keys_delivered == 2 and .key_latency_max_ms == 0.9 and .key_latency_p95_ms == 0.3' <<<"$st"
 check "divisão por estágio e quadros lentos" \
-	jqe '.stage_p95_ms.update == 0.001 and .stage_p50_ms.compose == 0 and .stage_p95_ms.compose == 0 and .slow_frames == 1' <<<"$st"
+	jqe '.stage_p95_ms.update == 0.001 and .stage_p50_ms.compose == 0 and .stage_p95_ms.compose == 0 and .slow_frames == 2' <<<"$st"
+check "importação separada do cull (onda 4)" \
+	jqe '.stage_p95_ms.import == 2.1 and .import_p50_ms == 0.3 and .compose_p50_ms == 0.45' <<<"$st"
 check "campos novos do resumo (S14)" \
 	jqe '.compose_hud_changes == 3 and .look_events == 7 and .ext_plugin_p95_ms.cats == 1.5 and .ext_plugin_p95_ms.wm == 0.01' <<<"$st"
 check "sem resumo: summary false" jqe '.summary == false and .frame_p95_ms == null' <<<"$(stats_json /dev/null)"
@@ -101,6 +103,15 @@ check "build 240/480 e 15/30" test "$(row build_cold)$(row build_incremental)" =
 check "desenho 80/200, 100k" test "$(row draws)$(row triangles)" = '[80,200,true][100000,null,true]'
 check "S1 vale em S1" jqe '.[] | select(.id == "cpu_idle") | .scenarios == ["S1"]' <<<"$rows"
 check "p95 em S3 e S4" jqe '.[] | select(.id == "frame_cpu_p95") | .scenarios == ["S3","S4"]' <<<"$rows"
+check "S4d (repintura inteira) só relatado" test "$(row frame_cpu_stress_p50)$(row frame_cpu_stress_p95)" = '[1,null,false][2,null,false]'
+check "importação e composição só relatadas" test "$(row frame_import)$(row frame_compose)" = '[null,null,false][null,null,false]'
+check "S7: composição do telefone 1,5 relatada" test "$(row phone_compose)" = '[1.5,null,false]'
+check "S7: vontades Rate ≤ 4 barram" jqe '.[] | select(.id == "rate_wishes") | (.scenarios | index("S7")) != null and .fail == 4 and .gated' <<<"$rows"
+check "S4d e S7 perdem quadros? só S4/S5 barram" jqe '.[] | select(.id == "camera_dropped") | .scenarios == ["S4","S5"] and .fail == 1' <<<"$rows"
+# the strip's clock rides the clock object's minute frame: S1 (recorded, nested) did not wake more
+last_s1=$(jq -c '.runs.winit.S1 // {}' "$HERE/world-perf-last.json")
+check "S1 registrado: ≤ 1 wakeup/s e ≤ 0,1 % com a faixa (S1=$last_s1)" \
+	jqe '.wakeups_per_s <= 1 and .cpu_pct <= 0.1' <<<"$last_s1"
 
 # ---- script expansion ----
 printf '%s\n' 'spawn ${TESTCLIENT} --log ${RUN}/c.json' '#@args --reduced-motion' '#@every 100 key l | key h' >"$TMP/x.nks"
@@ -116,12 +127,13 @@ check "--json: forma" jqe '.version == 1 and .mode == "winit" and .seconds == 1 
 	and (.scenarios.S1.checks | map(.row) | index("cpu_idle") != null)
 	and (.scenarios.S2.metrics.key_latency_p95_ms | type == "number")
 	and (.scenarios.S4.checks[] | select(.row == "frame_cpu_p95") | .value == 1.2 and .status == "ok")
-	and (.scenarios.bin.metrics.binary_mb < 1)' <<<"$OUT"
+	and (.scenarios.bin.metrics.binary_mb < 1)
+	and (.scenarios.S4.metrics.import_p50_ms == 0.1 and .scenarios.S4.metrics.compose_p50_ms == 0.2)' <<<"$OUT"
 check "tabela: uma linha por cenário" test "$(grep -cE '^(S1|S2|S4|bin) +pass' "$TMP/table")" = 4
 check "campos novos do resumo (S12)" jqe '.scenarios.S1.metrics.ext_tick_p95_ms == 0.04 and .scenarios.S1.metrics.rate_wishes_max == 1' <<<"$OUT"
 
 perf
-check "padrão: S1 a S6 e S3r (rc=$RC)" jqe '.scenarios | keys == ["S1","S2","S3","S3r","S4","S5","S6","bin"]' <<<"$OUT"
+check "padrão: S1 a S7, S3r e S4d (rc=$RC)" jqe '.scenarios | keys == ["S1","S2","S3","S3r","S4","S4d","S5","S6","S7","bin"]' <<<"$OUT"
 
 FAKE_NKW_RATES=5 perf --scenario S1
 check "mais de 4 vontades Rate falham" jqe '.scenarios.S1.checks[] | select(.row == "rate_wishes") | .status == "fail"' <<<"$OUT"

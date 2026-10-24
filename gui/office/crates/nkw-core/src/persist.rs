@@ -219,6 +219,9 @@ pub struct WorldFile {
     pub station: Option<StationRec>,
     #[serde(default)]
     pub places: BTreeMap<String, Place>,
+    /// the receptionist's first-run tour was seen (or skipped)
+    #[serde(default)]
+    pub tour_done: bool,
 }
 
 impl Default for WorldFile {
@@ -230,6 +233,7 @@ impl Default for WorldFile {
             screens: Vec::new(),
             station: None,
             places: BTreeMap::new(),
+            tour_done: false,
         }
     }
 }
@@ -463,7 +467,27 @@ mod tests {
                     air: None,
                 },
             )]),
+            tour_done: true,
         }
+    }
+
+    #[test]
+    fn tour_done_is_new_and_optional() {
+        // a file of wave 3 (no key) reads unchanged, the tour not done
+        let old = r#"{"version": 1, "rooms": [{"id": 0, "name": "acme", "kind": "free"}]}"#;
+        let f = parse(old).unwrap();
+        assert!(!f.tour_done);
+        assert_eq!(f.rooms.len(), 1);
+        let v0 = parse(r#"{"rooms": ["acme"]}"#).unwrap();
+        assert!(!v0.tour_done);
+        let done = WorldFile {
+            tour_done: true,
+            ..WorldFile::default()
+        };
+        let text = to_string(&done);
+        assert!(text.contains("\"tour_done\": true"), "{text}");
+        assert!(parse(&text).unwrap().tour_done);
+        assert_eq!(VERSION, 1, "an additive key: no new version");
     }
 
     #[test]

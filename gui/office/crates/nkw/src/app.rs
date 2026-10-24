@@ -58,6 +58,8 @@ pub struct Script {
     pub wait: Wait,
     /// `wait json`: (line, pointer, value, deadline)
     pub json_wait: Option<(usize, String, serde_json::Value, Time)>,
+    /// `env K=V` lines so far: every later `spawn` carries them
+    pub env: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -179,6 +181,12 @@ impl Nkw {
     }
 
     pub fn spawn(&mut self, args: &[String]) {
+        self.spawn_with(args, &[]);
+    }
+
+    /// `spawn` plus `env`, applied after the hub's own (S20): a `DISPLAY`
+    /// given here is kept (the hub only removes the host's).
+    pub fn spawn_with(&mut self, args: &[String], env: &[(String, String)]) {
         let Some((cmd, rest)) = args.split_first() else {
             return;
         };
@@ -194,6 +202,9 @@ impl Nkw {
         if let Some(a) = self.ext.wm.activation.as_mut() {
             let (token, _) = a.create_external_token(None);
             c.env("XDG_ACTIVATION_TOKEN", token.as_str());
+        }
+        for (k, v) in env {
+            c.env(k, v);
         }
         // SAFETY: the closure only calls async-signal-safe functions.
         unsafe {
@@ -273,9 +284,15 @@ impl Nkw {
                         None => return self.script_fail(no, "no keymap"),
                     }
                 }
+                Cmd::Env(k, v) => {
+                    let env = &mut self.script.as_mut().unwrap().env;
+                    env.retain(|(e, _)| *e != k);
+                    env.push((k, v));
+                }
                 Cmd::Spawn(args) => {
                     let had = self.mapped();
-                    self.spawn(&args);
+                    let env = self.script.as_ref().unwrap().env.clone();
+                    self.spawn_with(&args, &env);
                     let until = self.now() + 5.0;
                     self.script.as_mut().unwrap().wait = Wait::Window { had, until };
                     self.poll_window_wait();
@@ -398,6 +415,7 @@ impl Nkw {
                 keys: None,
                 wait: Wait::Settle,
                 json_wait: None,
+                env: Vec::new(),
             });
             self.shot_when_settled(p);
             return;
@@ -652,6 +670,7 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
     seat.add_keyboard(XkbConfig::default(), 200, 25)
         .map_err(|e| (exit::USAGE, format!("keymap (XKB_DEFAULT_*): {e:?}")))?;
     seat.add_pointer();
+    let protos = crate::protocols::Protocols::new(&dh, &cli);
     let mut shm_state = ShmState::new::<Nkw>(&dh, vec![]);
     shm_state.update_formats(shm_formats);
 
@@ -717,6 +736,10 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
         pointer_locked: false,
         hud_hash: None,
         hud_busy: false,
+        protos,
+        host_cursor: crate::frame::HostCursor::Default,
+        was_focus: false,
+        idle_inhibit: false,
         cli: cli.clone(),
     };
     st.visible = st.world.visible_rooms(&[]);
@@ -830,6 +853,7 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
             keys: KeyTable::from_string(&keymap),
             wait: Wait::None,
             json_wait: None,
+            env: Vec::new(),
         });
     }
 

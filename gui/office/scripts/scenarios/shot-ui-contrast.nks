@@ -1,0 +1,15 @@
+# High contrast + 130 % font (W2): label, strip, a toast and the phone's Ajustes.
+key J
+wait 500
+inject objects {"status": {"clock": [14, 5], "battery": [12, false], "net": [true, 3]}}
+inject overlay {"prefs": {"contrast": "high", "font_scale": 1.3}}
+inject overlay {"toast": {"text": "alto contraste e fonte a 130 %", "kind": "info", "ms": 20000}}
+wait 500
+shot ${OUT}/shot-ui-contrast.png
+inject overlay {"phone": {"app": "ajustes"}}
+wait 400
+expect json /ext/overlay/prefs/contrast "high"
+expect json /ext/overlay/prefs/font_scale_pct 130
+shot ${OUT}/shot-ui-contrast-phone.png
+dump ${OUT}/dump-ui-contrast.json
+quit

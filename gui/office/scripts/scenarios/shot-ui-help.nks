@@ -1,0 +1,12 @@
+# Ajuda (W2): `?` in NAV opens the phone on the help, the current mode's keys first, read from
+# the live keymap (the fallback table under --core none).
+key J
+wait 500
+key question
+wait 400
+expect mode COMANDOS
+expect json /ext/overlay/phone/app "ajuda"
+expect json /ext/overlay/phone/selected "sec:normal.world"
+shot ${OUT}/shot-ui-help.png
+dump ${OUT}/dump-ui-help.json
+quit

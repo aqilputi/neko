@@ -140,6 +140,15 @@ pub struct Nkw {
     pub hud_hash: Option<u64>,
     /// the last composed HUD had a dialog, badges or labels
     pub hud_busy: bool,
+    /// the extra protocols (S23; W4's module)
+    pub protos: crate::protocols::Protocols,
+    /// what the host window's cursor shows (S20)
+    pub host_cursor: crate::frame::HostCursor,
+    /// the mode was FOCO at the end of the last `apply` (to call
+    /// `protos_mode_left_focus` once when it leaves)
+    pub was_focus: bool,
+    /// some client inhibits idle (S23): told to the objects on a change (W6)
+    pub idle_inhibit: bool,
 }
 
 impl Nkw {
@@ -243,15 +252,26 @@ impl Nkw {
             }
         }
         self.sync_pointer_lock();
+        let focus = self.in_focus_mode();
+        if self.was_focus && !focus {
+            self.protos_mode_left_focus();
+        }
+        self.was_focus = focus;
+    }
+
+    /// The machine is in FOCO (a window or a cat's terminal has the keys).
+    pub fn in_focus_mode(&self) -> bool {
+        matches!(self.world.mode().kind(), Some(nkw_core::Kind::Focus(_)))
     }
 
     /// Lock the host pointer while walking with mouse-look, release it
     /// otherwise (S14: on `WalkStart`/`WalkStop`, whatever ended the walk).
     pub fn sync_pointer_lock(&mut self) {
-        let want = self.world.walking.is_some()
+        let walk = self.world.walking.is_some()
             && self.world.focus_2d().is_none()
             && self.world.walk_config().mouse_look;
-        self.set_pointer_lock(want);
+        // a FOCO client's lock (S23) holds the host pointer too
+        self.set_pointer_lock(walk || self.protos.client_locked());
     }
 
     /// `Host::Winit`: `CursorGrabMode::Locked` (falling back to `Confined`)
@@ -329,6 +349,7 @@ impl Nkw {
                 Req::Wish(w) => self.world.want(w),
                 Req::GlideTo(p) => self.world.glide_free(p, now),
                 Req::Spawn(argv) => self.spawn(&argv),
+                Req::SpawnWith { argv, env } => self.spawn_with(&argv, &env),
                 Req::Configure {
                     screen,
                     size,
@@ -341,7 +362,12 @@ impl Nkw {
                     let ctx = crate::hook_ctx!(self, now);
                     self.ext.objects.cue(cue, at, &ctx);
                 }
-                Req::Keymap(b) => self.ext.router.set_bindings(b),
+                Req::Keymap(b) => {
+                    self.ext.router.set_bindings(b);
+                    // Ajuda and the phone's printable keys follow rebinds (W2)
+                    let binds = self.ext.router.binds().to_vec();
+                    self.ext.overlay.set_help(binds);
+                }
                 Req::Quit(code) => self.quit(code),
                 Req::SyncContexts(c) => {
                     let outs = self.world.sync_contexts(&c, now);
@@ -407,6 +433,11 @@ impl Nkw {
             ext::obstacles(&self.ext.plugins_ref(), room, &ctx)
         };
         self.world.set_obstacles(room, extra);
+        let inhibit = self.protos.idle_inhibited();
+        if inhibit != self.idle_inhibit {
+            self.idle_inhibit = inhibit;
+            self.ext.objects.set_idle_inhibit(inhibit);
+        }
     }
 
     /// A plugin thread pinged the loop.
@@ -431,7 +462,28 @@ impl Nkw {
     pub fn dump(&self) -> Value {
         let mut v = self.world.dump(&self.all_wishes());
         v["ext"] = self.ext.dump();
+        let status = {
+            let ctx = crate::hook_ctx!(self, self.now());
+            self.ext
+                .plugins_ref()
+                .iter()
+                .fold(ext::Status::default(), |a, p| a.merge(p.status(&ctx)))
+        };
+        v["status"] = serde_json::to_value(&status).unwrap_or(Value::Null);
+        let protocols = self.protos.dump();
+        // a client's lock (S23, W4's `locked_by`) or the walk's
+        let by_client = !protocols["locked_by"].is_null();
+        v["protocols"] = protocols;
+        self.protos.annotate_screens(&mut v);
         v["host"] = serde_json::json!({
+            "cursor": self.host_cursor.name(),
+            "pointer_locked_by": if by_client {
+                Value::from("client")
+            } else if self.pointer_locked {
+                Value::from("walk")
+            } else {
+                Value::Null
+            },
             "pointer_locked": self.pointer_locked,
             "compose_hud_changes": self.stats.compose_hud_changes,
             "look_events": self.stats.look_events,

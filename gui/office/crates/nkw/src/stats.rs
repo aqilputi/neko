@@ -37,9 +37,16 @@ pub struct Frame {
     pub frame: u64,
     pub pass: &'static str,
     pub update_us: u64,
+    /// the shm/dmabuf imports of the world pass (`import_surface_tree`),
+    /// split out of `cull_us`
+    pub import_us: u64,
     pub cull_us: u64,
     pub submit_us: u64,
     pub compose_us: u64,
+    /// the part of `compose_us` that gathers the HUD (`hud_input`, the
+    /// overlay's elements, their render elements); the rest is
+    /// `render_output` and the submit
+    pub hud_us: u64,
     pub draws: u32,
     pub tris: u32,
     pub gpu_us: Option<u64>,
@@ -69,6 +76,12 @@ pub struct Summary {
     pub compose_hud_changes: u64,
     /// relative pointer motions that reached the walker
     pub look_events: u64,
+    /// the world pass's client imports per frame (0 on compose-only frames)
+    pub import_us_p50: u64,
+    pub import_us_p95: u64,
+    /// the 2D composition (`render_output` + submit) per frame
+    pub compose_us_p50: u64,
+    pub compose_us_p95: u64,
     /// `NKW_STATS=ext`: each plugin's `drain`+`tick` per frame, p95 µs
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ext_plugin_us_p95: Option<std::collections::BTreeMap<&'static str, u64>>,
@@ -95,6 +108,14 @@ pub fn missed(gap: f64, period: f64) -> u64 {
     }
 }
 
+/// Frames lost over two consecutive gaps, the first of them late: a late
+/// frame that the next one makes up for (late then early, two frames in two
+/// vblanks) lost nothing; slots beyond the two frames did.
+pub fn missed_pair(g1: f64, g2: f64, period: f64) -> u64 {
+    let slots = ((g1 + g2) / period).round();
+    if slots > 2.0 { slots as u64 - 2 } else { 0 }
+}
+
 /// The collector.
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -103,9 +124,14 @@ pub struct Stats {
     pub frames: u64,
     pub world_passes: u64,
     cpu_us: Vec<u64>,
+    import_us: Vec<u64>,
+    compose_us: Vec<u64>,
     pub dropped: u64,
     pub first_frame_ms: Option<f64>,
     last_animated: Option<f64>,
+    /// a late gap (`missed > 0`) waiting for the next frame's gap
+    /// ([`missed_pair`]); flushed alone when the animation stops
+    late_gap: Option<f64>,
     ext_tick_us: Vec<u64>,
     pub rate_wishes_max: u64,
     /// `NKW_MEM=1`: an RSS attribution line (`nkw-mem …`) at the first frame and at exit
@@ -121,6 +147,8 @@ pub struct Stats {
     pub warmup_until: f64,
     pub compose_hud_changes: u64,
     pub look_events: u64,
+    /// the vblank period of the last frame
+    period: f64,
 }
 
 impl Stats {
@@ -165,12 +193,15 @@ impl Stats {
     /// gap since the previous animated frame counts as dropped frames.
     pub fn frame(&mut self, f: &Frame, now: f64, animated: bool, period: f64) {
         self.frames += 1;
+        self.period = period;
         if f.pass == "world" {
             self.world_passes += 1;
         }
-        let cpu = f.update_us + f.cull_us + f.submit_us + f.compose_us;
+        let cpu = f.update_us + f.import_us + f.cull_us + f.submit_us + f.compose_us;
         if self.warm(now) {
             self.cpu_us.push(cpu);
+            self.import_us.push(f.import_us);
+            self.compose_us.push(f.compose_us);
         }
         if self.first_frame_ms.is_none() {
             self.first_frame_ms = since_process_start_ms();
@@ -178,15 +209,39 @@ impl Stats {
                 print_mem("first_frame");
             }
         }
+        let mut dropped_here = false;
         if animated {
-            if let Some(prev) = self.last_animated {
-                self.dropped += missed(now - prev, period);
+            // a gap that starts in the warm-up is the warm-up's (like its
+            // frames in the percentiles)
+            if let Some(prev) = self.last_animated
+                && self.warm(prev)
+            {
+                let gap = now - prev;
+                let n = match self.late_gap.take() {
+                    Some(g1) => missed_pair(g1, gap, period),
+                    None if missed(gap, period) > 0 => {
+                        // judged with the next gap
+                        self.late_gap = Some(gap);
+                        0
+                    }
+                    None => 0,
+                };
+                self.dropped += n;
+                dropped_here = n > 0;
+                if n > 0 && (self.every || self.slow) {
+                    // which frame ended the loss (its stage split follows)
+                    let v = serde_json::json!({"drop": {
+                        "frame": f.frame, "gap_us": (gap * 1e6) as u64, "missed": n,
+                    }});
+                    eprintln!("nkw-stats {v}");
+                }
             }
             self.last_animated = Some(now);
         } else {
+            self.flush_late(period);
             self.last_animated = None;
         }
-        if self.every || (self.slow && cpu > SLOW_US) {
+        if self.every || (self.slow && (cpu > SLOW_US || dropped_here)) {
             eprintln!("nkw-stats {}", serde_json::to_string(f).unwrap());
         }
     }
@@ -214,7 +269,16 @@ impl Stats {
         }
     }
 
+    /// A pending late gap with no next frame counts alone.
+    fn flush_late(&mut self, period: f64) {
+        if let Some(g) = self.late_gap.take() {
+            self.dropped += missed(g, period);
+        }
+    }
+
     pub fn summary(&mut self) -> Summary {
+        // the period the late gap was judged with (60 Hz unless one was seen)
+        self.flush_late(self.period);
         let mut v = self.cpu_us.clone();
         Summary {
             summary: true,
@@ -229,6 +293,10 @@ impl Stats {
             rate_wishes_max: self.rate_wishes_max,
             compose_hud_changes: self.compose_hud_changes,
             look_events: self.look_events,
+            import_us_p50: percentile(&mut self.import_us.clone(), 50.0),
+            import_us_p95: percentile(&mut self.import_us.clone(), 95.0),
+            compose_us_p50: percentile(&mut self.compose_us.clone(), 50.0),
+            compose_us_p95: percentile(&mut self.compose_us.clone(), 95.0),
             ext_plugin_us_p95: self.ext_detail.then(|| {
                 PLUGINS
                     .iter()
@@ -398,6 +466,7 @@ mod tests {
             "frame",
             "pass",
             "update_us",
+            "import_us",
             "cull_us",
             "submit_us",
             "compose_us",
@@ -446,6 +515,10 @@ mod tests {
             "rate_wishes_max",
             "compose_hud_changes",
             "look_events",
+            "import_us_p50",
+            "import_us_p95",
+            "compose_us_p50",
+            "compose_us_p95",
         ] {
             assert!(v.get(k).is_some(), "{k}");
         }
@@ -453,6 +526,83 @@ mod tests {
             v.get("ext_plugin_us_p95").is_none(),
             "only with NKW_STATS=ext"
         );
+    }
+
+    #[test]
+    fn import_and_compose_are_measured_apart() {
+        let mut s = Stats::from_env(Some("slow")).with_warmup(Some("1000"), 0.0);
+        let f = |import_us, compose_us| Frame {
+            pass: "world",
+            import_us,
+            cull_us: 50,
+            compose_us,
+            ..Frame::default()
+        };
+        // the warm-up frame does not count
+        s.frame(&f(9000, 9000), 0.5, false, 1.0 / 60.0);
+        for (i, (imp, comp)) in [(100, 400), (300, 200), (200, 300)].into_iter().enumerate() {
+            s.frame(&f(imp, comp), 2.0 + i as f64, false, 1.0 / 60.0);
+        }
+        let sum = s.summary();
+        assert_eq!((sum.import_us_p50, sum.import_us_p95), (200, 300));
+        assert_eq!((sum.compose_us_p50, sum.compose_us_p95), (300, 400));
+        // the import is part of the frame's CPU
+        assert_eq!(sum.p50_us, 200 + 50 + 300);
+    }
+
+    #[test]
+    fn a_gap_inside_the_warmup_is_not_a_drop() {
+        // the warm-up's frames do not count in the percentiles; a stall
+        // there (first world pass, shader warm-up, spawns) is not a drop
+        // of the measured window either
+        let p = 1.0 / 60.0;
+        let mut s = Stats::from_env(Some("1")).with_warmup(Some("1000"), 0.0);
+        let f = Frame {
+            pass: "world",
+            ..Frame::default()
+        };
+        s.frame(&f, 0.90, true, p);
+        s.frame(&f, 0.90 + 4.0 * p, true, p); // 3 missed, in the warm-up
+        assert_eq!(s.dropped, 0);
+        // the gap that crosses into the window counts from its first frame on
+        s.frame(&f, 1.05, true, p);
+        s.frame(&f, 1.05 + 3.0 * p, true, p);
+        assert_eq!(s.summary().dropped, 2, "a late gap at the end still counts");
+    }
+
+    #[test]
+    fn a_late_frame_the_next_one_makes_up_for_is_not_a_drop() {
+        // S5, nested (wave 4): frame 149 came 26.0 ms after 148, frame 150
+        // 11.4 ms after 149 — two frames in two vblanks, drawn late then
+        // early. The old rule counted the 26 ms gap alone as one drop.
+        let p = 1.0 / 60.0;
+        let alone = missed(0.0260, p);
+        assert_eq!(alone, 1, "alone, the late gap looks like a drop");
+        assert_eq!(missed_pair(0.0260, 0.0114, p), 0);
+        // a real loss: the next frame comes on time, the slot stays lost
+        assert_eq!(missed_pair(2.0 * p, p, p), 1);
+        assert_eq!(missed_pair(3.1 * p, 1.0 * p, p), 2);
+        let mut s = Stats::from_env(Some("slow"));
+        let f = Frame {
+            pass: "world",
+            ..Frame::default()
+        };
+        let mut t = 0.0;
+        for gap in [p, p, 0.0260, 0.0114, p, p] {
+            t += gap;
+            s.frame(&f, t, true, p);
+        }
+        assert_eq!(s.summary().dropped, 0);
+        for gap in [p, 2.0 * p, p, p] {
+            t += gap;
+            s.frame(&f, t, true, p);
+        }
+        assert_eq!(s.summary().dropped, 1, "a lost slot still counts");
+        // a late gap right before the animation stops counts on its own
+        t += 2.0 * p;
+        s.frame(&f, t, true, p);
+        s.frame(&f, t + 1.0, false, p);
+        assert_eq!(s.summary().dropped, 2);
     }
 
     #[test]

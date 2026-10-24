@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::Rgb;
+pub use crate::model::Rgb;
 
 /// The shipped font (JetBrains Mono NL, OFL-1.1; assets/fonts/OFL.txt).
 pub static FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/JetBrainsMonoNL-Regular.ttf");
@@ -209,6 +209,228 @@ impl Canvas {
                     self.px[i + 3] = 255;
                 } else {
                     self.blend(xx, yy, c, k);
+                }
+            }
+        }
+    }
+
+    /// Calls `cover(px, py)` (pixel centre, 0..1) over the box `[x0, x1) ×
+    /// [y0, y1)` clipped to the canvas; fills with `c` (blended) or, with
+    /// `None`, cuts the alpha (a punch: `a · (1 − cover)`).
+    fn shade(&mut self, b: (f32, f32, f32, f32), c: Option<Rgb>, cover: impl Fn(f32, f32) -> f32) {
+        let x0 = b.0.floor().max(0.0) as i32;
+        let y0 = b.1.floor().max(0.0) as i32;
+        let x1 = (b.2.ceil() as i32).min(self.w as i32);
+        let y1 = (b.3.ceil() as i32).min(self.h as i32);
+        for yy in y0..y1 {
+            for xx in x0..x1 {
+                let k = cover(xx as f32 + 0.5, yy as f32 + 0.5).clamp(0.0, 1.0);
+                if k <= 0.0 {
+                    continue;
+                }
+                let i = (yy as usize * self.w + xx as usize) * 4;
+                match c {
+                    Some(c) => {
+                        let a = (k * 255.0).round() as u8;
+                        if a == 255 {
+                            self.px[i..i + 3].copy_from_slice(&c);
+                            self.px[i + 3] = 255;
+                        } else {
+                            self.blend(xx, yy, c, a);
+                        }
+                    }
+                    None => {
+                        let a = self.px[i + 3] as f32 * (1.0 - k);
+                        self.px[i + 3] = a.round() as u8;
+                    }
+                }
+            }
+        }
+    }
+
+    /// A filled anti-aliased disc, centre in pixel coordinates.
+    pub fn disc(&mut self, cx: f32, cy: f32, r: f32, c: Rgb) {
+        self.disc_op(cx, cy, r, Some(c));
+    }
+
+    /// Cuts a disc out of what is there (alpha).
+    pub fn punch_disc(&mut self, cx: f32, cy: f32, r: f32) {
+        self.disc_op(cx, cy, r, None);
+    }
+
+    fn disc_op(&mut self, cx: f32, cy: f32, r: f32, c: Option<Rgb>) {
+        if r <= 0.0 {
+            return;
+        }
+        let b = (cx - r - 1.0, cy - r - 1.0, cx + r + 1.0, cy + r + 1.0);
+        self.shade(b, c, |x, y| {
+            r + 0.5 - ((x - cx).powi(2) + (y - cy).powi(2)).sqrt()
+        });
+    }
+
+    /// A stroke `w` wide from (x0, y0) to (x1, y1) with round caps.
+    pub fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, w: f32, c: Rgb) {
+        self.line_op(x0, y0, x1, y1, w, Some(c));
+    }
+
+    /// Cuts a round-capped stroke out of what is there.
+    pub fn punch_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, w: f32) {
+        self.line_op(x0, y0, x1, y1, w, None);
+    }
+
+    fn line_op(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, w: f32, c: Option<Rgb>) {
+        if w <= 0.0 {
+            return;
+        }
+        let h = w / 2.0;
+        let b = (
+            x0.min(x1) - h - 1.0,
+            y0.min(y1) - h - 1.0,
+            x0.max(x1) + h + 1.0,
+            y0.max(y1) + h + 1.0,
+        );
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len2 = (dx * dx + dy * dy).max(1e-6);
+        self.shade(b, c, |x, y| {
+            let t = (((x - x0) * dx + (y - y0) * dy) / len2).clamp(0.0, 1.0);
+            let (px, py) = (x0 + dx * t - x, y0 + dy * t - y);
+            h + 0.5 - (px * px + py * py).sqrt()
+        });
+    }
+
+    /// A filled anti-aliased triangle (either winding).
+    pub fn tri(&mut self, p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), c: Rgb) {
+        self.tri_op(p0, p1, p2, Some(c));
+    }
+
+    /// Cuts a triangle out of what is there.
+    pub fn punch_tri(&mut self, p0: (f32, f32), p1: (f32, f32), p2: (f32, f32)) {
+        self.tri_op(p0, p1, p2, None);
+    }
+
+    fn tri_op(&mut self, p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), c: Option<Rgb>) {
+        let area = (p1.0 - p0.0) * (p2.1 - p0.1) - (p1.1 - p0.1) * (p2.0 - p0.0);
+        if area.abs() < 1e-6 {
+            return;
+        }
+        // counter-clockwise in screen terms, so "inside" is positive
+        let (p1, p2) = if area < 0.0 { (p2, p1) } else { (p1, p2) };
+        let edges = [(p0, p1), (p1, p2), (p2, p0)];
+        let b = (
+            p0.0.min(p1.0).min(p2.0) - 1.0,
+            p0.1.min(p1.1).min(p2.1) - 1.0,
+            p0.0.max(p1.0).max(p2.0) + 1.0,
+            p0.1.max(p1.1).max(p2.1) + 1.0,
+        );
+        self.shade(b, c, |x, y| {
+            // signed distance to each edge's line; the minimum is the
+            // distance to the triangle's boundary (inside: positive)
+            edges
+                .iter()
+                .map(|(a, b)| {
+                    let (ex, ey) = (b.0 - a.0, b.1 - a.1);
+                    let l = (ex * ex + ey * ey).sqrt().max(1e-6);
+                    ((y - a.1) * ex - (x - a.0) * ey) / l
+                })
+                .fold(f32::INFINITY, f32::min)
+                + 0.5
+        });
+    }
+
+    /// Cuts a rectangle out of what is there (pixel coordinates, AA edges).
+    pub fn punch_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let b = (x - 1.0, y - 1.0, x + w + 1.0, y + h + 1.0);
+        self.shade(b, None, |px, py| {
+            let cx = (px - x + 0.5).min(x + w - px + 0.5).clamp(0.0, 1.0);
+            let cy = (py - y + 0.5).min(y + h - py + 0.5).clamp(0.0, 1.0);
+            cx * cy
+        });
+    }
+
+    /// The outline of a rounded rectangle, `ring_w` wide, inside the box.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rounded_rect_ring(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        r: i32,
+        ring_w: i32,
+        c: Rgb,
+    ) {
+        if w <= 0 || h <= 0 || ring_w <= 0 {
+            return;
+        }
+        let r = r.clamp(0, w.min(h) / 2) as f32;
+        let (hw, hh) = (w as f32 / 2.0, h as f32 / 2.0);
+        let (cx, cy) = (x as f32 + hw, y as f32 + hh);
+        let rw = ring_w as f32;
+        let b = (x as f32, y as f32, (x + w) as f32, (y + h) as f32);
+        self.shade(b, Some(c), |px, py| {
+            let qx = (px - cx).abs() - (hw - r);
+            let qy = (py - cy).abs() - (hh - r);
+            let out = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+            let d = out + qx.max(qy).min(0.0) - r;
+            // inside the outer edge and outside the inner one
+            (0.5 - d)
+                .clamp(0.0, 1.0)
+                .min((d + rw + 0.5).clamp(0.0, 1.0))
+        });
+    }
+
+    /// A rounded rectangle at sub-pixel coordinates (icons), filled, or
+    /// only its outline `ring_w` wide inside the box when `ring_w > 0`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rounded_rect_f(&mut self, x: f32, y: f32, w: f32, h: f32, r: f32, ring_w: f32, c: Rgb) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let r = r.clamp(0.0, w.min(h) / 2.0);
+        let (hw, hh) = (w / 2.0, h / 2.0);
+        let (cx, cy) = (x + hw, y + hh);
+        let b = (x - 1.0, y - 1.0, x + w + 1.0, y + h + 1.0);
+        self.shade(b, Some(c), |px, py| {
+            let qx = (px - cx).abs() - (hw - r);
+            let qy = (py - cy).abs() - (hh - r);
+            let out = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+            let d = out + qx.max(qy).min(0.0) - r;
+            let fill = (0.5 - d).clamp(0.0, 1.0);
+            if ring_w > 0.0 {
+                fill.min((d + ring_w + 0.5).clamp(0.0, 1.0))
+            } else {
+                fill
+            }
+        });
+    }
+
+    /// Composites `src` (straight alpha) at (x, y) at `opacity`, clipped.
+    pub fn blit(&mut self, src: &Canvas, x: i32, y: i32, opacity: u8) {
+        if opacity == 0 {
+            return;
+        }
+        for sy in 0..src.h as i32 {
+            let dy = y + sy;
+            if dy < 0 || dy >= self.h as i32 {
+                continue;
+            }
+            for sx in 0..src.w as i32 {
+                let dx = x + sx;
+                if dx < 0 || dx >= self.w as i32 {
+                    continue;
+                }
+                let i = (sy as usize * src.w + sx as usize) * 4;
+                let a = (src.px[i + 3] as u32 * opacity as u32 + 127) / 255;
+                if a == 0 {
+                    continue;
+                }
+                let c = [src.px[i], src.px[i + 1], src.px[i + 2]];
+                if a == 255 {
+                    let j = (dy as usize * self.w + dx as usize) * 4;
+                    self.px[j..j + 3].copy_from_slice(&c);
+                    self.px[j + 3] = 255;
+                } else {
+                    self.blend(dx, dy, c, a as u8);
                 }
             }
         }
@@ -616,5 +838,99 @@ mod tests {
         cv.rect(-2, -2, 100, 3, [9, 9, 9]);
         assert_eq!(cv.px[0], 9);
         assert_eq!(cv.px[(3 * 4) * 4], 0);
+    }
+
+    // ---- wave 4 (W2): the toolkit's primitives ----
+
+    fn rgb_at(cv: &Canvas, x: usize, y: usize) -> [u8; 3] {
+        let i = (y * cv.w + x) * 4;
+        [cv.px[i], cv.px[i + 1], cv.px[i + 2]]
+    }
+
+    #[test]
+    fn disc_is_filled_aa_and_symmetric() {
+        let mut cv = Canvas::transparent(20, 20);
+        cv.disc(10.0, 10.0, 6.0, [200, 100, 50]);
+        assert_eq!(alpha(&cv, 10, 10), 255);
+        assert_eq!(rgb_at(&cv, 10, 10), [200, 100, 50]);
+        assert_eq!(alpha(&cv, 10, 2), 0, "outside");
+        let edge = alpha(&cv, 15, 10);
+        assert!(edge > 0, "{edge}");
+        for y in 0..20 {
+            for x in 0..20 {
+                assert_eq!(alpha(&cv, x, y), alpha(&cv, 19 - x, y), "mirror x {x},{y}");
+                assert_eq!(alpha(&cv, x, y), alpha(&cv, x, 19 - y), "mirror y {x},{y}");
+            }
+        }
+        // clipped at the canvas edge, no panic
+        cv.disc(-3.0, 25.0, 8.0, [1, 2, 3]);
+    }
+
+    #[test]
+    fn line_is_a_round_capped_stroke() {
+        let mut cv = Canvas::transparent(30, 10);
+        cv.line(5.0, 5.0, 25.0, 5.0, 2.0, [10, 20, 30]);
+        assert_eq!(alpha(&cv, 15, 4), 255);
+        assert_eq!(alpha(&cv, 15, 5), 255);
+        assert_eq!(alpha(&cv, 15, 1), 0);
+        assert_eq!(alpha(&cv, 1, 4), 0, "beyond the cap");
+        assert!(alpha(&cv, 4, 4) > 0, "the cap is round");
+        // a diagonal one touches its end points
+        let mut d = Canvas::transparent(20, 20);
+        d.line(2.0, 2.0, 18.0, 18.0, 2.0, [1, 1, 1]);
+        assert_eq!(alpha(&d, 10, 10), 255);
+        assert_eq!(alpha(&d, 17, 2), 0);
+    }
+
+    #[test]
+    fn tri_fills_inside_its_edges_either_winding() {
+        let mut a = Canvas::transparent(20, 20);
+        a.tri((2.0, 18.0), (10.0, 2.0), (18.0, 18.0), [9, 9, 9]);
+        let mut b = Canvas::transparent(20, 20);
+        b.tri((18.0, 18.0), (10.0, 2.0), (2.0, 18.0), [9, 9, 9]);
+        assert_eq!(a.px, b.px, "winding does not matter");
+        assert_eq!(alpha(&a, 10, 14), 255);
+        assert_eq!(alpha(&a, 2, 3), 0);
+        for y in 0..20 {
+            for x in 0..20 {
+                assert_eq!(alpha(&a, x, y), alpha(&a, 19 - x, y), "{x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn rounded_rect_ring_is_hollow_with_its_width() {
+        let mut cv = Canvas::transparent(40, 30);
+        cv.rounded_rect_ring(0, 0, 40, 30, 8, 2, [255, 159, 67]);
+        assert_eq!(alpha(&cv, 20, 15), 0, "hollow");
+        assert_eq!(alpha(&cv, 20, 0), 255);
+        assert_eq!(alpha(&cv, 20, 1), 255);
+        assert_eq!(alpha(&cv, 20, 3), 0, "2 px wide");
+        assert_eq!(alpha(&cv, 0, 0), 0, "rounded corner");
+        assert_eq!(alpha(&cv, 39, 15), 255);
+    }
+
+    #[test]
+    fn punches_cut_alpha_and_blit_composites() {
+        let mut cv = Canvas::transparent(20, 20);
+        cv.rect(0, 0, 20, 20, [50, 50, 50]);
+        cv.punch_disc(10.0, 10.0, 3.0);
+        assert_eq!(alpha(&cv, 10, 10), 0);
+        assert_eq!(alpha(&cv, 1, 1), 255);
+        cv.punch_rect(0.0, 0.0, 4.0, 4.0);
+        assert_eq!(alpha(&cv, 1, 1), 0);
+        cv.punch_line(0.0, 18.0, 19.0, 18.0, 2.0);
+        assert_eq!(alpha(&cv, 10, 18), 0);
+        cv.punch_tri((14.0, 0.0), (20.0, 0.0), (20.0, 6.0));
+        assert_eq!(alpha(&cv, 19, 1), 0);
+        // blit at half opacity over white
+        let mut dst = Canvas::new(30, 30, [255, 255, 255]);
+        dst.blit(&cv, 5, 5, 128);
+        assert_eq!(rgb_at(&dst, 0, 0), [255, 255, 255]);
+        let v = rgb_at(&dst, 5 + 8, 5 + 6);
+        assert!(v[0] > 140 && v[0] < 160, "{v:?}");
+        assert_eq!(rgb_at(&dst, 15, 15), [255, 255, 255], "the punched hole");
+        // clipped
+        dst.blit(&cv, 25, -5, 255);
     }
 }

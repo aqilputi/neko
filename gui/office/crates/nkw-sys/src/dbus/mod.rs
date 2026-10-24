@@ -132,6 +132,11 @@ fn unix_connect(addr: &zbus::Address) -> std::io::Result<Option<UnixStream>> {
     }
 }
 
+/// The session bus (or `over`), as the adapters connect: for `idle`.
+pub(crate) fn connect_session(over: Option<&str>) -> zbus::Result<zbus::blocking::Connection> {
+    connect(Bus::Session, over)
+}
+
 fn connect(bus: Bus, over: Option<&str>) -> zbus::Result<zbus::blocking::Connection> {
     use std::str::FromStr;
     use zbus::blocking::connection::Builder;

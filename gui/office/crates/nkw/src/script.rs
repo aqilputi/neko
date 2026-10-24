@@ -38,6 +38,8 @@ pub enum Cmd {
     Text(String),
     Wait(u64),
     Spawn(Vec<String>),
+    /// `env K=V`: every later `spawn` of the script carries it (S20)
+    Env(String, String),
     Shot(PathBuf),
     Dump(PathBuf),
     ExpectMode(String),
@@ -288,6 +290,16 @@ fn parse_line(line: &str) -> Result<Option<Cmd>, String> {
             }
             Cmd::Spawn(args)
         }
+        "env" => {
+            let kv = match args.as_slice() {
+                [kv] => kv.split_once('='),
+                _ => None,
+            };
+            match kv {
+                Some((k, v)) if !k.is_empty() => Cmd::Env(k.into(), v.into()),
+                _ => return Err("env K=V (one variable per line)".into()),
+            }
+        }
         "shot" => Cmd::Shot(one(&args, "shot")?.into()),
         "dump" => Cmd::Dump(one(&args, "dump")?.into()),
         "expect" => match args.as_slice() {
@@ -386,6 +398,8 @@ up shift+a
 text "olá \"mundo\"\n"
 wait 250
 spawn testclient --checker --log "/tmp/a b.json"
+env GDK_BACKEND=wayland
+env "NKW_T=a b=c"
 shot out.png
 dump world.json
 expect mode FOCO
@@ -419,6 +433,8 @@ button right up
                     "--log".into(),
                     "/tmp/a b.json".into()
                 ]),
+                Cmd::Env("GDK_BACKEND".into(), "wayland".into()),
+                Cmd::Env("NKW_T".into(), "a b=c".into()),
                 Cmd::Shot("out.png".into()),
                 Cmd::Dump("world.json".into()),
                 Cmd::ExpectMode("FOCO".into()),
@@ -498,6 +514,10 @@ button right up
             ("text \"open", 1, "unterminated"),
             ("text \"a\\q\"", 1, "bad escape"),
             ("spawn", 1, "needs a command"),
+            ("env", 1, "env K=V"),
+            ("env FOO", 1, "env K=V"),
+            ("env =x", 1, "env K=V"),
+            ("env A=1 B=2", 1, "env K=V"),
             ("expect mode WALK", 1, "unknown mode"),
             ("expect color red", 1, "expect mode"),
             ("expect json", 1, "expect json <pointer>"),

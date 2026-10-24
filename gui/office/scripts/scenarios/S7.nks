@@ -1,0 +1,13 @@
+# S7 (onda 4): o telefone aberto no demo ocupado, folheando o app Gatos — j/k a cada 500 ms.
+# Mede a composição com o telefone (compose_p50_ms, alvo 1,5 ms, relatado) e as vontades Rate
+# simultâneas (≤ 4, barrado).
+#@warmup 3000
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --no-frame-wait --log ${RUN}/client-alpha.json
+spawn ${TESTCLIENT} --app-id bravo --color cc6633 --no-frame-wait --log ${RUN}/client-bravo.json
+wait 1000
+inject cats {"fixture":"busy"}
+wait 1000
+expect mode NAV
+inject overlay {"phone": {"app": "gatos"}}
+wait 500
+#@every 500 key j | key j | key k | key k

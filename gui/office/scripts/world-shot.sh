@@ -5,6 +5,7 @@
 # Usage: world-shot.sh [--bin PATH] [--out DIR] [--list] [NAME...]
 #   NAME = nav, focus, wm-stack, ...; a NAME with no shot-NAME.nks is a prefix: `wm` or `wm-`
 #   runs every shot-wm-*.nks. --list prints the names and exits.
+# Directives in a scenario: `#@args FLAGS` (extra nkw flags), `#@env K=V` (nkw's environment).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -18,7 +19,7 @@ while (($#)); do
 	--bin) BIN=${2:?}; shift ;;
 	--out) OUT=${2:?}; shift ;;
 	--list) list=true ;;
-	-h | --help) sed -n '2,8p' "$0"; exit 0 ;;
+	-h | --help) sed -n '2,9p' "$0"; exit 0 ;;
 	-*) echo "world-shot: opção desconhecida: $1" >&2; exit 2 ;;
 	*) names+=("$1") ;;
 	esac
@@ -68,7 +69,12 @@ for n in "${names[@]}"; do
 		read -r -a more <<<"${line#\#@args }"
 		extra+=("${more[@]}")
 	done < <(grep '^#@args ' "$src" || true)
-	"$BIN" --demo --headless "${extra[@]}" --socket "nkw-shot-$$-$n" --seconds 30 --script "$work/$n.nks" \
+	# "#@env K=V" lines: the environment of nkw (and so of the script's spawns), e.g. for W4's compat shots
+	envs=()
+	while IFS= read -r line; do
+		envs+=("${line#\#@env }")
+	done < <(grep '^#@env ' "$src" || true)
+	env "${envs[@]}" "$BIN" --demo --headless "${extra[@]}" --socket "nkw-shot-$$-$n" --seconds 30 --script "$work/$n.nks" \
 		2>"$work/$n.err" || rc=$?
 	if [ "$rc" -ne 0 ] || [ ! -s "$OUT/shot-$n.png" ]; then
 		echo "shot-$n: falhou (nkw saiu com $rc)" >&2

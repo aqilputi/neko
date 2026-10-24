@@ -10,8 +10,9 @@ use std::time::Duration;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, LoopHandle, PostAction};
 use nkw_testclient::{
-    Args, CHILD_AFTER_MS, Event, Fill, KeyState, Log, MOTHER_FILL, TEXT_MIMES, USAGE, child_argv,
-    damage_rect, paint, paint_rect, parse_args, physical_size, pick_text_mime,
+    Args, CHILD_AFTER_MS, Event, Fill, KeyState, Log, MOTHER_FILL, TEXT_MIMES, USAGE, channel_u32,
+    child_argv, cursor_shape_code, damage_rect, paint, paint_rect, parse_args, physical_size,
+    pick_text_mime, presented,
 };
 use smithay_client_toolkit::activation::{ActivationHandler, ActivationState, RequestData};
 use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
@@ -21,7 +22,44 @@ use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::clie
 use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
 };
+use smithay_client_toolkit::primary_selection::{
+    PrimarySelectionManagerState,
+    device::{PrimarySelectionDevice, PrimarySelectionDeviceHandler},
+    selection::{PrimarySelectionSource, PrimarySelectionSourceHandler},
+};
+use smithay_client_toolkit::reexports::protocols::wp::content_type::v1::client::{
+    wp_content_type_manager_v1::WpContentTypeManagerV1,
+    wp_content_type_v1::{self, WpContentTypeV1},
+};
+use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1::{self, WpCursorShapeDeviceV1},
+    wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+};
+use smithay_client_toolkit::reexports::protocols::wp::idle_inhibit::zv1::client::{
+    zwp_idle_inhibit_manager_v1::ZwpIdleInhibitManagerV1, zwp_idle_inhibitor_v1::ZwpIdleInhibitorV1,
+};
+use smithay_client_toolkit::reexports::protocols::wp::pointer_constraints::zv1::client::{
+    zwp_confined_pointer_v1::ZwpConfinedPointerV1, zwp_locked_pointer_v1::ZwpLockedPointerV1,
+    zwp_pointer_constraints_v1::Lifetime,
+};
+use smithay_client_toolkit::reexports::protocols::wp::presentation_time::client::{
+    wp_presentation::WpPresentation,
+    wp_presentation_feedback::{self, WpPresentationFeedback},
+};
+use smithay_client_toolkit::reexports::protocols::wp::relative_pointer::zv1::client::zwp_relative_pointer_v1::ZwpRelativePointerV1;
+use smithay_client_toolkit::reexports::protocols::wp::single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1;
+use smithay_client_toolkit::reexports::protocols::xdg::foreign::zv2::client::{
+    zxdg_exported_v2::{self, ZxdgExportedV2},
+    zxdg_exporter_v2::ZxdgExporterV2,
+};
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_positioner;
+use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
+use smithay_client_toolkit::seat::pointer_constraints::{
+    PointerConstraintsHandler, PointerConstraintsState,
+};
+use smithay_client_toolkit::seat::relative_pointer::{
+    RelativeMotionEvent, RelativePointerHandler, RelativePointerState,
+};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
     data_device_manager::{
@@ -57,7 +95,8 @@ use wayland_client::{
     globals::{GlobalList, registry_queue_init},
     protocol::{
         wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
-        wl_data_source::WlDataSource, wl_keyboard, wl_output, wl_seat, wl_shm, wl_surface,
+        wl_buffer::WlBuffer, wl_data_source::WlDataSource, wl_keyboard, wl_output, wl_pointer,
+        wl_seat, wl_shm, wl_surface,
     },
 };
 
@@ -107,6 +146,33 @@ struct Win {
     frames: u64,
     /// The next commit damages the whole buffer (first draw, resize, rescale).
     full_damage: bool,
+    /// `--single-pixel`: the one 1×1 buffer, attached at every draw.
+    pixel: Option<WlBuffer>,
+}
+
+/// The wave-4 protocol objects (each `Some` only when its flag asked for it
+/// and the compositor has the global).
+#[derive(Default)]
+struct Extra {
+    pointer: Option<wl_pointer::WlPointer>,
+    cursor_mgr: Option<WpCursorShapeManagerV1>,
+    cursor_dev: Option<WpCursorShapeDeviceV1>,
+    primary_mgr: Option<PrimarySelectionManagerState>,
+    primary_dev: Option<PrimarySelectionDevice>,
+    primary_src: Option<PrimarySelectionSource>,
+    primary_done: bool,
+    presentation: Option<WpPresentation>,
+    constraints: Option<PointerConstraintsState>,
+    relative: Option<RelativePointerState>,
+    locked: Option<ZwpLockedPointerV1>,
+    rel_ptr: Option<ZwpRelativePointerV1>,
+    single_pixel: Option<WpSinglePixelBufferManagerV1>,
+    content_mgr: Option<WpContentTypeManagerV1>,
+    content: Option<WpContentTypeV1>,
+    exporter: Option<ZxdgExporterV2>,
+    exported: Option<ZxdgExportedV2>,
+    idle_mgr: Option<ZwpIdleInhibitManagerV1>,
+    inhibitor: Option<ZwpIdleInhibitorV1>,
 }
 
 /// User data of the protocol objects SCTK has no helper for.
@@ -148,6 +214,7 @@ struct Client {
     token: Option<Option<String>>,
     /// `--spawn-child`
     child: Option<std::process::Child>,
+    x: Extra,
 }
 
 fn run(
@@ -158,6 +225,18 @@ fn run(
     let log = Log::open(&args.log)?;
     let conn = Connection::connect_to_env()?;
     let (globals, queue) = registry_queue_init(&conn)?;
+    if args.list_globals {
+        let mut log = log;
+        let mut all = globals.contents().clone_list();
+        all.sort_by(|a, b| a.interface.cmp(&b.interface));
+        for g in all {
+            log.emit(Event::Global {
+                name: g.interface,
+                version: g.version,
+            });
+        }
+        return Ok(());
+    }
     let qh = queue.handle();
     let mut event_loop: EventLoop<Client> = EventLoop::try_new()?;
     WaylandSource::new(conn.clone(), queue)
@@ -170,11 +249,16 @@ fn run(
     let data_mgr = (args.copy.is_some() || args.log_selection)
         .then(|| DataDeviceManagerState::bind(&globals, &qh).ok())
         .flatten();
-    let (fs_mgr, viewporter) = if args.fractional {
+    let (fs_mgr, mut viewporter) = if args.fractional {
         bind_fractional(&globals, &qh)
     } else {
         (None, None)
     };
+    let x = bind_extra(&args, &globals, &qh);
+    if args.single_pixel.is_some() && viewporter.is_none() {
+        // the 1×1 buffer is stretched to the window by a viewport
+        viewporter = globals.bind(&qh, 1..=1, Proto).ok();
+    }
 
     let activation = token
         .is_some()
@@ -239,6 +323,7 @@ fn run(
         activation,
         token,
         child: None,
+        x,
         args,
     };
     match client.args.parent_of.clone() {
@@ -272,6 +357,60 @@ fn bind_fractional(
     }
 }
 
+/// The wave-4 globals the flags ask for (a missing one is reported once and
+/// the flag does nothing, like `--fractional` without its globals). Nothing
+/// is bound without its flag.
+fn bind_extra(args: &Args, globals: &GlobalList, qh: &QueueHandle<Client>) -> Extra {
+    fn want<T>(flag: bool, name: &str, bind: impl FnOnce() -> Option<T>) -> Option<T> {
+        if !flag {
+            return None;
+        }
+        let r = bind();
+        if r.is_none() {
+            eprintln!("nkw-testclient: no {name}");
+        }
+        r
+    }
+    let primary = args.primary.is_some() || args.log_primary;
+    Extra {
+        cursor_mgr: want(
+            args.cursor_shape.is_some(),
+            "wp_cursor_shape_manager_v1",
+            || globals.bind(qh, 1..=2, Proto).ok(),
+        ),
+        primary_mgr: want(primary, "zwp_primary_selection_device_manager_v1", || {
+            PrimarySelectionManagerState::bind(globals, qh).ok()
+        }),
+        presentation: want(args.presentation, "wp_presentation", || {
+            globals.bind(qh, 1..=2, Proto).ok()
+        }),
+        single_pixel: want(
+            args.single_pixel.is_some(),
+            "wp_single_pixel_buffer_manager_v1",
+            || globals.bind(qh, 1..=1, Proto).ok(),
+        ),
+        content_mgr: want(
+            args.content_type.is_some(),
+            "wp_content_type_manager_v1",
+            || globals.bind(qh, 1..=1, Proto).ok(),
+        ),
+        exporter: want(args.export, "zxdg_exporter_v2", || {
+            globals.bind(qh, 1..=1, Proto).ok()
+        }),
+        idle_mgr: want(args.idle_inhibit, "zwp_idle_inhibit_manager_v1", || {
+            globals.bind(qh, 1..=1, Proto).ok()
+        }),
+        // SCTK's states keep "not present" themselves; locking reports it
+        constraints: args
+            .lock_pointer
+            .then(|| PointerConstraintsState::bind(globals, qh)),
+        relative: args
+            .lock_pointer
+            .then(|| RelativePointerState::bind(globals, qh)),
+        ..Extra::default()
+    }
+}
+
 fn new_win(window: Window, tag: Option<&'static str>, fill: Fill, size: (u32, u32)) -> Win {
     Win {
         window,
@@ -282,6 +421,7 @@ fn new_win(window: Window, tag: Option<&'static str>, fill: Fill, size: (u32, u3
         configured: false,
         frames: 0,
         full_damage: true,
+        pixel: None,
     }
 }
 
@@ -338,7 +478,10 @@ impl Client {
         if let (Some(fs), Some(vp)) = (&self.fs_mgr, &self.viewporter) {
             self.fractional = Some(fs.get_fractional_scale(&surface, qh, Proto));
             self.viewport = Some(vp.get_viewport(&surface, qh, Proto));
+        } else if let (Some(_), Some(vp)) = (self.args.single_pixel, &self.viewporter) {
+            self.viewport = Some(vp.get_viewport(&surface, qh, Proto));
         }
+        self.surface_extras(qh, &surface);
         let window = self
             .xdg_shell
             .create_window(surface, WindowDecorations::ServerDefault, qh);
@@ -353,6 +496,70 @@ impl Client {
         // The first commit carries no buffer; the configure answers it.
         window.commit();
         self.main = Some(new_win(window, None, self.args.fill, self.args.size));
+    }
+
+    /// `--content-type`, `--idle-inhibit`: state of the main surface, set
+    /// before its first commit (double-buffered: the first buffer carries it).
+    fn surface_extras(&mut self, qh: &QueueHandle<Self>, surface: &wl_surface::WlSurface) {
+        if let (Some(kind), Some(mgr)) = (self.args.content_type, &self.x.content_mgr) {
+            let ct = mgr.get_surface_content_type(surface, qh, Proto);
+            if let Ok(t) = wp_content_type_v1::Type::try_from(kind.code()) {
+                ct.set_content_type(t);
+            }
+            self.x.content = Some(ct);
+            self.log.emit(Event::ContentType { kind: kind.code() });
+        }
+        if let Some(mgr) = &self.x.idle_mgr {
+            self.x.inhibitor = Some(mgr.create_inhibitor(surface, qh, Proto));
+            self.log.emit(Event::IdleInhibit);
+        }
+    }
+
+    /// `--export`: once the toplevel exists (after its first configure).
+    fn export_once(&mut self, qh: &QueueHandle<Self>) {
+        if self.x.exported.is_some() {
+            return;
+        }
+        if let (Some(e), Some(main)) = (&self.x.exporter, &self.main) {
+            self.x.exported = Some(e.export_toplevel(main.window.wl_surface(), qh, Proto));
+        }
+    }
+
+    /// `--primary`: offer the text with the serial of the first keyboard enter.
+    fn offer_primary(&mut self, qh: &QueueHandle<Self>, serial: u32) {
+        if self.x.primary_done || self.args.primary.is_none() {
+            return;
+        }
+        let (Some(mgr), Some(dev)) = (&self.x.primary_mgr, &self.x.primary_dev) else {
+            return;
+        };
+        let src = mgr.create_selection_source(qh, TEXT_MIMES);
+        src.set_selection(dev, serial);
+        self.x.primary_src = Some(src);
+        self.x.primary_done = true;
+        self.log.emit(Event::PrimarySet);
+    }
+
+    /// The pointer entered the main window: `--cursor-shape`, `--lock-pointer`.
+    fn on_pointer_enter(&mut self, qh: &QueueHandle<Self>, serial: u32) {
+        self.log.emit(Event::PointerEnter);
+        if let (Some(name), Some(dev)) = (&self.args.cursor_shape, &self.x.cursor_dev) {
+            let code = cursor_shape_code(name).unwrap_or(1);
+            if let Ok(shape) = wp_cursor_shape_device_v1::Shape::try_from(code) {
+                dev.set_shape(serial, shape);
+                self.log.emit(Event::CursorShapeSet { shape: code });
+            }
+        }
+        if self.args.lock_pointer && self.x.locked.is_none() {
+            let (Some(c), Some(p), Some(main)) = (&self.x.constraints, &self.x.pointer, &self.main)
+            else {
+                return;
+            };
+            match c.lock_pointer(main.window.wl_surface(), p, None, Lifetime::Persistent, qh) {
+                Ok(l) => self.x.locked = Some(l),
+                Err(_) => eprintln!("nkw-testclient: no zwp_pointer_constraints_v1"),
+            }
+        }
     }
 
     fn is_main(&self, s: &wl_surface::WlSurface) -> bool {
@@ -386,6 +593,35 @@ impl Client {
 
     fn draw_win(&mut self, qh: &QueueHandle<Self>, win: &mut Win) {
         let is_main = win.tag.is_none();
+        if is_main && let Some(fb) = &self.x.presentation {
+            // one feedback per commit: `presented` or `discarded` comes back
+            fb.feedback(win.window.wl_surface(), qh, Proto);
+        }
+        if is_main
+            && let (Some([r, g, b, a]), Some(spb), Some(vp)) =
+                (self.args.single_pixel, &self.x.single_pixel, &self.viewport)
+        {
+            let surface = win.window.wl_surface().clone();
+            let buf = win.pixel.get_or_insert_with(|| {
+                spb.create_u32_rgba_buffer(
+                    channel_u32(r),
+                    channel_u32(g),
+                    channel_u32(b),
+                    channel_u32(a),
+                    qh,
+                    Proto,
+                )
+            });
+            surface.attach(Some(buf), 0, 0);
+            surface.damage_buffer(0, 0, 1, 1);
+            vp.set_destination(win.size.0 as i32, win.size.1 as i32);
+            win.frames += 1;
+            if !self.args.no_frame_wait {
+                surface.frame(qh, FrameCallbackData(surface.clone()));
+            }
+            win.window.commit();
+            return;
+        }
         let viewport = if is_main {
             self.viewport.as_ref()
         } else {
@@ -662,6 +898,7 @@ impl WindowHandler for Client {
         }
         if !mother && first {
             self.activate_once();
+            self.export_once(qh);
         }
         if mother && first && self.main.is_none() {
             let parent = self.mother.as_ref().map(|m| m.window.clone());
@@ -722,7 +959,26 @@ impl SeatHandler for Client {
             {
                 self.data_device = Some(mgr.get_data_device(qh, &seat));
             }
+            if self.x.primary_dev.is_none()
+                && let Some(mgr) = &self.x.primary_mgr
+            {
+                self.x.primary_dev = Some(mgr.get_selection_device(qh, &seat));
+            }
             self.seat = Some(seat);
+        } else if cap == Capability::Pointer
+            && self.x.pointer.is_none()
+            && (self.args.cursor_shape.is_some() || self.args.lock_pointer)
+        {
+            let Ok(p) = self.seat_state.get_pointer(qh, &seat) else {
+                return;
+            };
+            if let Some(m) = &self.x.cursor_mgr {
+                self.x.cursor_dev = Some(m.get_pointer(&p, qh, Proto));
+            }
+            if let Some(r) = &self.x.relative {
+                self.x.rel_ptr = r.get_relative_pointer(&p, qh).ok();
+            }
+            self.x.pointer = Some(p);
         }
     }
 
@@ -780,6 +1036,7 @@ impl KeyboardHandler for Client {
             return;
         }
         self.offer_copy(qh, serial);
+        self.offer_primary(qh, serial);
     }
 
     fn leave(
@@ -990,6 +1247,249 @@ impl ActivationHandler for Client {
     type RequestUdata = ();
     // we only activate with a token we were given; never request one
     fn new_token(&mut self, _: String, _: &RequestData<()>) {}
+}
+
+impl PointerHandler for Client {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        _: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for e in events {
+            if let PointerEventKind::Enter { serial } = e.kind
+                && self.is_main(&e.surface)
+            {
+                self.on_pointer_enter(qh, serial);
+            }
+        }
+    }
+}
+
+impl PointerConstraintsHandler for Client {
+    fn confined(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &ZwpConfinedPointerV1,
+        _: &wl_surface::WlSurface,
+        _: &wl_pointer::WlPointer,
+    ) {
+    }
+
+    fn unconfined(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &ZwpConfinedPointerV1,
+        _: &wl_surface::WlSurface,
+        _: &wl_pointer::WlPointer,
+    ) {
+    }
+
+    fn locked(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &ZwpLockedPointerV1,
+        _: &wl_surface::WlSurface,
+        _: &wl_pointer::WlPointer,
+    ) {
+        self.log.emit(Event::Locked);
+    }
+
+    fn unlocked(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &ZwpLockedPointerV1,
+        _: &wl_surface::WlSurface,
+        _: &wl_pointer::WlPointer,
+    ) {
+        self.log.emit(Event::Unlocked);
+    }
+}
+
+impl RelativePointerHandler for Client {
+    fn relative_pointer_motion(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &ZwpRelativePointerV1,
+        _: &wl_pointer::WlPointer,
+        e: RelativeMotionEvent,
+    ) {
+        self.log.emit(Event::RelativeMotion {
+            dx: e.delta.0,
+            dy: e.delta.1,
+        });
+    }
+}
+
+impl PrimarySelectionDeviceHandler for Client {
+    fn selection(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1,
+    ) {
+        if !self.args.log_primary {
+            return;
+        }
+        let Some(offer) = self
+            .x
+            .primary_dev
+            .as_ref()
+            .and_then(|d| d.data().selection_offer())
+        else {
+            return;
+        };
+        let Some(mime) = offer.with_mime_types(pick_text_mime) else {
+            return;
+        };
+        let Ok(pipe) = offer.receive(mime.to_string()) else {
+            return;
+        };
+        let mut data = Vec::new();
+        let _ = self.lh.insert_source(pipe, move |_, f, state| {
+            let _keep = &offer;
+            // SAFETY: the file is only read, never closed or replaced.
+            let f: &mut std::fs::File = unsafe { f.get_mut() };
+            let mut buf = [0u8; 4096];
+            match f.read(&mut buf) {
+                Ok(0) => {
+                    let text = String::from_utf8_lossy(&data).into_owned();
+                    state.log.emit(Event::Primary {
+                        mime: mime.to_string(),
+                        text,
+                    });
+                    PostAction::Remove
+                }
+                Ok(n) => {
+                    data.extend_from_slice(&buf[..n]);
+                    PostAction::Continue
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => PostAction::Continue,
+                Err(_) => PostAction::Remove,
+            }
+        });
+    }
+}
+
+impl PrimarySelectionSourceHandler for Client {
+    fn send_request(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        source: &smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
+        mime: String,
+        fd: WritePipe,
+    ) {
+        let ours = self
+            .x
+            .primary_src
+            .as_ref()
+            .is_some_and(|s| s.inner() == source);
+        if let (true, Some(text)) = (
+            ours && TEXT_MIMES.contains(&mime.as_str()),
+            &self.args.primary,
+        ) {
+            let mut f = std::fs::File::from(OwnedFd::from(fd));
+            let _ = f.write_all(text.as_bytes());
+        }
+    }
+
+    fn cancelled(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        source: &smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_source_v1::ZwpPrimarySelectionSourceV1,
+    ) {
+        if self
+            .x
+            .primary_src
+            .as_ref()
+            .is_some_and(|s| s.inner() == source)
+        {
+            self.x.primary_src = None;
+            self.log.emit(Event::PrimaryCancelled);
+        }
+    }
+}
+
+/// The wave-4 objects with no SCTK helper: requests only, or events we log.
+macro_rules! no_events {
+    ($($t:ty),* $(,)?) => {$(
+        impl Dispatch2<$t, Client> for Proto {
+            fn event(
+                &self,
+                _: &mut Client,
+                _: &$t,
+                _: <$t as Proxy>::Event,
+                _: &Connection,
+                _: &QueueHandle<Client>,
+            ) {
+            }
+        }
+    )*};
+}
+no_events!(
+    WpCursorShapeManagerV1,
+    WpCursorShapeDeviceV1,
+    WpPresentation,
+    WpSinglePixelBufferManagerV1,
+    WlBuffer,
+    WpContentTypeManagerV1,
+    WpContentTypeV1,
+    ZxdgExporterV2,
+    ZwpIdleInhibitManagerV1,
+    ZwpIdleInhibitorV1,
+);
+
+impl Dispatch2<WpPresentationFeedback, Client> for Proto {
+    fn event(
+        &self,
+        state: &mut Client,
+        _: &WpPresentationFeedback,
+        ev: wp_presentation_feedback::Event,
+        _: &Connection,
+        _: &QueueHandle<Client>,
+    ) {
+        match ev {
+            wp_presentation_feedback::Event::Presented {
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+                refresh,
+                seq_hi,
+                seq_lo,
+                flags,
+            } => {
+                let flags = flags.into_result().map(|f| f.bits()).unwrap_or(0);
+                state.log.emit(presented(
+                    tv_sec_hi, tv_sec_lo, tv_nsec, refresh, seq_hi, seq_lo, flags,
+                ));
+            }
+            wp_presentation_feedback::Event::Discarded => state.log.emit(Event::Discarded),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch2<ZxdgExportedV2, Client> for Proto {
+    fn event(
+        &self,
+        state: &mut Client,
+        _: &ZxdgExportedV2,
+        ev: zxdg_exported_v2::Event,
+        _: &Connection,
+        _: &QueueHandle<Client>,
+    ) {
+        if let zxdg_exported_v2::Event::Handle { handle } = ev {
+            state.log.emit(Event::Exported { handle });
+        }
+    }
 }
 
 impl ShmHandler for Client {

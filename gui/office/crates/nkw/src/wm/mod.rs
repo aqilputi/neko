@@ -7,18 +7,25 @@
 //! child module of `world`); the xdg side is `handlers.rs`.
 //!
 //! `inject wm` shapes: `{"command": "world.wider", "args": {…}}` (dispatched
-//! like a key), `{"save": true}` (write `world.json` now).
+//! like a key), `{"save": true}` (write `world.json` now); for tests
+//! `{"x11_dir": DIR}` (where the satellite's socket is looked for) and
+//! `{"proc_root": DIR}` (a fake `/proc` for "aberto lá fora").
 //!
 //! `dump` = `{"rooms":[{id,name,kind}],"places":{app_id:[room,desk]},
 //! "rules":n,"clipboard":{"host":bool,"mimes":n},"apps":n,"saves":n,
-//! "persist":bool}` — never any clipboard content.
+//! "persist":bool,"xwayland":{display,pid,state}|null,"tour_done":bool}`
+//! — never any clipboard content. Launching (env, X11 on demand, isolated
+//! profiles, the tour flag) and the phone's Apps/Janelas are `apps.rs`.
 
+pub mod apps;
 pub mod clipboard;
+pub mod launch_env;
 pub mod launcher;
 pub mod persist_io;
+pub mod xwayland;
 
-use std::cell::OnceCell;
-use std::collections::BTreeMap;
+use std::cell::{OnceCell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 
@@ -107,6 +114,24 @@ pub struct Wm {
     copied: Option<String>,
     /// the loop, for what must touch the seat (`world.copy`)
     lh: Option<calloop::LoopHandle<'static, Nkw>>,
+    /// `xwayland-satellite`, on demand (S22)
+    xwayland: xwayland::Xwayland,
+    /// children waiting for the satellite's socket
+    x_waiting: Vec<Vec<String>>,
+    /// the world's `WAYLAND_DISPLAY` (the "aberto lá fora" check)
+    socket: String,
+    /// where processes are read for that check (`None` under `--demo`
+    /// unless a test injects one)
+    proc_root: Option<PathBuf>,
+    /// `<state-dir>` (isolated profiles live under `profiles/`)
+    state_root: Option<PathBuf>,
+    /// `world.json`'s `tour_done`
+    tour_done: bool,
+    /// the first tick (the tour starts 1.5 s later), and whether it was asked
+    tour_at: Option<Time>,
+    tour_asked: bool,
+    /// the Apps page's outside set, and when it was read
+    outside_cache: RefCell<Option<(Time, BTreeSet<String>)>>,
 }
 
 impl Wm {
@@ -134,11 +159,21 @@ impl Wm {
             next: None,
             copied: None,
             lh: None,
+            xwayland: xwayland::Xwayland::default(),
+            x_waiting: Vec::new(),
+            socket: cli.socket.clone(),
+            proc_root: (!cli.demo).then(|| PathBuf::from("/proc")),
+            state_root: None,
+            tour_done: false,
+            tour_at: None,
+            tour_asked: false,
+            outside_cache: RefCell::new(None),
         };
         if cli.demo {
             if cli.reduced_motion {
                 wm.config.reduced_motion();
             }
+            wm.xwayland = xwayland_for(cli, &wm.config);
             return wm;
         }
         let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
@@ -158,10 +193,11 @@ impl Wm {
             wm.config.reduced_motion();
         }
         if let Some(dir) = cli.state_root() {
-            let store = Store::new(dir);
+            let store = Store::new(dir.clone());
             match store.load() {
                 Load::Missing => {}
                 Load::Ok(f) => {
+                    wm.tour_done = f.tour_done;
                     wm.plan = nkw_core::persist::apply(&f, &[]);
                     wm.memory = wm.plan.places.clone();
                     wm.last_saved = Some(f);
@@ -170,8 +206,19 @@ impl Wm {
                 Load::Corrupt(msg) => wm.errors.push(msg),
             }
             wm.store = Some(store);
+            wm.state_root = Some(dir);
         }
+        wm.xwayland = xwayland_for(cli, &wm.config);
         wm
+    }
+
+    /// The satellite's X display (`":N"`) while it is up.
+    pub fn xwayland_display(&self) -> Option<String> {
+        self.xwayland.display()
+    }
+
+    pub fn xwayland_state(&self) -> &xwayland::XState {
+        &self.xwayland.state
     }
 
     /// The parsed `world.toml` (`keys.*` for the hub; the CLI flags win).
@@ -396,6 +443,7 @@ impl Wm {
             nkw_core::persist::remember(&mut self.memory, &s.app_id, s.place.clone());
         }
         snap.places = self.memory.clone();
+        snap.tour_done = self.tour_done;
         if self.store.is_none() || self.last_saved.as_ref() == Some(&snap) {
             return;
         }
@@ -427,6 +475,16 @@ impl Wm {
         }
         v
     }
+}
+
+/// The satellite of this run: `--xwayland`, else `[launch] xwayland`;
+/// the binary looked up on `PATH` only when it may run.
+fn xwayland_for(cli: &crate::cli::Cli, cfg: &Config) -> xwayland::Xwayland {
+    let mode = xwayland::Xwayland::resolve(cli.xwayland, cfg.launch.xwayland, cli.demo);
+    let bin = (mode != nkw_core::rules::XwaylandMode::Off)
+        .then(|| xwayland::which(xwayland::BINARY, std::env::var_os("PATH").as_deref()))
+        .flatten();
+    xwayland::Xwayland::new(mode, bin, PathBuf::from(xwayland::SOCKET_DIR))
 }
 
 /// A message from the clipboard thread (on the loop, with the hub).
@@ -517,6 +575,8 @@ impl Plugin for Wm {
                 ms: 6000,
             });
         }
+        reqs.extend(self.xwayland_tick(ctx.now));
+        reqs.extend(self.tour_tick(ctx.now));
         if std::mem::take(&mut self.restore) {
             reqs.extend(self.restore_reqs());
             // the restore itself is not a change worth a save
@@ -535,6 +595,8 @@ impl Plugin for Wm {
             self.due,
             w.layout_note(ctx.now).map(|n| n.1),
             w.attention(ctx.now).iter().map(|a| a.1).reduce(f64::min),
+            self.xwayland.next_poll(ctx.now),
+            self.tour_wish(),
         ]
         .into_iter()
         .flatten()
@@ -553,10 +615,16 @@ impl Plugin for Wm {
         let r = match name {
             "world.terminal" => {
                 self.intent_until = Some(ctx.now + INTENT_S);
-                vec![Req::Spawn(
-                    self.terminal_with(args.get("cmd").map(String::as_str)),
-                )]
+                let argv = self.terminal_with(args.get("cmd").map(String::as_str));
+                self.spawn_reqs(argv, ctx.now)
             }
+            apps::LAUNCH_ISOLATED => self.launch_isolated(args, ctx.now)?,
+            apps::XWAYLAND => self.xwayland_cmd(args, ctx.now)?,
+            apps::TOUR_DONE => {
+                self.set_tour_done();
+                Vec::new()
+            }
+            apps::CLOSE_SCREEN | apps::SEND_SCREEN => apps::screen_cmd(name, args, ctx)?,
             "world.launcher" => vec![Req::Action(Action::Palette)],
             "world.quit" => vec![Req::Quit(0)],
             "world.interact" => self.interact(ctx)?,
@@ -564,15 +632,17 @@ impl Plugin for Wm {
             "world.copy" => self.copy(args)?,
             LAUNCH => {
                 let argv = launcher::split_exec(args.get("exec")?);
-                if argv.is_empty() {
-                    return None;
-                }
-                vec![Req::Spawn(argv)]
+                let name = launch_env::program(&argv)?
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                self.launch("", &name, argv, ctx.now)
             }
             n => {
                 let id = n.strip_prefix("world.launch:")?;
-                let app = self.apps().iter().find(|a| a.id == id)?;
-                vec![Req::Spawn(app.argv.clone())]
+                let app = self.apps().iter().find(|a| a.id == id)?.clone();
+                self.launch(&app.id, &app.name, app.argv, ctx.now)
             }
         };
         Some(r)
@@ -602,6 +672,14 @@ impl Plugin for Wm {
                 args,
             });
         }
+        // tests: where the satellite's socket and the processes are read
+        if let Some(d) = json.get("x11_dir").and_then(Value::as_str) {
+            self.xwayland.socket_dir = PathBuf::from(d);
+        }
+        if let Some(d) = json.get("proc_root").and_then(Value::as_str) {
+            self.proc_root = Some(PathBuf::from(d));
+            *self.outside_cache.borrow_mut() = None;
+        }
         if json.get("save").and_then(Value::as_bool) == Some(true) {
             self.track(ctx.world, ctx.now);
             self.save_now();
@@ -628,6 +706,7 @@ impl Plugin for Wm {
             source: Source::World,
             args: Vec::new(),
         }));
+        v.extend(apps::palette_items());
         v.extend(self.apps().iter().map(|a| PaletteItem {
             name: format!("world.launch:{}", a.id),
             title: a.name.clone(),
@@ -780,7 +859,38 @@ impl Plugin for Wm {
             "apps": self.apps.get().map_or(0, Vec::len),
             "saves": self.saves,
             "persist": self.store.is_some(),
+            "xwayland": self.xwayland.enabled().then(|| json!({
+                "display": self.xwayland.display(),
+                "pid": self.xwayland.pid,
+                "state": self.xwayland.state.label(),
+            })),
+            "tour_done": self.tour_done,
         })
+    }
+
+    fn status(&self, ctx: &Ctx) -> crate::ext::Status {
+        let _ = ctx;
+        crate::ext::Status {
+            xwayland: self
+                .xwayland
+                .enabled()
+                .then(|| self.xwayland.state == xwayland::XState::Up),
+            ..crate::ext::Status::default()
+        }
+    }
+
+    fn phone_apps(&self, ctx: &Ctx) -> Vec<crate::ui::phone::PhoneApp> {
+        let _ = ctx;
+        self.phone_apps_of()
+    }
+
+    fn phone_page(
+        &self,
+        app: &str,
+        st: &crate::ui::phone::PhoneState,
+        ctx: &Ctx,
+    ) -> Option<crate::ui::phone::PhonePage> {
+        self.phone_page_of(app, st, ctx)
     }
 
     fn shutdown(&mut self) {
@@ -854,10 +964,20 @@ mod tests {
         f(&ctx)
     }
 
+    /// A spawn with the launcher's default env (no X11).
+    fn sw(argv: Vec<String>) -> Req {
+        Req::SpawnWith {
+            argv,
+            env: launch_env::default_env(None),
+        }
+    }
+
     fn cli_in(dir: &std::path::Path) -> Cli {
         Cli {
             state_dir: Some(dir.to_path_buf()),
             headless: true,
+            // never the host's satellite in unit tests
+            xwayland: Some(crate::cli::XwaylandMode::Off),
             ..Cli::default()
         }
     }
@@ -907,7 +1027,11 @@ mod tests {
         with_ctx(&w, 0.0, |c| wm.tick(c));
         assert_eq!(wm.due, Some(2.0));
         let wishes = with_ctx(&w, 0.0, |c| wm.wishes(c));
-        assert_eq!(wishes, [Wish::compose(Want::At(2.0))]);
+        assert_eq!(
+            wishes,
+            [Wish::compose(Want::At(apps::TOUR_AFTER_S))],
+            "the tour comes first (a fresh state dir), then the save at 2"
+        );
         // another change pushes the save back
         w.command(Cmd::Wider, 1.0);
         with_ctx(&w, 1.0, |c| wm.tick(c));
@@ -985,10 +1109,7 @@ mod tests {
             wm.command("world.terminal", &BTreeMap::new(), c)
         })
         .unwrap();
-        assert_eq!(
-            r,
-            [Req::Spawn(vec!["foot".into(), "-o".into(), "x=1".into()])]
-        );
+        assert_eq!(r, [sw(vec!["foot".into(), "-o".into(), "x=1".into()])]);
         assert_eq!(wm.place_for("foot", 11.0), None, "right of the station");
         assert!(wm.place_for("foot", 12.0).is_some(), "only once");
         // stale intent
@@ -1017,7 +1138,7 @@ mod tests {
             assert_eq!(wm.command("world.grab", &no, c), None);
             assert_eq!(
                 wm.command("world.terminal", &no, c),
-                Some(vec![Req::Spawn(vec![
+                Some(vec![sw(vec![
                     "testclient".into(),
                     "--app-id".into(),
                     "demo.term".into()
@@ -1026,14 +1147,14 @@ mod tests {
             let exec = BTreeMap::from([("exec".to_string(), "mpv --loop \"a b.mkv\"".to_string())]);
             assert_eq!(
                 wm.command(LAUNCH, &exec, c),
-                Some(vec![Req::Spawn(vec![
+                Some(vec![sw(vec![
                     "mpv".into(),
                     "--loop".into(),
                     "a b.mkv".into()
                 ])])
             );
             assert!(
-                matches!(&wm.command("world.launch:demo.bravo", &no, c).unwrap()[0], Req::Spawn(a) if a[0] == "testclient")
+                matches!(&wm.command("world.launch:demo.bravo", &no, c).unwrap()[0], Req::SpawnWith { argv: a, .. } if a[0] == "testclient")
             );
             assert_eq!(wm.command("world.launch:nope", &no, c), None);
             assert_eq!(wm.command("world.summon", &no, c), None, "the cats'");
@@ -1167,18 +1288,21 @@ mod tests {
         let r = with_ctx(&w, 0.0, |c| wm.command("world.terminal", &args, c)).unwrap();
         assert_eq!(
             r,
-            [Req::Spawn(
-                ["foot", "-o", "x=1", "-e", "sh", "-c", "$EDITOR notas.md"]
-                    .map(String::from)
-                    .to_vec()
-            )]
+            [sw([
+                "foot",
+                "-o",
+                "x=1",
+                "-e",
+                "sh",
+                "-c",
+                "$EDITOR notas.md"
+            ]
+            .map(String::from)
+            .to_vec())]
         );
         let blank = BTreeMap::from([("cmd".to_string(), "  ".to_string())]);
         let r = with_ctx(&w, 0.0, |c| wm.command("world.terminal", &blank, c)).unwrap();
-        assert_eq!(
-            r,
-            [Req::Spawn(["foot", "-o", "x=1"].map(String::from).to_vec())]
-        );
+        assert_eq!(r, [sw(["foot", "-o", "x=1"].map(String::from).to_vec())]);
     }
 
     #[test]

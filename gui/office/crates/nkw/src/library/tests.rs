@@ -482,7 +482,9 @@ fn vault_never_leaves() {
                 format!(".kube/{s}"),
                 format!("projeto/id_{s}"),
             ] {
-                t.push(("world.open", vec![("path", p)]));
+                t.push(("world.open", vec![("path", p.clone())]));
+                // the phone's Biblioteca "e" (by path)
+                t.push(("world.book_edit", vec![("path", p)]));
             }
         }
         t
@@ -525,6 +527,19 @@ fn vault_never_leaves() {
         out.push(format!("{:?}", o.badges(&ctx)));
         out.push(format!("{:?}", o.dialog()));
         out.push(serde_json::to_string(&rig.w.snapshot()).unwrap());
+        // wave 4: the status and the phone's apps and pages
+        out.push(format!("{:?}", o.status(&ctx)));
+        out.push(format!("{:?}", o.lib.phone_hits()));
+        out.push(format!("{:?}", o.phone_apps(&ctx)));
+        for app in ["musica", "biblioteca", "cofre"] {
+            let st = crate::ui::phone::PhoneState {
+                app: Some(app.into()),
+                ..Default::default()
+            };
+            let page = o.phone_page(app, &st, &ctx);
+            assert!(page.is_some(), "{app}");
+            out.push(format!("{page:?}"));
+        }
     };
     snap(&mut rig, &mut o, &mut out);
     // and with the vault open, browsing its cards
@@ -574,4 +589,114 @@ fn the_big_fixture_loads_and_searches_within_the_budget() {
     let d = lib(&o);
     assert!(d["search"]["scanned"].as_u64().unwrap() > 1000);
     assert!(d["timings"]["search_ms"].as_f64().unwrap() < 5000.0);
+}
+
+#[test]
+fn the_phone_s_biblioteca_searches_and_opens_on_the_fixture() {
+    let mut rig = Rig::new();
+    let mut o = demo();
+    rig.enter(&mut o);
+    let st = crate::ui::phone::PhoneState {
+        app: Some("biblioteca".into()),
+        ..Default::default()
+    };
+    let page = |o: &Objects, rig: &Rig| o.phone_page("biblioteca", &st, &rig.ctx()).unwrap();
+    let p = page(&o, &rig);
+    assert!(p.items.is_empty());
+    let run = p.search.unwrap().run.unwrap();
+    // the overlay sends the line's text as `q`
+    rig.cmd(&mut o, &run, &[("q", "notas")]);
+    for _ in 0..40 {
+        if !page(&o, &rig).items.is_empty() {
+            break;
+        }
+        rig.frame(&mut o);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let p = page(&o, &rig);
+    let hit = p
+        .items
+        .iter()
+        .find(|i| i.title == "notas.md")
+        .unwrap_or_else(|| panic!("{p:?}"));
+    let act = hit.on_enter.clone().unwrap();
+    assert!(act.close);
+    let args: Vec<(&str, &str)> = act
+        .args
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let r = rig.cmd(&mut o, &act.name, &args);
+    assert!(
+        format!("{r:?}").contains("abriria notas.md"),
+        "never a spawn under demo: {r:?}"
+    );
+    let (_, edit) = hit.on_keys.iter().find(|(k, _)| k == "e").unwrap();
+    let args: Vec<(&str, &str)> = edit
+        .args
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let r = rig.cmd(&mut o, &edit.name, &args);
+    assert!(format!("{r:?}").contains("abriria no editor"), "{r:?}");
+}
+
+/// Where a world point lands on a 60° frame of `aspect` from `pose`: NDC.
+fn ndc(pose: nkw_core::Pose, aspect: f32, p: glam::Vec3) -> glam::Vec3 {
+    let proj =
+        glam::camera::rh::proj::opengl::perspective(nkw_core::layout::FOV_Y, aspect, 0.05, 100.0);
+    (proj * pose.view()).project_point3(p)
+}
+
+#[test]
+fn the_stand_frames_the_board_and_its_whole_unit() {
+    use nkw_core::strip::{RoomSlot, Side};
+    assert!((layout::STAND_M - 2.4).abs() < 1e-6);
+    let slot = RoomSlot {
+        x0: 10.0,
+        len: 6.0,
+        side: Side::North,
+        door_x: 13.0,
+    };
+    let f = layout::floors();
+    for root in [0, 1] {
+        let r = layout::run(&slot, root).unwrap();
+        let w = r.units() as f32 * layout::UNIT_W;
+        for (px_w, px_h) in [(1280.0f32, 720.0f32), (1920.0, 1080.0)] {
+            let aspect = px_w / px_h;
+            for (board, &top) in f.iter().enumerate() {
+                // a book on the second unit, standing on `board`
+                let x = (r.len - w) / 2.0 + layout::UNIT_W * 1.5;
+                let book = r.at(x, top + 0.12) + r.normal * 0.08;
+                let st = stand_at(&r, book);
+                assert!(st.pitch.abs() <= 0.5 + 1e-6, "pitch {}", st.pitch);
+                let flat = (st.pos - r.centre).dot(r.normal);
+                assert!((flat - layout::STAND_M).abs() < 1e-3, "{flat}");
+                // the board's centre at 45–55 % of the frame's height
+                let c = ndc(st, aspect, r.at(x, top + 0.15) + r.normal * 0.1);
+                let frac = (1.0 - c.y) / 2.0;
+                assert!(
+                    (0.45..=0.55).contains(&frac),
+                    "root {root} board {board} {px_w}: {frac}"
+                );
+                // the drawn unit (of the two stacked) the board is on, and
+                // half a neighbour on each side, all inside the frame
+                let (y0, y1) = if board < 3 {
+                    (layout::UNIT_H, 2.0 * layout::UNIT_H)
+                } else {
+                    (0.0, layout::UNIT_H)
+                };
+                let front = r.normal * (layout::CASE_DEPTH / 2.0);
+                for xx in [x - layout::UNIT_W, x + layout::UNIT_W] {
+                    for yy in [y0, y1] {
+                        let p = ndc(st, aspect, r.at(xx, yy) + front);
+                        assert!(
+                            p.x.abs() <= 1.0 && p.y.abs() <= 1.0 && p.z < 1.0,
+                            "root {root} board {board} {px_w}: corner ({xx}, {yy}) at {p}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

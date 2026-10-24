@@ -1,11 +1,11 @@
-# S4d: o S4 com clientes realistas (cada quadro danifica só 640×48 px no topo, como um terminal
-# digitando) em vez de reenviar o buffer inteiro; separa o custo do upload shm do custo do mundo. Mede CPU por quadro (p50/p95),
-# quadros perdidos, draws e triângulos.
+# S4d: o S4 com clientes de estresse — cada um repinta e reenvia o buffer inteiro a cada quadro
+# (o S4 das ondas 1–3). Separa o custo do upload shm do custo do mundo. Mede CPU por quadro
+# (p50/p95), quadros perdidos, draws e triângulos; relatado, não barrado (onda 4).
 #@warmup 2000
-spawn ${TESTCLIENT} --app-id alpha --color 3366cc --damage 640x48 --log ${RUN}/client-alpha.json
-spawn ${TESTCLIENT} --app-id bravo --color cc6633 --damage 640x48 --log ${RUN}/client-bravo.json
-spawn ${TESTCLIENT} --app-id demo --checker --damage 640x48 --log ${RUN}/client-demo.json
-spawn ${TESTCLIENT} --app-id acme --color 33cc66 --damage 640x48 --log ${RUN}/client-acme.json
+spawn ${TESTCLIENT} --app-id alpha --color 3366cc --log ${RUN}/client-alpha.json
+spawn ${TESTCLIENT} --app-id bravo --color cc6633 --log ${RUN}/client-bravo.json
+spawn ${TESTCLIENT} --app-id demo --checker --log ${RUN}/client-demo.json
+spawn ${TESTCLIENT} --app-id acme --color 33cc66 --log ${RUN}/client-acme.json
 wait 1500
 expect mode NAV
 #@every 1000 key l | key h

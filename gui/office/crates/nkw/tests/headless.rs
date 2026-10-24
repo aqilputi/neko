@@ -215,8 +215,9 @@ fn nav_shot_composes_the_hud_over_the_world() {
         let i = ((y * w + x) * 4) as usize;
         [px[i], px[i + 1], px[i + 2]]
     };
-    // the label's cream badge (2D, MemoryRenderBuffer) at its corner …
-    assert_eq!(at(18, 18), [0xf6, 0xec, 0xd8]);
+    // the label's cream badge (2D, MemoryRenderBuffer) inside its rounded
+    // corner (wave 4: the corner radius grew) …
+    assert_eq!(at(24, 22), [0xf6, 0xec, 0xd8]);
     // … over a world pass that drew something other than the clear colour
     let sky = at(640, 5);
     let floor = at(640, 715);
@@ -448,6 +449,8 @@ fn label_buffer(scale: f64) -> (Vec<u8>, f64) {
         tags: Vec::new(),
         pickables: Vec::new(),
         aimed: false,
+        status: nkw::ext::Status::default(),
+        phone: None,
     };
     let mut els = o.elements(&ctx, &hud);
     let i = els
@@ -605,4 +608,130 @@ fn read_png(p: &std::path::Path) -> (u32, u32, Vec<u8>) {
     buf.truncate(info.buffer_size());
     assert_eq!(info.color_type, png::ColorType::Rgba);
     (info.width, info.height, buf)
+}
+
+#[test]
+fn spawn_with_env_reaches_the_child() {
+    // S20: `env K=V` lines (→ `Nkw::spawn_with`) after the hub's own env; a
+    // `DISPLAY` given is kept, the host's never leaks
+    let r = run(
+        "env NKW_T=olá
+env DISPLAY=:77
+spawn sh -c \"echo $NKW_T $DISPLAY ${WAYLAND_DISPLAY:-none} > {dir}/env.txt\"
+quit
+",
+        &[],
+        &[("DISPLAY", ":0")],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let got = std::fs::read_to_string(r.path("env.txt")).unwrap();
+    assert_eq!(got.trim(), "olá :77 nkw-test");
+    let r = run(
+        "spawn sh -c \"echo ${DISPLAY:-none} > {dir}/env.txt\"\nquit\n",
+        &[],
+        &[("DISPLAY", ":0")],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let got = std::fs::read_to_string(r.path("env.txt")).unwrap();
+    assert_eq!(got.trim(), "none", "no DISPLAY unless given");
+}
+
+#[test]
+fn the_protocol_hooks_are_called_at_their_sites() {
+    // S20/S23: the hub calls `protos_*` (W1's stub counts them): a relative
+    // motion, every presented frame, the mode leaving FOCO
+    let r = run(
+        "expect json /protocols/calls/relative_motion 0
+pointer 10 0
+expect json /protocols/calls/relative_motion 1
+expect json /protocols/calls/mode_left_focus 0
+key J
+wait 400
+inject wm {\"command\": \"world.focus\", \"args\": {}}
+wait json /focus/target \"CatTerm\" 3000
+expect mode FOCO
+expect json /protocols/calls/mode_left_focus 0
+key ctrl+bracketright
+expect mode NAV
+expect json /protocols/calls/mode_left_focus 1
+dump {dir}/dump.json
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let d = r.json("dump.json");
+    assert!(
+        d["protocols"]["calls"]["presented"].as_u64().unwrap() >= 1,
+        "{}",
+        d["protocols"]
+    );
+}
+
+#[test]
+fn the_dump_has_status_host_cursor_and_lock_owner() {
+    let r = run(
+        "expect json /host/cursor \"default\"
+expect json /host/pointer_locked_by null
+key w
+expect mode ANDAR
+expect json /host/pointer_locked_by \"walk\"
+key Escape
+expect json /host/pointer_locked_by null
+dump {dir}/dump.json
+quit
+",
+        &[],
+        &[],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let d = r.json("dump.json");
+    let s = &d["status"];
+    for k in [
+        "clock",
+        "band",
+        "battery",
+        "net",
+        "playing",
+        "vault_open",
+        "inbox",
+        "agents",
+        "cost_cents",
+        "usage_5h_pct",
+        "xwayland",
+    ] {
+        assert!(s.get(k).is_some(), "status.{k}: {s}");
+    }
+    assert!(d["protocols"].is_object());
+}
+
+#[test]
+fn the_stats_split_import_from_cull() {
+    let r = run(
+        "wait 300\nquit\n",
+        &[],
+        &[("NKW_STATS", "1"), ("NKW_STATS_WARMUP_MS", "0")],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    let s = r.summary();
+    for k in [
+        "import_us_p50",
+        "import_us_p95",
+        "compose_us_p50",
+        "compose_us_p95",
+    ] {
+        assert!(s[k].is_u64(), "{k}: {s}");
+    }
+    let frames: Vec<serde_json::Value> = r
+        .stderr()
+        .lines()
+        .filter_map(|l| l.strip_prefix("nkw-stats "))
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .filter(|v: &serde_json::Value| v.get("pass").is_some())
+        .collect();
+    assert!(!frames.is_empty());
+    for f in &frames {
+        assert!(f["import_us"].is_u64(), "{f}");
+    }
 }

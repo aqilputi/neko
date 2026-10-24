@@ -625,3 +625,84 @@ fn the_vault_asks_the_receptionist_and_opens_with_the_phrase() {
     o.inject(&serde_json::json!({"Shot": true}), &rig.ctx());
     assert!(!o.vault.unlocked());
 }
+
+#[test]
+fn status_is_the_fixture_under_demo_and_the_data_otherwise() {
+    let mut rig = Rig::new();
+    let mut o = Objects::with(true, false, None);
+    rig.frame(&mut o, 1.0);
+    assert_eq!(o.status(&rig.ctx()), status::demo());
+    // overrides for shots: merged, validated, a bad one changes nothing
+    let r = o.inject(
+        &serde_json::json!({"status": {"battery": [12, false], "playing": true}}),
+        &rig.ctx(),
+    );
+    assert!(r.contains(&Req::Wish(Wish::compose(Want::Once))));
+    o.inject(&serde_json::json!({"status": {"net": null}}), &rig.ctx());
+    let s = o.status(&rig.ctx());
+    assert_eq!(s.battery, Some((12, false)));
+    assert_eq!(s.playing, Some(true));
+    assert_eq!(s.net, None);
+    assert_eq!(s.clock, Some((14, 5)));
+    let r = o.inject(&serde_json::json!({"status": {"ssid": "x"}}), &rig.ctx());
+    assert!(matches!(
+        &r[0],
+        Req::Toast {
+            kind: ToastKind::Error,
+            ..
+        }
+    ));
+    assert_eq!(o.status(&rig.ctx()), s);
+
+    // outside the demo: from the adapters' data (a fake port here)
+    let (mut o, sh) = faked(false);
+    sh.events.lock().unwrap().extend([
+        SysEvent::Power(nkw_sys::PowerState {
+            present: true,
+            pct: 55,
+            charging: true,
+            time_to_empty_s: None,
+        }),
+        SysEvent::Net(nkw_sys::NetState {
+            connected: false,
+            wifi: false,
+            strength: 0,
+        }),
+    ]);
+    rig.frame(&mut o, 2.0);
+    let s = o.status(&rig.ctx());
+    assert_eq!(s.battery, Some((55, true)));
+    assert_eq!(s.net, Some((false, 0)));
+    assert_eq!(s.playing, None, "no player");
+    assert!(!s.vault_open);
+}
+
+#[test]
+fn the_vault_open_reaches_the_status_and_a_shot_closes_it() {
+    let mut rig = Rig::new();
+    let mut o = Objects::with(true, false, None);
+    rig.frame(&mut o, 1.0);
+    o.inject(
+        &serde_json::json!({"vault": {"phrase": "destrancar"}}),
+        &rig.ctx(),
+    );
+    assert!(o.status(&rig.ctx()).vault_open);
+    o.inject(&serde_json::json!({"Shot": true}), &rig.ctx());
+    assert!(!o.status(&rig.ctx()).vault_open);
+}
+
+#[test]
+fn idle_inhibit_is_recorded_and_never_reaches_the_host_under_demo() {
+    let mut rig = Rig::new();
+    let mut o = Objects::with(true, false, None);
+    rig.frame(&mut o, 1.0);
+    assert!(
+        o.inject(&serde_json::json!({"IdleInhibit": true}), &rig.ctx())
+            .is_empty()
+    );
+    let d = o.dump();
+    assert_eq!(d["idle_inhibit"]["wanted"], true);
+    assert_eq!(d["idle_inhibit"]["host"], "none");
+    o.inject(&serde_json::json!({"IdleInhibit": false}), &rig.ctx());
+    assert_eq!(o.dump()["idle_inhibit"]["wanted"], false);
+}

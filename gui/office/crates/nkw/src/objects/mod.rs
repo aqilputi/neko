@@ -20,7 +20,11 @@
 //! `{"Door":{"id":0,"toggle":true}}`, `{"Command":{"name":"world.interact","args":{}}}`,
 //! `{"Cue":"Meow"}`, `{"Shot":true}`, `{"FocusLost":true}`,
 //! `{"library":{"fixture":"demo"|"big"}}`, `{"vault":{"phrase":"…"}}` (typed as the
-//! line would).
+//! line would), `{"status":{"battery":[12,false],…}}` (the strip's fields, `status`),
+//! `{"IdleInhibit":true}` (the host's idle inhibitor, `nkw_sys::idle`).
+//!
+//! Wave 4: `Plugin::status` (`status`) and the phone's Música, Biblioteca
+//! and Cofre apps (`phone`).
 //!
 //! The library (plan §7) lives here too ([`library`], phase 4): the objects
 //! delegate its commands, drawing and hooks; the vault's cards are its.
@@ -29,7 +33,8 @@
 //! "doors":[{id,rooms,openness,passable}], "audio":{streams,anchored,gains,calls},
 //! "badges":[…], "rate_wishes":n, "visible_rooms":[…], "sound":{played,active,last},
 //! "sys":{"mpris":"ok|error|off",…}, "library":{…}, "vault":{state,cards,fails,
-//! last_lock,audit}}`. No titles, no SSIDs, no device names, never a vault name.
+//! last_lock,audit}, "idle_inhibit":{wanted,host}}`. No titles, no SSIDs, no
+//! device names, never a vault name.
 
 pub mod audio;
 pub mod audit;
@@ -38,8 +43,10 @@ pub mod draw;
 #[path = "../library/mod.rs"]
 pub mod library;
 pub mod map;
+pub mod phone;
 pub mod place;
 pub mod sound;
+pub mod status;
 pub mod vault;
 
 use std::collections::BTreeMap;
@@ -144,6 +151,12 @@ enum Inject {
         mem: bool,
     },
     Audio(nkw_sys::AudioEvent),
+    /// overrides of the status fields (shots, tests): `status::apply`
+    #[serde(rename = "status")]
+    Status(serde_json::Map<String, Value>),
+    /// a client inhibits idle (the hub forwards W4's `Protocols` changes):
+    /// the host's portal is asked to keep the screen on
+    IdleInhibit(bool),
 }
 
 /// The world volume step of `volume.up/down` without a turntable.
@@ -187,6 +200,13 @@ pub struct Objects {
     band: u8,
     pub vault: vault::VaultGlue,
     pub lib: library::LibGlue,
+    /// `inject objects {"status": …}`: fields forced over the computed status
+    status_over: serde_json::Map<String, Value>,
+    /// the host's idle inhibitor (only with the system adapters, never
+    /// under `--demo`); `idle_wanted` is what was last asked
+    idle: Option<nkw_sys::idle::Inhibitor>,
+    idle_wanted: bool,
+    idle_logged: bool,
 }
 
 /// `[library]` + `[vault]` of `world.toml` (never under `--demo`); a bad
@@ -269,6 +289,10 @@ impl Objects {
             ),
             // a library on the fixture, never the disk, until `new` says otherwise
             lib: library::LibGlue::new(true, library::model::Config::default(), None),
+            status_over: serde_json::Map::new(),
+            idle: None,
+            idle_wanted: false,
+            idle_logged: false,
         };
         if let Some(p) = port {
             o.attach(p);
@@ -827,6 +851,31 @@ impl Objects {
         self.vault.unlocked()
     }
 
+    /// Some client of the world inhibits idle (or none does any more): the
+    /// host's portal is asked to keep the screen on. Cheap and idempotent:
+    /// the hub may call it on every change of `Protocols`' inhibitors.
+    pub fn set_idle_inhibit(&mut self, on: bool) {
+        self.idle_wanted = on;
+        if let Some(i) = &mut self.idle {
+            i.set(on);
+        }
+    }
+
+    /// The vault for the phone: a state and numbers, never a name.
+    fn vault_view(&self, now: Time) -> phone::VaultView {
+        use nkw_objects::vault::State;
+        match *self.vault.vault.state() {
+            State::Locked => phone::VaultView::Locked,
+            State::Unlocked { since, .. } => phone::VaultView::Open {
+                secs: (now - since).max(0.0) as u64,
+                cards: self.lib.cards(),
+            },
+            State::Lockout { until } => phone::VaultView::Lockout {
+                secs: (until - now).max(0.0).ceil() as u64,
+            },
+        }
+    }
+
     fn data_kind(d: Option<&Data>) -> Value {
         match d {
             None => Value::Null,
@@ -894,6 +943,10 @@ impl Plugin for Objects {
         // read, never here)
         let p = ping.clone();
         self.lib.set_wake(Arc::new(move || p.ping()));
+        if cli.sys() && !cli.demo && self.idle.is_none() {
+            // lazy: nothing touches the bus until a client inhibits
+            self.idle = Some(nkw_sys::idle::Inhibitor::new(None));
+        }
         if !cli.sys() || self.port.is_some() {
             return;
         }
@@ -971,6 +1024,15 @@ impl Plugin for Objects {
 
         // the windows changed: the streams' anchors too
         self.reanchor(ctx, false);
+
+        // no portal for the idle inhibitor: said once, then ignored
+        if !self.idle_logged
+            && let Some(nkw_sys::idle::State::Unavailable(e)) =
+                self.idle.as_ref().map(|i| i.state())
+        {
+            self.idle_logged = true;
+            tracing::info!(%e, "idle-inhibit: sem portal (org.freedesktop.portal.Inhibit); ignorado");
+        }
 
         // the culling set as the doors see it (for the dump)
         self.refresh_visible(ctx);
@@ -1282,6 +1344,23 @@ impl Plugin for Objects {
             Ok(Inject::Clock(c)) => SysEvent::Clock(c),
             Ok(Inject::Pressure { cpu, mem }) => SysEvent::Pressure { cpu, mem },
             Ok(Inject::Audio(a)) => SysEvent::Audio(a),
+            Ok(Inject::Status(over)) => {
+                // checked on a scratch copy: a bad override changes nothing
+                let mut probe = ext::Status::default();
+                if let Err(e) = status::apply(&mut probe, &over) {
+                    return vec![Req::Toast {
+                        text: e,
+                        kind: ToastKind::Error,
+                        ms: 2000,
+                    }];
+                }
+                self.status_over.extend(over);
+                return vec![Req::Wish(Wish::compose(Want::Once))];
+            }
+            Ok(Inject::IdleInhibit(on)) => {
+                self.set_idle_inhibit(on);
+                return Vec::new();
+            }
             Err(e) => {
                 tracing::warn!(%e, "inject objects: unknown shape");
                 return vec![Req::Toast {
@@ -1327,6 +1406,58 @@ impl Plugin for Objects {
     fn badges(&self, ctx: &Ctx) -> Vec<Badge> {
         let _ = ctx;
         self.badges_now().into_iter().map(map::badge).collect()
+    }
+
+    /// Clock, band, battery, net, playing, vault (S25): the fixture under
+    /// `--demo`, else the adapters' data; `inject objects {"status"}` wins.
+    fn status(&self, ctx: &Ctx) -> ext::Status {
+        let _ = ctx;
+        let mut s = if self.demo {
+            status::demo()
+        } else {
+            status::from_world(&self.world, false)
+        };
+        s.vault_open = self.vault_unlocked();
+        // validated when injected
+        let _ = status::apply(&mut s, &self.status_over);
+        s
+    }
+
+    fn phone_apps(&self, ctx: &Ctx) -> Vec<crate::ui::phone::PhoneApp> {
+        let _ = ctx;
+        phone::apps(self.vault_unlocked())
+    }
+
+    fn phone_page(
+        &self,
+        app: &str,
+        st: &crate::ui::phone::PhoneState,
+        ctx: &Ctx,
+    ) -> Option<crate::ui::phone::PhonePage> {
+        let _ = st;
+        Some(match app {
+            phone::MUSICA => {
+                let media = self
+                    .turntable()
+                    .and_then(|id| match self.world.data.get(&id) {
+                        Some(Data::Media(m)) => Some(m),
+                        _ => None,
+                    });
+                let player = media.map(|m| phone::Player {
+                    title: &m.title,
+                    artist: &m.artist,
+                    playing: m.playing,
+                    volume: self.sink_volume.unwrap_or(m.volume),
+                });
+                phone::musica(player.as_ref(), self.muted.is_some())
+            }
+            phone::BIBLIOTECA => {
+                let hits = self.lib.phone_hits();
+                phone::biblioteca(hits.as_deref(), self.lib.searching())
+            }
+            phone::COFRE => phone::cofre(self.vault_view(ctx.now)),
+            _ => return None,
+        })
     }
 
     fn obstacles(&self, room: RoomId, ctx: &Ctx) -> Vec<Aabb> {
@@ -1383,6 +1514,15 @@ impl Plugin for Objects {
             "demo": self.demo,
             "band": self.band,
             "library": self.lib.dump(),
+            "idle_inhibit": {
+                "wanted": self.idle_wanted,
+                "host": match self.idle.as_ref().map(|i| i.state()) {
+                    None => "none",
+                    Some(nkw_sys::idle::State::Off) => "off",
+                    Some(nkw_sys::idle::State::On(_)) => "on",
+                    Some(nkw_sys::idle::State::Unavailable(_)) => "unavailable",
+                },
+            },
             "vault": {
                 "state": self.vault.state_name(),
                 "cards": self.lib.cards(),
@@ -1395,6 +1535,9 @@ impl Plugin for Objects {
     }
 
     fn shutdown(&mut self) {
+        if let Some(mut i) = self.idle.take() {
+            i.shutdown();
+        }
         if let Some(p) = self.port.take() {
             self.audio.restore(p.audio());
             p.shutdown();

@@ -31,6 +31,13 @@ impl Fixture {
 pub const QUESTION: &str = "Aplicar a migração agora?";
 pub const OPTIONS: [&str; 2] = ["sim, aplicar agora", "não, revisar antes"];
 
+/// Today's cost of the fixture's sessions ($) and the 5-hour usage (%):
+/// invented, like everything here.
+pub const TODAY_USD: f64 = 4.5;
+pub const USAGE_5H: u8 = 27;
+/// Each fixture session's share of `TODAY_USD`, in tree order.
+const COST_TODAY: [f64; 5] = [1.2, 0.85, 2.1, 0.05, 0.3];
+
 /// The fixed clock of the fixture (activity times are relative to it).
 pub const T0: &str = "2026-01-05T10:00:00Z";
 
@@ -126,6 +133,9 @@ pub fn sessions(f: Fixture) -> Vec<Session> {
     demo.ended = true;
     demo.detail = "o processo saiu com código 1".into();
     let mut out = vec![acme, gw, alpha, bravo, demo];
+    for (s, c) in out.iter_mut().zip(COST_TODAY) {
+        s.cost_today = c;
+    }
     if f == Fixture::Busy {
         for (label, ctx) in [("acme-2", "acme"), ("alpha-2", "demo"), ("demo-2", "demo")] {
             let mut s = sess(&id_of(label), label, ctx, "busy", 0, 10);
@@ -205,6 +215,15 @@ pub fn snapshot(f: Fixture) -> (Snapshot, Tree) {
     let mut snap = Snapshot {
         sessions,
         at: T0.into(),
+        today_cost: TODAY_USD,
+        usage: nk_client::Usage {
+            limits: vec![nk_client::Limit {
+                name: "Current session".into(),
+                pct: USAGE_5H as i64,
+                resets: "17:00".into(),
+            }],
+            ..nk_client::Usage::default()
+        },
         ..Snapshot::default()
     };
     if f == Fixture::Busy {
@@ -217,6 +236,45 @@ pub fn snapshot(f: Fixture) -> (Snapshot, Tree) {
         );
     }
     (snap, tree)
+}
+
+/// The core's session rows of `normal` (plan §3.4), as `/v1/keymap` serves
+/// them: the fixture is the core under `--core none`, so the session keys
+/// work in NAV (`normal.world` falls to `normal`) without one. The world's
+/// own modes keep their fallback rows (the keymap never mentions them).
+pub const KEYMAP: &[(&str, &str, &str)] = &[
+    ("r", "session.reply", "resposta rápida"),
+    ("x", "session.stop", "parar a sessão em background"),
+    ("n", "session.rename", "renomear a sessão"),
+    ("m", "session.move", "mover a sessão para outro contexto"),
+    ("X", "session.archive", "arquiva/restaura"),
+    ("dd", "session.remove", "remover a sessão em background"),
+    ("c", "session.new", "novo agent em background"),
+    ("a", "nav.next_attention", "próxima te esperando"),
+    ("A", "nav.prev_attention", "anterior te esperando"),
+    (
+        "shift+space",
+        "inbox.summon",
+        "inbox: vai para quem te espera",
+    ),
+    ("?", "help.open", "todos os comandos"),
+    ("ctrl+k", "switcher.open", "ir p/ chat rodando/esperando"),
+];
+
+/// [`KEYMAP`] as `/v1/keymap` bindings.
+pub fn keymap() -> Vec<nk_client::Binding> {
+    KEYMAP
+        .iter()
+        .map(|(k, c, d)| nk_client::Binding {
+            command: c.to_string(),
+            keys: vec![k.to_string()],
+            mode: "normal".into(),
+            help: nk_client::Help {
+                key: k.to_string(),
+                desc: d.to_string(),
+            },
+        })
+        .collect()
 }
 
 /// The postman's letter of the busy fixture: (from, to, text).

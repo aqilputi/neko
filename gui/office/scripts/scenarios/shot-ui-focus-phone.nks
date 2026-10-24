@@ -1,0 +1,21 @@
+# The phone over FOCO (W2): world+n from inside a cat's terminal opens it (COMANDOS rides over
+# FOCO); esc returns to FOCO.
+key J
+wait 500
+inject cats {"cmd":"world.talk"}
+wait 300
+inject cats {"cmd":"world.talk_sit"}
+wait 800
+expect mode FOCO
+key world+n
+wait 400
+expect mode COMANDOS
+expect json /ext/overlay/phone/app null
+wait 200
+expect json /ext/overlay/elements 1
+shot ${OUT}/shot-ui-focus-phone.png
+key Escape
+wait 500
+expect mode FOCO
+dump ${OUT}/dump-ui-focus-phone.json
+quit

@@ -13,12 +13,19 @@
 //! - `{"aimed": bool|null}`, `{"carrying": bool|null}`, `{"vignette": 0..1|null}`:
 //!   force ANDAR's crosshair ring, the "na mão" keys and the comfort
 //!   vignette over the hub's/World's values (`null` gives them back).
+//! - wave 4 (S21): `{"phone": {"app"?, "sub"?} | null}` opens/closes the
+//!   phone; `{"phone_page": PhonePage | null}` draws a given page
+//!   ([`phone_page`]); `{"prefs": {"contrast", "font_scale", "strip",
+//!   "reduced_motion"}}` sets runtime prefs (never saved); `{"los": bool|null}`
+//!   forces the tags' line of sight; `{"hud_hidden": bool}`.
 
 use glam::Vec3;
 use nkw_core::{BookId, CatId, Pick, RoomId, ScreenId, Station};
 use serde_json::Value;
 
 use crate::ext::{DialogView, LineView, PaletteItem, Pickable, Source, ToastKind};
+use crate::ui::Icon;
+use crate::ui::phone::{Act, Item, PhonePage, SearchSpec};
 use crate::world::World;
 
 fn rgb(v: &Value) -> [u8; 3] {
@@ -119,6 +126,115 @@ pub fn pickables(v: &Value, world: &World) -> Vec<Pickable> {
             })
         })
         .collect()
+}
+
+/// An icon by its name (`"Cat"`, `"Envelope"` …).
+pub fn icon(v: &Value) -> Option<Icon> {
+    let s = v.as_str()?;
+    crate::ui::icon::ALL
+        .iter()
+        .copied()
+        .find(|i| format!("{i:?}").eq_ignore_ascii_case(s))
+}
+
+fn act(v: &Value) -> Option<Act> {
+    let name = v.get("name")?.as_str()?.to_string();
+    let args = v
+        .get("args")
+        .and_then(Value::as_object)
+        .map(|o| {
+            o.iter()
+                .map(|(k, x)| {
+                    let val = x
+                        .as_str()
+                        .map(String::from)
+                        .unwrap_or_else(|| x.to_string());
+                    (k.clone(), val)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Act {
+        name,
+        args,
+        close: v.get("close").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+fn opt_s(v: &Value, k: &str) -> Option<String> {
+    v.get(k).and_then(Value::as_str).map(String::from)
+}
+
+fn pairs(v: Option<&Value>) -> Vec<(String, String)> {
+    v.and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| {
+                    let p = p.as_array()?;
+                    Some((
+                        p.first()?.as_str()?.to_string(),
+                        p.get(1)?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `{"phone_page": PhonePage | null}`: a page drawn instead of the hub's
+/// (shots of apps whose plugin is not there yet). As JSON: `{"title",
+/// "items": [{"id","title","detail","badge","icon","rgb","toggle",
+/// "on_enter": {"name","args","close"}, "on_keys": [[key, act]]}], "empty",
+/// "search": {"placeholder","live","run"}, "keys": [[key, what]]}`.
+pub fn phone_page(v: &Value) -> Option<PhonePage> {
+    if !v.is_object() {
+        return None;
+    }
+    let items = v
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|i| Item {
+                    id: s(i, "id"),
+                    icon: i.get("icon").and_then(icon),
+                    rgb: i.get("rgb").map(rgb),
+                    title: s(i, "title"),
+                    detail: opt_s(i, "detail"),
+                    badge: opt_s(i, "badge"),
+                    toggle: i.get("toggle").and_then(Value::as_bool),
+                    on_enter: i.get("on_enter").and_then(act),
+                    on_keys: i
+                        .get("on_keys")
+                        .and_then(Value::as_array)
+                        .map(|ks| {
+                            ks.iter()
+                                .filter_map(|p| {
+                                    let p = p.as_array()?;
+                                    Some((p.first()?.as_str()?.to_string(), act(p.get(1)?)?))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(PhonePage {
+        title: s(v, "title"),
+        header: None,
+        items,
+        empty: opt_s(v, "empty"),
+        search: v
+            .get("search")
+            .filter(|x| x.is_object())
+            .map(|x| SearchSpec {
+                placeholder: s(x, "placeholder"),
+                live: x.get("live").and_then(Value::as_bool).unwrap_or(false),
+                run: opt_s(x, "run"),
+            }),
+        keys: pairs(v.get("keys")),
+    })
 }
 
 pub fn palette_items(v: &Value) -> Vec<PaletteItem> {

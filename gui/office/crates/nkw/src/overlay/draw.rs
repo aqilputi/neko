@@ -13,7 +13,7 @@ pub type Rgb = [u8; 3];
 /// The AC palette of the overlays.
 pub const CREAM: Rgb = [0xf6, 0xec, 0xd8];
 pub const INK: Rgb = [0x5a, 0x3e, 0x2b];
-pub const SOFT: Rgb = [0x9a, 0x82, 0x6c];
+pub const SOFT: Rgb = [0x6e, 0x56, 0x44];
 pub const ERROR_BG: Rgb = [0xf4, 0xcf, 0xc4];
 pub const ERROR_INK: Rgb = [0x7a, 0x2a, 0x1e];
 pub const HINT_BG: Rgb = [0xff, 0xd8, 0x6a];
@@ -194,6 +194,14 @@ pub enum Spec {
     Bar { text: String },
     /// `of` at `level`/[`FADE_STEPS`] opacity (tags fading in and out)
     Faded { level: u8, of: Box<Spec> },
+    /// a toolkit tree (S21) inside `w`×`h` logical px, drawn in `theme`;
+    /// the raster is the tree's measured size (cache key: the tree)
+    Ui {
+        node: crate::ui::Node,
+        w: i32,
+        h: i32,
+        theme: crate::ui::Theme,
+    },
 }
 
 /// A fade is drawn in this many opacity steps (rasters cached per step).
@@ -319,8 +327,14 @@ pub fn raster(spec: &Spec, fonts: &mut Fonts, s: Px) -> Raster {
             let tw = Canvas::text_width(face, label);
             let (w, h) = (tw + s.p(8), face.ch as i32 + s.p(2));
             let mut c = Canvas::transparent(w as usize, h as usize);
-            c.rounded_rect(0, 0, w, h, s.p(5), INK);
-            c.rounded_rect(s.p(1), s.p(1), w - s.p(2), h - s.p(2), s.p(4), HINT_BG);
+            if *typed > 0 {
+                // being typed: the one selection look (S21)
+                c.rounded_rect(0, 0, w, h, s.p(5), SELECT);
+                c.rounded_rect_ring(0, 0, w, h, s.p(5), s.p(2).max(2), RING);
+            } else {
+                c.rounded_rect(0, 0, w, h, s.p(5), INK);
+                c.rounded_rect(s.p(1), s.p(1), w - s.p(2), h - s.p(2), s.p(4), HINT_BG);
+            }
             let mut x = s.p(4);
             for (i, ch) in label.chars().enumerate() {
                 let fg = if i < *typed { HINT_TYPED } else { INK };
@@ -354,6 +368,15 @@ pub fn raster(spec: &Spec, fonts: &mut Fonts, s: Px) -> Raster {
                 let sel = i == *selected;
                 if sel {
                     c.rounded_rect(pad / 2, y - s.p(2), w - pad, ch + s.p(4), s.p(8), SELECT);
+                    c.rounded_rect_ring(
+                        pad / 2,
+                        y - s.p(2),
+                        w - pad,
+                        ch + s.p(4),
+                        s.p(8),
+                        s.p(2).max(2),
+                        RING,
+                    );
                 }
                 let mark = if sel { "▶" } else { " " };
                 let txt = format!("{mark} {} {it}", i + 1);
@@ -386,17 +409,13 @@ pub fn raster(spec: &Spec, fonts: &mut Fonts, s: Px) -> Raster {
             boxes,
         } => map(fonts, s, *w, *h, title, help, boxes),
         Spec::Ring { w, h } => {
+            // the one selection look on the map: the RING ring with the
+            // SELECT colour as its halo (a fill would hide the target)
             let (w, h) = (s.p(*w), s.p(*h));
             let mut c = Canvas::transparent(w.max(1) as usize, h.max(1) as usize);
-            c.rounded_rect(0, 0, w, h, s.p(8), RING);
-            // hollow it: clear the inside
-            let t = s.p(3);
-            for y in t..(h - t).max(t) {
-                for x in t..(w - t).max(t) {
-                    let i = ((y * w + x) * 4) as usize;
-                    c.px[i..i + 4].copy_from_slice(&[0, 0, 0, 0]);
-                }
-            }
+            let k = s.p(2).max(2);
+            c.rounded_rect_ring(0, 0, w, h, s.p(9), k, SELECT);
+            c.rounded_rect_ring(k, k, w - 2 * k, h - 2 * k, s.p(7), k, RING);
             done(c)
         }
         Spec::Crosshair { t } => {
@@ -422,6 +441,13 @@ pub fn raster(spec: &Spec, fonts: &mut Fonts, s: Px) -> Raster {
             done(c)
         }
         Spec::Bar { text } => pill(fonts, s, text, PX_UI, CREAM, INK, (14, 8), 14),
+        Spec::Ui { node, w, h, theme } => {
+            let avail = crate::ui::Size {
+                w: s.p(*w),
+                h: s.p(*h),
+            };
+            done(crate::ui::paint::render(node, avail, fonts, theme, s))
+        }
         Spec::Faded { level, of } => {
             let mut r = raster(of, fonts, s);
             // premultiplied: opacity scales every channel alike
@@ -548,7 +574,17 @@ fn palette(
         let y = top + i as i32 * row;
         let sel = i == selected;
         if sel {
+            // the one selection look (S21): SELECT + a 2 px RING ring
             c.rounded_rect(pad / 2, y - s.p(3), w - pad, row, s.p(8), SELECT);
+            c.rounded_rect_ring(
+                pad / 2,
+                y - s.p(3),
+                w - pad,
+                row,
+                s.p(8),
+                s.p(2).max(2),
+                RING,
+            );
         }
         let keys_cols = r.keys.chars().count();
         let name = ellipsize(&r.name, cols / 2);

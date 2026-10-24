@@ -49,8 +49,10 @@ pub const HIT_BASE: u32 = 900_000;
 pub const BOARD_BASE: u32 = 1_000_000;
 /// The library room's name (`world.library`, S15).
 pub const ROOM_NAME: &str = "biblioteca";
-/// Name tags show within this (plan: ≤ 1.8 m).
-pub const TAG_M: f32 = 1.8;
+/// Name tags show within this: the browse stand is `STAND_M` (2.4 m) from
+/// the case, so up to ≈ 2.7 m to a bottom-board book (the plan's 1.8 m was
+/// for the old 1.5 m stand).
+pub const TAG_M: f32 = 2.9;
 /// The cursor's slide, seconds (≤ 200 ms).
 pub const SLIDE_S: f64 = 0.16;
 /// The librarian "brings" the search table this long.
@@ -61,6 +63,20 @@ const FOLLOW_M: f32 = 0.9;
 const LECTERN_M: (f32, f32) = (0.42, 0.55);
 const LECTERN_PX: (usize, usize) = (420, 550);
 const CARDS_PX: (usize, usize) = (360, 400);
+
+/// The phone's Biblioteca lists at most this many hits (S25).
+pub const MAX_PHONE_HITS: usize = 60;
+
+/// One search hit as the phone's Biblioteca lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hit {
+    /// what `world.open`/`world.book_edit`/`world.copy` take
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+    /// the folder it is in (relative to its root)
+    pub folder: String,
+}
 
 /// What `h/l/j/k`, `enter` … act on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -467,7 +483,8 @@ impl LibGlue {
         if ctx.world.walking.is_none()
             && let Some(r) = layout::run(&slot, 0)
         {
-            out.push(Req::GlideTo(layout::stand(&r, r.centre)));
+            // a middle board: the whole height of the case is in the frame
+            out.push(Req::GlideTo(stand_at(&r, layout::board_centre(&r, 2))));
         }
         out
     }
@@ -515,6 +532,32 @@ impl LibGlue {
         if self.browsing == Browse::Vault {
             self.browsing = Browse::Off;
         }
+    }
+
+    /// The last search's hits for the phone's Biblioteca (`None`: nothing
+    /// searched yet). The search never enters the vault; a vault path is
+    /// dropped here once more all the same.
+    pub fn phone_hits(&self) -> Option<Vec<Hit>> {
+        let s = self.lib.last_search()?;
+        let root = self.hits.current().map(|c| c.root).unwrap_or(0);
+        Some(
+            s.hits
+                .iter()
+                .filter(|e| !self.cfg.policy.is_vault(&e.rel))
+                .take(MAX_PHONE_HITS)
+                .map(|e| Hit {
+                    path: self.abs(root, &e.rel),
+                    name: e.name().to_string(),
+                    is_dir: e.is_dir,
+                    folder: parent_of(&e.rel),
+                })
+                .collect(),
+        )
+    }
+
+    /// A search is running (the phone says "procurando…").
+    pub fn searching(&self) -> bool {
+        self.searching
     }
 
     pub fn cards(&self) -> usize {
@@ -617,6 +660,18 @@ impl LibGlue {
                     vec![]
                 }
             }
+            // the phone's Biblioteca ("e" on a hit): by path, browsing or not
+            "world.book_edit" if args.contains_key("path") => {
+                let p = args.get("path").map(|s| s.trim()).unwrap_or("");
+                if self.path_is_vault(p) {
+                    vec![toast("esse caminho fica no cofre")]
+                } else {
+                    match self.locate(p) {
+                        Some((root, rel)) => self.edit(root, &rel),
+                        None => vec![toast("fora da biblioteca")],
+                    }
+                }
+            }
             "world.book_edit" if browsing => {
                 *vault_touch |= self.browsing == Browse::Vault;
                 match self.selected_path() {
@@ -693,11 +748,12 @@ impl LibGlue {
         else {
             return Vec::new();
         };
-        let cam = ctx.world.camera.pos;
-        let off = (b.centre - cam).dot(r.along).abs();
-        let dy = (b.centre.y - cam.y).abs();
-        if off > FOLLOW_M || dy > 0.8 {
-            return vec![Req::GlideTo(stand_at(&r, b.centre))];
+        let cam = ctx.world.camera;
+        let off = (b.centre - cam.pos).dot(r.along).abs();
+        let framed = stand_at(&r, b.centre);
+        // another board → another pitch: reframe so it stays mid-frame
+        if off > FOLLOW_M || (framed.pitch - cam.pitch).abs() > 0.05 {
+            return vec![Req::GlideTo(framed)];
         }
         Vec::new()
     }
@@ -1308,16 +1364,19 @@ impl LibGlue {
     }
 }
 
-/// The stand before a book: level with it as far as the eye allows, so the
-/// selected book stays within `TAG_M`.
+/// The stand before a book (wave 4's framing rule): `STAND_M` from the
+/// bookcase at eye height, pitched so the centre of the board the book
+/// stands on sits in the middle of the frame (pitch ≤ ±`STAND_PITCH`), so
+/// the board's unit and half of each neighbour fit at 60° FOV.
 pub fn stand_at(r: &Run, book: Vec3) -> Pose {
     let st = layout::stand(r, book);
-    let dy = book.y - st.pos.y;
-    let horiz = (1.5f32.powi(2) - dy * dy).max(0.81).sqrt();
-    let foot = book - r.normal * 0.08;
-    let pos = Vec3::new(foot.x, st.pos.y, foot.z) + r.normal * horiz;
-    let pitch = (dy / horiz).atan().clamp(-0.6, 0.6);
-    Pose::new(pos, st.yaw, pitch)
+    let board = layout::board_at(book.y);
+    let target = layout::floors()[board] + layout::BOARD_MID;
+    let horiz = layout::STAND_M - layout::BOARD_FRONT;
+    let pitch = (target - st.pos.y)
+        .atan2(horiz)
+        .clamp(-layout::STAND_PITCH, layout::STAND_PITCH);
+    Pose::new(st.pos, st.yaw, pitch)
 }
 
 fn parent_of(rel: &str) -> String {

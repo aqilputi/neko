@@ -252,3 +252,64 @@ quit
     assert!(state.path().join("world.json.bak").exists());
     let _ = read_log;
 }
+
+/// X11 on demand (S22) with a fake `xwayland-satellite` on `PATH` that
+/// only creates its socket: the first launch starts it, the child waits for
+/// the socket and gets `DISPLAY`, and so does a later one; the launcher's
+/// toolkit env reaches them.
+#[test]
+fn x11_through_a_fake_satellite() {
+    use std::os::unix::fs::PermissionsExt;
+    let fake = tempfile::tempdir().unwrap();
+    let bin = fake.path().join("bin");
+    let x11 = fake.path().join(".X11-unix");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&x11).unwrap();
+    let sat = bin.join("xwayland-satellite");
+    std::fs::write(
+        &sat,
+        "#!/bin/sh\n# fake: the socket after 0.2 s, then idle\nsleep 0.2\ntouch \"$FAKE_X11_DIR/X${1#:}\"\nsleep 5\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&sat, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let launch = |file: &str| {
+        format!(
+            "inject wm {{\"command\": \"world.launch\", \"args\": {{\"exec\": \
+             \"sh -c \\\"echo $DISPLAY $GDK_BACKEND > {{dir}}/{file}\\\"\"}}}}"
+        )
+    };
+    let r = run(
+        &format!(
+            "inject wm {{\"x11_dir\": \"{x11}\"}}
+expect json /ext/wm/xwayland/state \"off\"
+{first}
+expect json /ext/wm/xwayland/state \"starting\"
+expect json /status/xwayland false
+wait json /ext/wm/xwayland/state \"up\" 3000
+expect json /ext/wm/xwayland/display \":7\"
+expect json /status/xwayland true
+{second}
+wait 600
+quit
+",
+            x11 = x11.display(),
+            first = launch("one"),
+            second = launch("two"),
+        ),
+        &["--xwayland", "on"],
+        &[
+            ("PATH", path.as_str()),
+            ("FAKE_X11_DIR", x11.to_str().unwrap()),
+        ],
+    );
+    assert_eq!(r.code(), 0, "{}", r.stderr());
+    for f in ["one", "two"] {
+        let got = std::fs::read_to_string(r.path(f)).unwrap_or_default();
+        assert_eq!(got.trim(), ":7 wayland,x11", "{f}: {got:?}");
+    }
+}

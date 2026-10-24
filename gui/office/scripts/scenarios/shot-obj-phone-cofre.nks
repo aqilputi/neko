@@ -1,0 +1,15 @@
+# W6: the phone's Cofre app. The vault is opened with the phrase, then the shot: a shot always
+# locks it first, so the page shows "trancado" — an unlocked Cofre shot is impossible.
+wait 100
+key b
+wait json /ext/objects/library/browsing true 2000
+inject objects {"vault":{"phrase":"destrancar"}}
+wait json /ext/objects/vault/state "unlocked" 1000
+inject overlay {"phone":{"app":"cofre"}}
+wait json /ext/overlay/phone/app "cofre" 1000
+wait 400
+shot ${OUT}/shot-obj-phone-cofre.png
+expect json /ext/objects/vault/state "locked"
+expect json /status/vault_open false
+dump ${OUT}/dump-obj-phone-cofre.json
+quit

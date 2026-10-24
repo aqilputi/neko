@@ -56,6 +56,7 @@ impl CompositorHandler for Nkw {
                 let w = self.window(id).unwrap().clone();
                 w.on_commit();
                 if surface == &root {
+                    self.content_type_committed(id, &root);
                     let (app_id, title) = toplevel_ids(&root);
                     self.world.set_app_id(id, &app_id, &title);
                     // its app_id is known: the rules, the restored places
@@ -179,6 +180,15 @@ impl XdgShellHandler for Nkw {
         let now = self.now();
         let outs = self.world.remove_screen(id, now);
         self.apply(outs);
+        self.content_type_forget(id);
+        if self
+            .protos
+            .locked_by_client
+            .as_ref()
+            .is_some_and(|l| l.screen == Some(id))
+        {
+            self.release_client_lock();
+        }
         self.windows.retain(|(i, _)| *i != id);
         self.pids.remove(&id);
         self.wake();
@@ -367,13 +377,18 @@ impl SeatHandler for Nkw {
         &mut self.seat_state
     }
 
-    // the cursor is the host's (§0): client cursor surfaces are ignored
-    fn cursor_image(&mut self, _seat: &Seat<Self>, _image: CursorImageStatus) {}
+    // the cursor is the host's (§0); in FOCO it takes the focused app's
+    // named shape (S23, `protocols::cursor`); custom cursor surfaces: phase 6+
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        self.client_cursor(image);
+    }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let dh = &self.dh;
         let client = focused.and_then(|s| dh.get_client(s.id()).ok());
         set_data_device_focus(dh, seat, client);
+        // primary selection, the FOCO client's pointer lock, the host cursor
+        self.protos_focus_changed(focused);
     }
 }
 
@@ -388,7 +403,9 @@ impl SelectionHandler for Nkw {
         source: Option<SelectionSource>,
         _seat: Seat<Self>,
     ) {
-        if ty != SelectionTarget::Clipboard {
+        if ty == SelectionTarget::Primary {
+            // in-world only (S23): nothing goes to the host
+            self.protos.has_primary = source.is_some();
             return;
         }
         if let Some(src) = source {
@@ -484,7 +501,5 @@ impl WaylandDndGrabHandler for Nkw {
 }
 
 impl OutputHandler for Nkw {}
-
-impl smithay::wayland::pointer_constraints::PointerConstraintsHandler for Nkw {}
 
 smithay::delegate_dispatch2!(Nkw);

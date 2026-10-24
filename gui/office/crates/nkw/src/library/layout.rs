@@ -25,8 +25,14 @@ pub const OFF_WALL: f32 = 0.18;
 pub const END_GAP: f32 = 0.3;
 /// Gap between books.
 pub const BOOK_GAP: f32 = 0.004;
-/// How far you stand from the bookcase to browse it.
-pub const STAND_M: f32 = 1.7;
+/// How far you stand from the bookcase (its centre line) to browse it:
+/// far enough that a whole unit and half of each neighbour fit (wave 4).
+pub const STAND_M: f32 = 2.4;
+/// The browse stand's pitch never exceeds this (radians).
+pub const STAND_PITCH: f32 = 0.5;
+/// A board's centre: this far above its top and in front of the run's line.
+pub const BOARD_MID: f32 = 0.15;
+pub const BOARD_FRONT: f32 = 0.1;
 /// The selected book is pulled out this much.
 pub const PULL_M: f32 = 0.05;
 /// A unit's side panel plus a hair: books never stand behind it.
@@ -219,7 +225,16 @@ pub fn more_at(r: &Run) -> Vec3 {
 
 /// The middle of a board (its pickable and the breadcrumb's anchor).
 pub fn board_centre(r: &Run, board: usize) -> Vec3 {
-    r.at(r.len / 2.0, floors()[board.min(BOARDS - 1)] + 0.15) + r.normal * 0.1
+    r.at(r.len / 2.0, floors()[board.min(BOARDS - 1)] + BOARD_MID) + r.normal * BOARD_FRONT
+}
+
+/// The board a point at height `y` stands on: the highest board top at or
+/// below it (the bottom board below every top).
+pub fn board_at(y: f32) -> usize {
+    floors()
+        .iter()
+        .position(|&f| f <= y + 1e-3)
+        .unwrap_or(BOARDS - 1)
 }
 
 /// The breadcrumb plate above the run.
@@ -378,6 +393,17 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn board_at_finds_the_board_under_a_height() {
+        let f = floors();
+        for (i, top) in f.iter().enumerate() {
+            assert_eq!(board_at(*top), i);
+            assert_eq!(board_at(top + 0.2), i, "a book on board {i}");
+        }
+        assert_eq!(board_at(-1.0), BOARDS - 1);
+        assert_eq!(board_at(5.0), 0);
     }
 
     #[test]

@@ -46,8 +46,14 @@ impl Nkw {
             }
             InputEvent::PointerMotion { event } => {
                 // the host's relative pointer (the patched Smithay winit
-                // backend; unpatched builds never see this variant)
-                self.look(event.delta_x(), event.delta_y());
+                // backend; unpatched builds never see this variant). A
+                // client's pointer lock in FOCO takes it first (S23).
+                let (dx, dy) = (event.delta_x(), event.delta_y());
+                let (dxu, dyu) = (event.delta_x_unaccel(), event.delta_y_unaccel());
+                let utime = Event::time(&event).micros();
+                if !self.protos_relative_motion(dx, dy, dxu, dyu, utime) {
+                    self.look(dx, dy);
+                }
             }
             InputEvent::PointerButton { event } => {
                 self.pointer_button(event.button_code(), event.state(), Event::time(&event));

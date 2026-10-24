@@ -1,0 +1,14 @@
+# Ajustes (W2): the prefs the overlay owns (toggles, the font stepper, the strip cycle), the walk
+# options through world.walk_set, the read-only keys. Under --demo nothing is saved (says so).
+key J
+wait 500
+inject overlay {"phone": {"app": "ajustes"}}
+wait 400
+key j
+key j
+wait 300
+expect json /ext/overlay/phone/selected "font_scale"
+expect json /ext/overlay/prefs/saved false
+shot ${OUT}/shot-ui-phone-ajustes.png
+dump ${OUT}/dump-ui-phone-ajustes.json
+quit

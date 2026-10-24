@@ -15,6 +15,8 @@ use crate::ext::{Ctx, DialogView, LineView, Req, ToastKind};
 
 /// How far before a cat's face the camera stops (§3.7).
 pub const FACE_DIST: f32 = 0.9;
+/// What the tour's end tells the WM (S22: it saves `tour_done`).
+pub const TOUR_DONE: &str = "world.tour_done";
 /// "foi embora" stays this long before the box closes.
 pub const GONE_S: Time = 1.5;
 
@@ -54,9 +56,10 @@ impl Cats {
     pub(super) fn who(&self, cat: CatId) -> Option<(Who, String, [u8; 3])> {
         let cream = [0xe8, 0x9a, 0x6a];
         if cat == RECEPTIONIST {
-            let who = match &self.walks.confirm {
-                Some((t, q)) => Who::Confirm(t.clone(), q.clone()),
-                None => Who::Receptionist,
+            let who = match (&self.walks.confirm, self.tour) {
+                (_, Some(step)) => Who::Tour(step),
+                (Some((t, q)), None) => Who::Confirm(t.clone(), q.clone()),
+                (None, None) => Who::Receptionist,
             };
             return Some((who, "recepcionista".into(), cream));
         }
@@ -166,11 +169,19 @@ impl Cats {
                 }
             }
             Effect::CatBackToWork(cat) => {
-                if self.talk.as_ref().is_some_and(|t| t.cat == cat) {
-                    self.talk = None;
+                let mut out = Vec::new();
+                if let Some(t) = self.talk.take_if(|t| t.cat == cat)
+                    && matches!(t.who, Who::Tour(_))
+                {
+                    // the tour ends however the box closes: once
+                    self.tour = None;
+                    out.push(Req::Command {
+                        name: TOUR_DONE.into(),
+                        args: BTreeMap::new(),
+                    });
                 }
                 self.walks.seen(&self.office, cat, self.clock_ms(ctx.now));
-                Vec::new()
+                out
             }
             Effect::OpenLine => {
                 if let Some(t) = self.talk.as_mut() {
@@ -288,8 +299,50 @@ impl Cats {
                     args: args.into_iter().collect(),
                 },
             ],
-            Step::End => vec![Req::Action(Action::Back)],
+            Step::Tour(Some(step)) => {
+                self.tour = Some(step);
+                self.retell(Who::Tour(step), ctx.now);
+                Vec::new()
+            }
+            Step::Tour(None) | Step::End => vec![Req::Action(Action::Back)],
         }
+    }
+
+    /// The box says something new to the same listener (the tour's next
+    /// balloon): text, choices and the reveal start over.
+    fn retell(&mut self, who: Who, now: Time) {
+        let reduced = self.reduced_motion;
+        let Some(t) = self.talk.as_mut() else {
+            return;
+        };
+        let (row, text, choices) = talk::opening(&who);
+        let labels = choices.iter().map(Choice::label).collect();
+        t.reveal = Reveal::new(&text, labels, now, reduced);
+        t.who = who;
+        t.row = row;
+        t.choices = choices;
+        t.composed_done = false;
+    }
+
+    /// `world.tour` (and `inject cats {"tour": true}`): the receptionist's
+    /// tour from its first balloon, wherever you are — out of any overlay,
+    /// to the reception, then the talk.
+    pub(super) fn start_tour(&mut self, ctx: &Ctx) -> Vec<Req> {
+        self.tour = Some(0);
+        let mut out = Vec::new();
+        if ctx.world.mode().kind().is_some() {
+            out.push(Req::Action(Action::Back));
+        }
+        if let Some((room, _)) = ctx.world.cat_desk(RECEPTIONIST) {
+            out.push(Req::Cmd(crate::world::Cmd::GotoRoom(
+                crate::world::RoomRef::Id(room),
+            )));
+        }
+        out.push(Req::Action(Action::Talk {
+            cat: RECEPTIONIST,
+            purpose: TalkPurpose::Session,
+        }));
+        out
     }
 
     /// "Ver o terminal": FOCO on the cat's terminal, back lands on its desk.
@@ -338,6 +391,7 @@ impl Cats {
                 })],
                 None => Vec::new(),
             },
+            "world.tour" => self.start_tour(ctx),
             "world.summon" => match self.walks.most_urgent(&self.office) {
                 Some(cat) => vec![Req::Action(Action::Summon(cat))],
                 None => vec![Req::Toast {
@@ -724,6 +778,88 @@ mod tests {
         assert_eq!(r, [once]);
         let r = with_ctx(&w, &rooms, 25.1, |ctx| cats.talk_tick(ctx));
         assert!(r.is_empty());
+    }
+
+    fn tour_done(rest: &[Req]) -> usize {
+        rest.iter()
+            .filter(|r| matches!(r, Req::Command { name, .. } if name == TOUR_DONE))
+            .count()
+    }
+
+    #[test]
+    fn the_tour_walks_six_balloons_and_says_done_once() {
+        let (mut w, mut cats) = fixture_world();
+        acme(&mut w);
+        let rest = command(&mut w, &mut cats, "world.tour", 20.0);
+        assert_eq!(w.mode().label(), "CONVERSA");
+        assert!(
+            rest.iter().any(|r| matches!(
+                r,
+                Req::Cmd(crate::world::Cmd::GotoRoom(crate::world::RoomRef::Id(
+                    RoomId(0)
+                )))
+            )),
+            "to the reception first: {rest:?}"
+        );
+        assert!(
+            rest.iter().any(|r| matches!(r, Req::GlideTo(_))),
+            "her face"
+        );
+        assert_eq!(cats.tour, Some(0));
+        let t = cats.talk.as_ref().unwrap();
+        assert_eq!((t.cat, t.row), (RECEPTIONIST, Row::Tour));
+        assert_eq!(t.reveal.text(), talk::TOUR[0]);
+        assert_eq!(cats.dump()["tour"], 0);
+        let mut done = 0;
+        for step in 1..6u8 {
+            let rest = command(&mut w, &mut cats, "world.choice_1", 20.0 + step as f64);
+            done += tour_done(&rest);
+            assert_eq!(w.mode().label(), "CONVERSA", "{step}");
+            assert_eq!(cats.tour, Some(step));
+            assert_eq!(
+                cats.talk.as_ref().unwrap().reveal.text(),
+                talk::TOUR[step as usize]
+            );
+        }
+        assert_eq!(cats.talk.as_ref().unwrap().choices, [Choice::TourDone]);
+        let rest = command(&mut w, &mut cats, "world.choice_1", 30.0);
+        done += tour_done(&rest);
+        assert_eq!(w.mode().label(), "NAVEGAR");
+        assert_eq!((done, cats.tour), (1, None), "done once, at the end");
+        assert!(cats.talk.is_none());
+        // plain talks with her afterwards are hers again
+        assert_eq!(cats.dump()["tour"], Value::Null);
+    }
+
+    #[test]
+    fn skipping_or_leaving_the_tour_ends_it_once() {
+        for how in ["world.choice_2", "world.talk_end"] {
+            let (mut w, mut cats) = fixture_world();
+            let mut done = tour_done(&command(&mut w, &mut cats, "world.tour", 1.0));
+            done += tour_done(&command(&mut w, &mut cats, "world.choice_1", 2.0));
+            assert_eq!(cats.tour, Some(1));
+            done += tour_done(&command(&mut w, &mut cats, how, 3.0));
+            assert_eq!(w.mode().label(), "NAVEGAR", "{how}");
+            assert_eq!((done, cats.tour), (1, None), "{how}");
+        }
+    }
+
+    #[test]
+    fn the_tour_under_reduced_motion_shows_each_balloon_at_once() {
+        let (mut w, _) = fixture_world();
+        let mut cats = Cats::new(&crate::cli::Cli {
+            demo: true,
+            reduced_motion: true,
+            ..crate::cli::Cli::default()
+        });
+        let ctxs = cats.take_sync().unwrap();
+        w.sync_contexts(&ctxs, 0.0);
+        command(&mut w, &mut cats, "world.tour", 5.0);
+        cats.now = 5.0;
+        assert_eq!(cats.dialog_view().unwrap().text, talk::TOUR[0]);
+        command(&mut w, &mut cats, "world.choice_1", 6.0);
+        cats.now = 6.0;
+        assert_eq!(cats.dialog_view().unwrap().text, talk::TOUR[1]);
     }
 
     #[test]

@@ -29,6 +29,15 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 # P3
 # P4
 # P5
+# wave 4: one dep per line under your marker only
+# W1
+# W2
+toml = "1"
+# W3
+# W4
+# W5
+# W6
+# W7
 
 [dependencies.smithay]
 git = "https://github.com/Smithay/smithay.git"

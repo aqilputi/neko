@@ -245,6 +245,13 @@ pub const COMMANDS: &[CmdInfo] = &[
     m("world.nearer", "tela na mão: mais perto", &["["]),
     m("world.farther", "tela na mão: mais longe", &["]"]),
     c("world.library", "biblioteca", &["b"]),
+    CmdInfo {
+        name: "world.walk_set",
+        title: "ajuste do ANDAR (não fica salvo)",
+        keys: &[],
+        args: &[("key", "chave"), ("value", "valor")],
+        palette: true,
+    },
     m("world.walk_exit", "volta ao NAV", &["esc"]),
     m("world.talk_next", "avança", &["space", "enter"]),
     m("world.talk_reply", "responder (linha)", &["i", "r"]),
@@ -482,6 +489,8 @@ impl World {
             screens,
             station,
             places: Default::default(),
+            // the WM's flag (`world.tour_done`), set on its copy
+            tour_done: false,
         }
     }
 
@@ -2131,6 +2140,8 @@ mod tests {
         let args = BTreeMap::from([
             ("room".to_string(), "acme".to_string()),
             ("name".to_string(), "bravo".to_string()),
+            ("key".to_string(), "turn".to_string()),
+            ("value".to_string(), "snap".to_string()),
         ]);
         for (name, title) in NAMES {
             assert!(!title.is_empty(), "{name}");

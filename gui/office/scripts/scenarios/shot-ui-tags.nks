@@ -1,0 +1,10 @@
+# Tags respect walls (W2 filters with W3's line of sight): the library with the busy cats in the
+# next rooms — no cat's tag through the bookcase wall; the library's own plates placed apart.
+inject cats {"fixture":"busy"}
+wait 100
+key b
+wait json /ext/objects/library/browsing true 2000
+wait 800
+shot ${OUT}/shot-ui-tags.png
+dump ${OUT}/dump-ui-tags.json
+quit

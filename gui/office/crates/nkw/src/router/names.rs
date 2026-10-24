@@ -88,6 +88,9 @@ pub fn is_global(key: &str) -> bool {
 pub fn mode_of(mode: &Mode, sub: Option<&str>) -> &'static str {
     match sub {
         Some("map") => return "world.map",
+        // the phone rides COMANDOS (S21): its keys only while the palette
+        // mode is up
+        Some("phone") if mode.kind() == Some(Kind::Palette) => return "world.phone",
         Some("library") if mode.overlay.is_none() => return "world.library",
         _ => {}
     }
@@ -107,12 +110,13 @@ pub fn submode_of(keymap_mode: &str) -> Option<&'static str> {
     match keymap_mode {
         "world.map" => Some("map"),
         "world.library" => Some("library"),
+        "world.phone" => Some("phone"),
         _ => None,
     }
 }
 
 /// The world modes the router knows.
-pub const MODES: [&str; 9] = [
+pub const MODES: [&str; 10] = [
     "normal.world",
     "world.walk",
     "world.focus",
@@ -122,13 +126,14 @@ pub const MODES: [&str; 9] = [
     "world.line",
     "world.map",
     "world.library",
+    "world.phone",
 ];
 
 /// Modes whose printable keys are text.
 pub fn is_text_mode(mode: &str) -> bool {
     matches!(
         mode,
-        "world.hint" | "world.palette" | "world.line" | "world.map"
+        "world.hint" | "world.palette" | "world.line" | "world.map" | "world.phone"
     )
 }
 
@@ -142,6 +147,7 @@ pub fn chain(mode: &str) -> Vec<String> {
         "normal.world" => &["world", "normal.world", "normal", "*"],
         "world.library" => &["world", "world.library", "normal.world", "normal", "*"],
         "world.walk" => &["world", "world.walk", "*"],
+        "world.phone" => &["world", "world.phone", "*"],
         "world.talk" => &["world", "world.talk", "normal"],
         "world" => &["world"],
         _ => return vec!["world".to_string(), mode.to_string()],

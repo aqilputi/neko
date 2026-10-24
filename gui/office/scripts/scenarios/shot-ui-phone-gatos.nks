@@ -1,0 +1,20 @@
+# The phone's list page as the shell draws it (W2): a page handed in with `inject overlay
+# {"phone_page": …}` (W5's own shot, shot-cats-phone-gatos, uses the real app), with live search.
+key J
+wait 500
+inject overlay {"phone": {"app": "gatos"}}
+wait 300
+inject overlay {"phone_page": {"title": "Gatos", "search": {"placeholder": "buscar um gato", "live": true}, "keys": [["x", "parar"], ["t", "conversa"]], "items": [{"id": "1", "title": "api-gateway", "detail": "esperando você · acme", "badge": "!", "icon": "Cat", "rgb": [106, 159, 216], "on_enter": {"name": "phone.sub", "args": {"sub": "1"}}}, {"id": "2", "title": "alpha", "detail": "dormindo · alpha", "badge": "zZ", "icon": "Cat", "rgb": [240, 154, 106]}, {"id": "3", "title": "bravo", "detail": "trabalhando · bravo", "icon": "Cat", "rgb": [108, 184, 132]}, {"id": "4", "title": "demo", "detail": "trabalhando · demo", "icon": "Cat", "rgb": [164, 138, 216]}, {"id": "5", "title": "carteiro", "detail": "trazendo uma carta · recepção", "icon": "Envelope", "rgb": [232, 180, 60]}]}}
+wait 300
+key j
+wait 300
+expect json /ext/overlay/phone/items 5
+expect json /ext/overlay/phone/sel 1
+shot ${OUT}/shot-ui-phone-gatos.png
+key slash
+text "bra"
+wait 300
+expect json /ext/overlay/phone/items 1
+shot ${OUT}/shot-ui-phone-gatos-busca.png
+dump ${OUT}/dump-ui-phone-gatos.json
+quit

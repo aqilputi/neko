@@ -20,6 +20,18 @@
 //!   (`set_parent` only takes toplevels of the same client). The mother's lines
 //!   carry `"win":"parent"`; the main window's lines have no `win` key.
 //!
+//! Wave-4 additions (W4, S23): `--list-globals` (one `{"ev":"global","name","version"}`
+//! per advertised global, sorted, then exit), `--cursor-shape NAME` (binds
+//! `wp_cursor_shape_manager_v1`, sets NAME at every pointer enter: `cursor_shape_set`),
+//! `--primary TEXT` / `--log-primary` (`zwp_primary_selection_v1`, like `--copy` /
+//! `--log-selection`: `primary_set`, `primary_cancelled`, `primary`), `--presentation`
+//! (`presented {tv_sec, tv_nsec, refresh_ns, seq, flags}` / `discarded` per commit),
+//! `--lock-pointer` (locks at the first pointer enter: `locked`, `unlocked`,
+//! `relative_motion {dx, dy}`), `--idle-inhibit` (`idle_inhibit`), `--content-type
+//! video|game|photo` (`content_type {kind}`), `--single-pixel RRGGBBAA` (the window is one
+//! `wp_single_pixel_buffer` scaled by a viewport), `--export` (`exported {handle}`). The
+//! flags that need the pointer also log `pointer_enter`.
+//!
 //! Wave-3 additions (R1):
 //! - `--activation-token`: reads `XDG_ACTIVATION_TOKEN` (and unsets it, as
 //!   the protocol asks), and after the first configure calls
@@ -40,7 +52,9 @@ use serde::Serialize;
 pub const USAGE: &str = "usage: nkw-testclient [--app-id ID] [--title T] [--color RRGGBB | --checker] \
 [--size WxH] [--log PATH|-] [--popup-on-key] [--exit-after-ms N] [--no-frame-wait] [--copy TEXT] \
 [--log-selection] [--damage WxH] [--fractional] [--fullscreen] [--parent-of APP_ID] \
-[--activation-token] [--spawn-child]";
+[--activation-token] [--spawn-child] [--list-globals] [--cursor-shape NAME] [--primary TEXT] \
+[--log-primary] [--presentation] [--lock-pointer] [--idle-inhibit] [--content-type video|game|photo] \
+[--single-pixel RRGGBBAA] [--export]";
 
 /// The mimes `--copy` offers and `--log-selection` prefers, best first.
 pub const TEXT_MIMES: [&str; 3] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"];
@@ -91,6 +105,123 @@ pub struct Args {
     pub activation_token: bool,
     /// `--spawn-child`: start a child testclient after [`CHILD_AFTER_MS`].
     pub spawn_child: bool,
+    /// `--list-globals`: log every advertised global and exit (no window).
+    pub list_globals: bool,
+    /// `--cursor-shape`: a `wp_cursor_shape_device_v1` shape name, set on pointer enter.
+    pub cursor_shape: Option<String>,
+    /// `--primary`: the text offered as the primary selection.
+    pub primary: Option<String>,
+    /// `--log-primary`: read and log every primary selection offer.
+    pub log_primary: bool,
+    /// `--presentation`: a `wp_presentation` feedback for every commit, logged.
+    pub presentation: bool,
+    /// `--lock-pointer`: lock the pointer on the first enter, log relative motion.
+    pub lock_pointer: bool,
+    /// `--idle-inhibit`: an idle inhibitor on the main surface.
+    pub idle_inhibit: bool,
+    /// `--content-type`: `wp_content_type_v1` hint of the main surface.
+    pub content_type: Option<ContentKind>,
+    /// `--single-pixel`: the window is one `wp_single_pixel_buffer` (RGBA bytes).
+    pub single_pixel: Option<[u8; 4]>,
+    /// `--export`: export the main toplevel with `zxdg_exporter_v2`.
+    pub export: bool,
+}
+
+/// `wp_content_type_v1::type` (wave 4, `--content-type`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentKind {
+    Photo,
+    Video,
+    Game,
+}
+
+impl ContentKind {
+    pub fn parse(s: &str) -> Option<ContentKind> {
+        match s {
+            "photo" => Some(ContentKind::Photo),
+            "video" => Some(ContentKind::Video),
+            "game" => Some(ContentKind::Game),
+            _ => None,
+        }
+    }
+
+    /// The protocol's enum value (`none` = 0 is never asked for).
+    pub fn code(self) -> u32 {
+        match self {
+            ContentKind::Photo => 1,
+            ContentKind::Video => 2,
+            ContentKind::Game => 3,
+        }
+    }
+}
+
+/// `wp_cursor_shape_device_v1::shape` by its protocol name (`-` accepted for `_`):
+/// v1 has 1..=34, v2 adds `dnd_ask` (35) and `all_resize` (36).
+pub fn cursor_shape_code(name: &str) -> Option<u32> {
+    const NAMES: [&str; 36] = [
+        "default",
+        "context_menu",
+        "help",
+        "pointer",
+        "progress",
+        "wait",
+        "cell",
+        "crosshair",
+        "text",
+        "vertical_text",
+        "alias",
+        "copy",
+        "move",
+        "no_drop",
+        "not_allowed",
+        "grab",
+        "grabbing",
+        "e_resize",
+        "n_resize",
+        "ne_resize",
+        "nw_resize",
+        "s_resize",
+        "se_resize",
+        "sw_resize",
+        "w_resize",
+        "ew_resize",
+        "ns_resize",
+        "nesw_resize",
+        "nwse_resize",
+        "col_resize",
+        "row_resize",
+        "all_scroll",
+        "zoom_in",
+        "zoom_out",
+        "dnd_ask",
+        "all_resize",
+    ];
+    let n = name.replace('-', "_");
+    NAMES.iter().position(|k| *k == n).map(|i| i as u32 + 1)
+}
+
+/// One RGBA channel as `wp_single_pixel_buffer_manager_v1` wants it (0..=u32::MAX).
+pub fn channel_u32(c: u8) -> u32 {
+    c as u32 * 0x0101_0101
+}
+
+/// `wp_presentation_feedback.presented`'s split fields as one event.
+pub fn presented(
+    tv_sec_hi: u32,
+    tv_sec_lo: u32,
+    tv_nsec: u32,
+    refresh: u32,
+    seq_hi: u32,
+    seq_lo: u32,
+    flags: u32,
+) -> Event {
+    Event::Presented {
+        tv_sec: ((tv_sec_hi as u64) << 32) | tv_sec_lo as u64,
+        tv_nsec,
+        refresh_ns: refresh,
+        seq: ((seq_hi as u64) << 32) | seq_lo as u64,
+        flags,
+    }
 }
 
 /// When `--spawn-child` starts its child.
@@ -153,6 +284,16 @@ impl Default for Args {
             parent_of: None,
             activation_token: false,
             spawn_child: false,
+            list_globals: false,
+            cursor_shape: None,
+            primary: None,
+            log_primary: false,
+            presentation: false,
+            lock_pointer: false,
+            idle_inhibit: false,
+            content_type: None,
+            single_pixel: None,
+            export: false,
         }
     }
 }
@@ -213,6 +354,28 @@ pub fn parse_args<S: AsRef<str>>(argv: &[S]) -> Result<Args, String> {
             }
             "--activation-token" => a.activation_token = true,
             "--spawn-child" => a.spawn_child = true,
+            "--list-globals" => a.list_globals = true,
+            "--cursor-shape" => {
+                let v = value()?;
+                if cursor_shape_code(v).is_none() {
+                    return Err(format!("--cursor-shape: unknown shape {v:?}"));
+                }
+                a.cursor_shape = Some(v.to_string());
+            }
+            "--primary" => a.primary = Some(value()?.to_string()),
+            "--log-primary" => a.log_primary = true,
+            "--presentation" => a.presentation = true,
+            "--lock-pointer" => a.lock_pointer = true,
+            "--idle-inhibit" => a.idle_inhibit = true,
+            "--content-type" => {
+                let v = value()?;
+                a.content_type =
+                    Some(ContentKind::parse(v).ok_or_else(|| {
+                        format!("--content-type wants video|game|photo, got {v}")
+                    })?);
+            }
+            "--single-pixel" => a.single_pixel = Some(parse_rgba(value()?)?),
+            "--export" => a.export = true,
             other => return Err(format!("unknown argument: {other}")),
         }
     }
@@ -225,6 +388,15 @@ fn parse_color(s: &str) -> Result<u32, String> {
         return Err(format!("--color wants RRGGBB, got {s}"));
     }
     u32::from_str_radix(hex, 16).map_err(|e| e.to_string())
+}
+
+fn parse_rgba(s: &str) -> Result<[u8; 4], String> {
+    let hex = s.strip_prefix('#').unwrap_or(s);
+    if hex.len() != 8 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("--single-pixel wants RRGGBBAA, got {s}"));
+    }
+    let v = u32::from_str_radix(hex, 16).map_err(|e| e.to_string())?;
+    Ok(v.to_be_bytes())
 }
 
 fn parse_size(s: &str) -> Result<(u32, u32), String> {
@@ -344,7 +516,7 @@ pub enum KeyState {
 }
 
 /// One log line. Every line also carries `t_us`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "ev", rename_all = "snake_case")]
 pub enum Event {
     Configure {
@@ -394,6 +566,54 @@ pub enum Event {
     /// `--spawn-child`: the child testclient's pid.
     SpawnedChild {
         pid: u32,
+    },
+    /// `--list-globals`: one advertised global.
+    Global {
+        name: String,
+        version: u32,
+    },
+    /// The pointer entered the main window (flags that need the pointer).
+    PointerEnter,
+    /// `--cursor-shape`: `set_shape` was sent with this protocol value.
+    CursorShapeSet {
+        shape: u32,
+    },
+    /// `--primary`: the primary selection was offered.
+    PrimarySet,
+    /// `--primary`: someone else took the primary selection.
+    PrimaryCancelled,
+    /// `--log-primary`: a primary selection offer was read to the end.
+    Primary {
+        mime: String,
+        text: String,
+    },
+    /// `--presentation`: a frame of ours reached the screen.
+    Presented {
+        tv_sec: u64,
+        tv_nsec: u32,
+        refresh_ns: u32,
+        seq: u64,
+        flags: u32,
+    },
+    /// `--presentation`: a commit was never shown.
+    Discarded,
+    /// `--lock-pointer`: the lock is active / gone.
+    Locked,
+    Unlocked,
+    /// `--lock-pointer`: `zwp_relative_pointer_v1.relative_motion` (accelerated).
+    RelativeMotion {
+        dx: f64,
+        dy: f64,
+    },
+    /// `--idle-inhibit`: the inhibitor was created.
+    IdleInhibit,
+    /// `--content-type`: the hint was set (protocol value).
+    ContentType {
+        kind: u32,
+    },
+    /// `--export`: the toplevel's foreign handle.
+    Exported {
+        handle: String,
     },
 }
 
@@ -587,6 +807,202 @@ mod tests {
         assert!(a.activation_token && a.spawn_child);
         assert!(!Args::default().activation_token && !Args::default().spawn_child);
         assert!(USAGE.contains("--activation-token") && USAGE.contains("--spawn-child"));
+    }
+
+    #[test]
+    fn cli_wave4_flags() {
+        let d = Args::default();
+        let cases: Vec<(&[&str], Args)> = vec![
+            (
+                &["--cursor-shape", "text"],
+                Args {
+                    cursor_shape: Some("text".into()),
+                    ..d.clone()
+                },
+            ),
+            (
+                &["--primary", "olá", "--log-primary"],
+                Args {
+                    primary: Some("olá".into()),
+                    log_primary: true,
+                    ..d.clone()
+                },
+            ),
+            (
+                &[
+                    "--presentation",
+                    "--lock-pointer",
+                    "--idle-inhibit",
+                    "--export",
+                ],
+                Args {
+                    presentation: true,
+                    lock_pointer: true,
+                    idle_inhibit: true,
+                    export: true,
+                    ..d.clone()
+                },
+            ),
+            (
+                &["--content-type", "video"],
+                Args {
+                    content_type: Some(ContentKind::Video),
+                    ..d.clone()
+                },
+            ),
+            (
+                &["--single-pixel", "ff800040"],
+                Args {
+                    single_pixel: Some([0xff, 0x80, 0x00, 0x40]),
+                    ..d.clone()
+                },
+            ),
+        ];
+        for (argv, want) in cases {
+            assert_eq!(ok(argv), want, "{argv:?}");
+        }
+        for bad in [
+            &["--cursor-shape"][..],
+            &["--cursor-shape", "banana"],
+            &["--content-type", "music"],
+            &["--content-type"],
+            &["--single-pixel", "ff8000"],
+            &["--single-pixel", "gg800040"],
+            &["--primary"],
+        ] {
+            assert!(parse_args(bad).is_err(), "{bad:?} should fail");
+        }
+        for f in [
+            "--cursor-shape NAME",
+            "--primary TEXT",
+            "--log-primary",
+            "--presentation",
+            "--lock-pointer",
+            "--idle-inhibit",
+            "--content-type video|game|photo",
+            "--single-pixel RRGGBBAA",
+            "--export",
+        ] {
+            assert!(USAGE.contains(f), "{f}");
+        }
+    }
+
+    #[test]
+    fn cursor_shape_names_are_the_protocols() {
+        let cases = [
+            ("default", Some(1)),
+            ("context_menu", Some(2)),
+            ("context-menu", Some(2)),
+            ("pointer", Some(4)),
+            ("text", Some(9)),
+            ("grabbing", Some(17)),
+            ("nwse_resize", Some(29)),
+            ("zoom_out", Some(34)),
+            ("dnd_ask", Some(35)),
+            ("all_resize", Some(36)),
+            ("hand", None),
+            ("", None),
+        ];
+        for (name, want) in cases {
+            assert_eq!(cursor_shape_code(name), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn content_kinds_and_single_pixel_channels() {
+        assert_eq!(ContentKind::Photo.code(), 1);
+        assert_eq!(ContentKind::Video.code(), 2);
+        assert_eq!(ContentKind::Game.code(), 3);
+        assert_eq!(ContentKind::parse("game"), Some(ContentKind::Game));
+        assert_eq!(ContentKind::parse("none"), None);
+        // wp_single_pixel_buffer: each channel is premultiplied-free u32 0..=u32::MAX
+        assert_eq!(channel_u32(0), 0);
+        assert_eq!(channel_u32(0xff), u32::MAX);
+        assert_eq!(channel_u32(0x80), 0x8080_8080);
+    }
+
+    #[test]
+    fn presented_joins_the_split_fields() {
+        let ev = presented(1, 2, 500, 16_666_666, 0, 7, 0x1);
+        assert_eq!(
+            ev,
+            Event::Presented {
+                tv_sec: (1 << 32) | 2,
+                tv_nsec: 500,
+                refresh_ns: 16_666_666,
+                seq: 7,
+                flags: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn wave4_lines() {
+        let cases = vec![
+            (
+                Event::CursorShapeSet { shape: 9 },
+                json!({"ev":"cursor_shape_set","shape":9,"t_us":7}),
+            ),
+            (Event::PointerEnter, json!({"ev":"pointer_enter","t_us":7})),
+            (Event::PrimarySet, json!({"ev":"primary_set","t_us":7})),
+            (
+                Event::Primary {
+                    mime: "text/plain".into(),
+                    text: "x".into(),
+                },
+                json!({"ev":"primary","mime":"text/plain","text":"x","t_us":7}),
+            ),
+            (
+                Event::Presented {
+                    tv_sec: 3,
+                    tv_nsec: 4,
+                    refresh_ns: 5,
+                    seq: 6,
+                    flags: 1,
+                },
+                json!({"ev":"presented","tv_sec":3,"tv_nsec":4,"refresh_ns":5,"seq":6,"flags":1,"t_us":7}),
+            ),
+            (Event::Discarded, json!({"ev":"discarded","t_us":7})),
+            (Event::Locked, json!({"ev":"locked","t_us":7})),
+            (Event::Unlocked, json!({"ev":"unlocked","t_us":7})),
+            (
+                Event::RelativeMotion { dx: 10.0, dy: -2.5 },
+                json!({"ev":"relative_motion","dx":10.0,"dy":-2.5,"t_us":7}),
+            ),
+            (Event::IdleInhibit, json!({"ev":"idle_inhibit","t_us":7})),
+            (
+                Event::ContentType { kind: 2 },
+                json!({"ev":"content_type","kind":2,"t_us":7}),
+            ),
+            (
+                Event::Exported {
+                    handle: "h-1".into(),
+                },
+                json!({"ev":"exported","handle":"h-1","t_us":7}),
+            ),
+        ];
+        for (ev, want) in cases {
+            assert_eq!(parsed(ev.clone(), 7), want, "{ev:?}");
+        }
+    }
+
+    #[test]
+    fn cli_list_globals() {
+        assert!(ok(&["--list-globals"]).list_globals);
+        assert!(!Args::default().list_globals);
+        assert!(USAGE.contains("--list-globals"));
+        let v: Value = serde_json::from_str(&line(
+            &Event::Global {
+                name: "wl_compositor".into(),
+                version: 6,
+            },
+            3,
+        ))
+        .unwrap();
+        assert_eq!(
+            v,
+            json!({"ev": "global", "name": "wl_compositor", "version": 6, "t_us": 3})
+        );
     }
 
     #[test]

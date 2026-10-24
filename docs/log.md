@@ -3,6 +3,29 @@
 Histórico de decisões e progresso. Entradas mais recentes no topo. Até a v0.1.0 o projeto se chamava `neko`,
 e as entradas antigas mantêm o nome da época.
 
+## 2026-10-24
+
+- **progresso:** onda 4 do mundo (`nkw`), sete pacotes em paralelo:
+  - **HUD e telefone:** faixa de status (hora, inbox, gatos, custo do dia, uso de 5 h, música, rede,
+    bateria; `z` esconde) e o telefone no estilo NookPhone (`tab` ou `world+n`) com os apps Gatos, Inbox,
+    Mapa, Apps, Janelas, Música, Biblioteca, Cofre, Ajustes e Ajuda; um kit de interface próprio (painéis,
+    listas, 27 ícones, tema aconchego e alto contraste), preferências em `ui.toml`.
+  - **UX:** tour da recepcionista na primeira vez, teclas de sessão na NAV (`r x n m X dd c a A`), crachás só
+    do que se vê (linha de visão por paredes e portas) e acima da cabeça, câmera da biblioteca a 2,4 m.
+  - **apps no mundo:** ambiente por app no lançador, detecção de app já aberto fora e abrir isolado, X11 sob
+    demanda pelo `xwayland-satellite`; protocolos novos: cursor-shape (o cursor do app chega ao host),
+    seleção primária, presentation-time, content-type, xdg-foreign, idle-inhibit (repassado ao host pelo
+    portal), pointer-constraints e relative-pointer para o app em FOCO. Matriz de compatibilidade em
+    [mundo.md](mundo.md#compatibilidade).
+  - **objetos:** uma `Policy` só para o cofre (`nkw_core::library`).
+- **medida** (aninhado no niri, `world`): S4 p50 de 1,54 para 1,11–1,28 ms e p95 de 2,27 para 1,6 ms, 0
+  quadros perdidos (o "perdido" anterior era erro de contagem); S5 0 perdidos; telefone aberto compõe em
+  0,7 ms; RSS ≤ 117 MB (biblioteca 126 MB); binário 15,05 MB (alvo 15).
+- **pendências:** S4 p50 ainda acima de 1 ms (a composição de saída custa ~0,6 ms em todo cenário); S1/S3
+  pedem nova linha de base com build release; copiar para fora do mundo, arrastar e soltar, seletor de
+  arquivo e IME não testados; o Discord não abre com perfil novo; abrir o PR do patch no Smithay
+  (`gui/office/patches/smithay-winit-relative-pointer.md`).
+
 ## 2026-10-23
 
 - **progresso:** onda 3 do mundo (`nkw`), sete pacotes em paralelo:

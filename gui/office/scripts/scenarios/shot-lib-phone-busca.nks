@@ -1,0 +1,13 @@
+# W6: the phone's Biblioteca app: a search run from it (the library's own search, on the
+# fixture tree) lists the hits; the vault's names never appear.
+wait 100
+key b
+wait json /ext/objects/library/browsing true 2000
+inject overlay {"phone":{"app":"biblioteca"}}
+wait json /ext/overlay/phone/app "biblioteca" 1000
+inject objects {"Command":{"name":"world.library_search","args":{"q":"md"}}}
+wait json /ext/objects/library/mode "search" 3000
+wait 600
+shot ${OUT}/shot-lib-phone-busca.png
+dump ${OUT}/dump-lib-phone-busca.json
+quit

@@ -1,0 +1,16 @@
+# The phone's Gatos app (W5, S24) over NAV at acme: every villager with its state, room and mark
+# (api-gateway "!", alpha "zZ"); then enter on api-gateway opens its actions (ir até, conversar,
+# sentar no terminal, responder, parar, renomear, mover de contexto, arquivar). User-approval shot.
+key J
+wait 600
+inject overlay {"phone":{"app":"gatos"}}
+wait 400
+expect json /ext/overlay/phone/app "gatos"
+shot ${OUT}/shot-cats-phone-gatos.png
+key j
+key Return
+wait 400
+expect json /ext/overlay/phone/sub "3"
+shot ${OUT}/shot-cats-phone-gatos-acoes.png
+dump ${OUT}/dump-cats-phone-gatos.json
+quit

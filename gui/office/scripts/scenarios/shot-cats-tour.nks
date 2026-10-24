@@ -1,0 +1,17 @@
+# The receptionist's first-run tour (W5, S24): `world.tour` (here `inject cats {"tour": true}`) takes
+# you to the reception and opens her first balloon — the keys to walk between desks (h l J K) —
+# with "Próximo" / "Pular". Under --demo the WM never starts it by itself. User-approval shot.
+key J
+wait 600
+inject cats {"tour":true}
+wait 1500
+expect mode CONVERSA
+expect json /ext/cats/tour 0
+expect json /ext/cats/dialog/row "Tour"
+shot ${OUT}/shot-cats-tour.png
+key 1
+wait 1500
+expect json /ext/cats/tour 1
+shot ${OUT}/shot-cats-tour-2.png
+dump ${OUT}/dump-cats-tour.json
+quit

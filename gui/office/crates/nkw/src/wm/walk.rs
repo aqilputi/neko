@@ -142,7 +142,7 @@ impl World {
         if !matches!(self.station, nkw_core::strip::Station::Free(_)) && self.walking.is_none() {
             return None;
         }
-        let ri = self.room_at(self.camera.pos)?;
+        let ri = self.room_index_at(self.camera.pos)?;
         let room = &self.rooms[ri];
         let eye = Vec2::new(self.camera.pos.x, self.camera.pos.z);
         let heading = self.camera.heading();
@@ -180,7 +180,7 @@ impl World {
                 best = Some((t, a));
             }
         };
-        let here = self.room_at(self.camera.pos);
+        let here = self.room_index_at(self.camera.pos);
         let mut spheres = Vec::new();
         for (ri, room) in self.rooms.iter().enumerate() {
             if let Some((xz, _)) = self.room_door(room.id) {
@@ -476,7 +476,9 @@ impl World {
         };
         let s = c.screen;
         let hand = carry::hand_pose(&self.camera, c.dist);
-        let here = self.room_at(self.camera.pos).unwrap_or(self.current_room());
+        let here = self
+            .room_index_at(self.camera.pos)
+            .unwrap_or(self.current_room());
         let target = if air_only {
             Drop::Air(hand)
         } else {
@@ -543,7 +545,9 @@ impl World {
         if self.walking.is_none() {
             return;
         }
-        let here = self.room_at(self.camera.pos).unwrap_or(self.current_room());
+        let here = self
+            .room_index_at(self.camera.pos)
+            .unwrap_or(self.current_room());
         let g = self.room_grid(here);
         if let Some(w) = self.walking.as_mut() {
             w.grid = g;

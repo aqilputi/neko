@@ -1,0 +1,10 @@
+# W6: the phone's Música app on the demo's fixture player ("Lo-fi for cats", playing): the
+# header shows title/artist (drawn only), the controls are the turntable's commands.
+wait 100
+inject overlay {"phone":{"app":"musica"}}
+wait json /ext/overlay/phone/app "musica" 1000
+expect mode COMANDOS
+wait 400
+shot ${OUT}/shot-obj-phone-musica.png
+dump ${OUT}/dump-obj-phone-musica.json
+quit

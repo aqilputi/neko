@@ -3640,6 +3640,7 @@ dependencies = [
  "smithay",
  "smithay-client-toolkit 0.21.1",
  "tempfile",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "wayland-client",

@@ -67,6 +67,39 @@ target = 2
 fail = 3
 noise = 0.1
 
+# S4d (onda 4): o S4 com clientes que repintam o buffer inteiro a cada quadro (o estresse do upload
+# shm); o S4 passou a ter telas vivas de terminal (--damage 256x64). Só relatado.
+[frame_cpu_stress_p50]
+metric = "frame_p50_ms"
+scenarios = ["S4d"]
+target = 1
+gated = false
+
+[frame_cpu_stress_p95]
+metric = "frame_p95_ms"
+scenarios = ["S4d"]
+target = 2
+gated = false
+
+# estágios do quadro (onda 4): a importação dos buffers dos clientes (shm/dmabuf) e a composição 2D,
+# medidas à parte | só relatado
+[frame_import]
+metric = "import_p50_ms"
+scenarios = ["S4", "S4d", "S5"]
+gated = false
+
+[frame_compose]
+metric = "compose_p50_ms"
+scenarios = ["S1", "S3", "S4", "S4d", "S5"]
+gated = false
+
+# telefone aberto | S7: Gatos no demo ocupado, j/k a cada 500 ms | composição p50 ≤ 1,5 ms | só relatado
+[phone_compose]
+metric = "compose_p50_ms"
+scenarios = ["S7"]
+target = 1.5
+gated = false
+
 # GPU por quadro | S4 a 1080p, MSAA 4x | ≤ 2 ms | 4 ms  (NKW_STATS=gpu: relatado, não barra)
 [frame_gpu]
 metric = "gpu_ms"
@@ -103,7 +136,7 @@ gated = false
 
 [ram_windows]
 metric = "rss_mb"
-scenarios = ["S1", "S2", "S3", "S4", "S5"]
+scenarios = ["S1", "S2", "S3", "S4", "S4d", "S5", "S7"]
 target = 110
 fail = 150
 noise = 5
@@ -182,6 +215,6 @@ gated = false
 # objetos: no máximo 4 vontades Rate simultâneas (P5, rate_wishes_max)
 [rate_wishes]
 metric = "rate_wishes_max"
-scenarios = ["S1", "S3", "S4", "S5", "S6"]
+scenarios = ["S1", "S3", "S4", "S5", "S6", "S7"]
 target = 4
 fail = 4

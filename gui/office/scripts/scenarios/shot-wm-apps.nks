@@ -1,0 +1,11 @@
+# The phone's Apps (W3, S22): "terminal novo" and the demo launcher entries (the fixture,
+# never the system's .desktop files); enter launches, `i` opens an isolatable app with a
+# profile of its own (none in the fixture).
+inject overlay {"phone": {"app": "apps"}}
+wait 400
+expect mode COMANDOS
+expect json /ext/overlay/phone/app "apps"
+expect json /ext/overlay/phone/items 3
+shot ${OUT}/shot-wm-apps.png
+dump ${OUT}/dump-wm-apps.json
+quit

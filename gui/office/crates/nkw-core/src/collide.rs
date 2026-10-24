@@ -296,6 +296,82 @@ impl WalkParams {
     }
 }
 
+/// The walls of the rooms along the hall, for [`line_of_sight`]: each
+/// room's box (the strip's `RoomSlot`, `ROOM_DEPTH` deep off the hall) and
+/// the doorway of its hall wall.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WallPlan {
+    pub rooms: Vec<(crate::RoomId, crate::strip::RoomSlot)>,
+    /// the doorway of a room's hall wall: its floor centre (x, z) and width
+    pub doors: Vec<(crate::RoomId, Vec2, f32)>,
+    /// metres; a segment entirely above the walls is not cut
+    pub wall_h: f32,
+}
+
+/// Whether no wall of `plan` cuts the segment `from`–`to`; a doorway is
+/// open when `open` lists its room (the culling set), closed otherwise.
+///
+/// Walls are planes at the rooms' edges (`RoomSlot` along the hall,
+/// `layout::ROOM_DEPTH` deep, the hall wall at `HALL_W / 2`), so anything
+/// inside a room, even against a wall, sees the rest of it; touching a wall
+/// edge counts as cut. The doorway spans the wall's height.
+pub fn line_of_sight(plan: &WallPlan, from: Vec3, to: Vec3, open: &[crate::RoomId]) -> bool {
+    use crate::layout::{HALL_W, ROOM_DEPTH};
+    use crate::strip::Side;
+    /// half the thickness of a wall plane, metres
+    const T: f32 = 5e-4;
+    let d = to - from;
+    let len = d.length();
+    if len < 1e-6 || (from.y > plan.wall_h && to.y > plan.wall_h) {
+        return true;
+    }
+    let dir = d / len;
+    let h = plan.wall_h;
+    // a hit strictly before the far end (an end on a wall is not cut)
+    let cut =
+        |min: Vec3, max: Vec3| ray_hit_aabb(from, dir, min, max).is_some_and(|t| t < len - 1e-4);
+    // the segment's own bounds on the floor, to skip far rooms cheaply
+    let (lo, hi) = (from.min(to), from.max(to));
+    for (id, s) in &plan.rooms {
+        let (x0, x1) = (s.x0, s.x0 + s.len);
+        let (hall, back) = match s.side {
+            Side::North => (-HALL_W / 2.0, -(HALL_W / 2.0 + ROOM_DEPTH)),
+            Side::South => (HALL_W / 2.0, HALL_W / 2.0 + ROOM_DEPTH),
+        };
+        let (z0, z1) = (hall.min(back), hall.max(back));
+        if hi.x < x0 - T || lo.x > x1 + T || hi.z < z0 - T || lo.z > z1 + T {
+            continue;
+        }
+        let xwall = |x: f32| (Vec3::new(x - T, 0.0, z0 - T), Vec3::new(x + T, h, z1 + T));
+        let zwall = |z: f32, a: f32, b: f32| (Vec3::new(a, 0.0, z - T), Vec3::new(b, h, z + T));
+        let (bmin, bmax) = zwall(back, x0 - T, x1 + T);
+        let (lmin, lmax) = xwall(x0);
+        let (rmin, rmax) = xwall(x1);
+        if cut(bmin, bmax) || cut(lmin, lmax) || cut(rmin, rmax) {
+            return false;
+        }
+        // the hall wall, with its doorway open or not
+        let door = plan
+            .doors
+            .iter()
+            .find(|(r, _, _)| r == id)
+            .map(|(_, c, w)| (c.x - w / 2.0, c.x + w / 2.0));
+        let pieces: [(f32, f32); 2] = match door {
+            Some((a, b)) if open.contains(id) => [(x0 - T, a), (b, x1 + T)],
+            _ => [(x0 - T, x1 + T), (0.0, 0.0)],
+        };
+        for (a, b) in pieces {
+            if b > a {
+                let (min, max) = zwall(hall, a, b);
+                if cut(min, max) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 /// Where a ray (origin, unit `dir`) enters the box `min..max`: the distance
 /// along `dir` (0 when it starts inside), `None` when it misses or the box
 /// is behind.
@@ -494,6 +570,129 @@ impl Walker {
 mod tests {
     use super::*;
     use std::f32::consts::FRAC_PI_2;
+
+    /// Three 6 m rooms: 0 north (x 0..6, door at 3), 1 south (x 0..6, door
+    /// at 3), 2 north (x 6.6..12.6, door at 9.6); walls 2.8 m.
+    fn plan() -> WallPlan {
+        use crate::RoomId;
+        let slots = crate::strip::rooms_along_hall(&[6.0, 6.0, 6.0]);
+        WallPlan {
+            rooms: slots
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (RoomId(i as u32), *s))
+                .collect(),
+            doors: slots
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (RoomId(i as u32), crate::layout::door_world(s).0, DOOR_W))
+                .collect(),
+            wall_h: 2.8,
+        }
+    }
+
+    #[test]
+    fn line_of_sight_table() {
+        use crate::RoomId;
+        let p = plan();
+        let (r0, r1, r2) = (RoomId(0), RoomId(1), RoomId(2));
+        let v = |x: f32, z: f32| Vec3::new(x, 1.5, z);
+        let rows: [(&str, Vec3, Vec3, &[RoomId], bool); 14] = [
+            ("same room", v(3.0, -5.0), v(1.0, -3.0), &[], true),
+            (
+                "same room, corner to corner",
+                v(0.1, -6.4),
+                v(5.9, -1.6),
+                &[],
+                true,
+            ),
+            (
+                "the next room, through two side walls",
+                v(3.0, -4.0),
+                v(9.6, -4.0),
+                &[r0, r2],
+                false,
+            ),
+            (
+                "across the hall, both doors open",
+                v(3.0, -2.5),
+                v(3.0, 2.5),
+                &[r0, r1],
+                true,
+            ),
+            (
+                "across the hall, the far door closed",
+                v(3.0, -2.5),
+                v(3.0, 2.5),
+                &[r0],
+                false,
+            ),
+            (
+                "across the hall, beside the doors",
+                v(5.0, -2.5),
+                v(5.0, 2.5),
+                &[r0, r1],
+                false,
+            ),
+            (
+                "hall to room, open door",
+                v(3.0, 0.0),
+                v(3.0, -3.0),
+                &[r0],
+                true,
+            ),
+            (
+                "hall to room, closed door",
+                v(3.0, 0.0),
+                v(3.0, -3.0),
+                &[],
+                false,
+            ),
+            (
+                "hall to room, the wall beside the door",
+                v(5.0, 0.0),
+                v(5.0, -3.0),
+                &[r0],
+                false,
+            ),
+            ("hall to hall", v(-1.0, 0.0), v(20.0, 0.5), &[], true),
+            (
+                "grazing past the corner, outside",
+                v(6.01, 0.0),
+                v(6.01, -3.0),
+                &[],
+                true,
+            ),
+            (
+                "grazing the corner, inside",
+                v(5.99, 0.0),
+                v(5.99, -3.0),
+                &[r0],
+                false,
+            ),
+            (
+                "over the walls",
+                Vec3::new(3.0, 3.0, -4.0),
+                Vec3::new(9.6, 3.0, -4.0),
+                &[],
+                true,
+            ),
+            ("a point", v(3.0, -4.0), v(3.0, -4.0), &[], true),
+        ];
+        for (what, a, b, open, want) in rows {
+            assert_eq!(line_of_sight(&p, a, b, open), want, "{what}");
+            assert_eq!(line_of_sight(&p, b, a, open), want, "{what}, reversed");
+        }
+        // a tag right against the inside of a wall is still in its room
+        assert!(line_of_sight(&p, v(3.0, -3.0), v(5.999, -6.499), &[]));
+        // no plan, no walls
+        assert!(line_of_sight(
+            &WallPlan::default(),
+            v(0.0, 0.0),
+            v(9.0, -9.0),
+            &[]
+        ));
+    }
 
     /// A 10 × 8 m room from (0, 0) to (10, 8), a door on the north wall
     /// (z = 0) at x = 5, a desk from (2, 2) to (4, 3).
