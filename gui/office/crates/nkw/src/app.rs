@@ -41,7 +41,7 @@ use crate::cli::{Cli, exit};
 use crate::ext::Ext;
 use crate::frame::{Gfx, Host};
 use crate::keys::KeyTable;
-use crate::script::{Cmd, Line, json_check, mode_name};
+use crate::script::{Cmd, Line, json_check, mode_name, near_check, pose_check};
 use crate::state::{Nkw, Sched, client_data};
 use crate::stats::Stats;
 use crate::world::{Opts, World};
@@ -305,6 +305,33 @@ impl Nkw {
                 Cmd::Button(b, down) => {
                     self.stats.inject("button");
                     self.process_input(crate::backend::script_input::button(b.code(), down));
+                }
+                Cmd::PointerTo(x, y) => {
+                    self.stats.inject("pointer_to");
+                    self.process_input(crate::backend::script_input::motion_to(x, y));
+                }
+                Cmd::Scroll(steps) => {
+                    self.stats.inject("scroll");
+                    self.process_input(crate::backend::script_input::wheel(steps));
+                }
+                Cmd::ExpectNear {
+                    pointer,
+                    value,
+                    tol,
+                } => {
+                    if let Err(msg) = near_check(&self.dump(), &pointer, value, tol) {
+                        return self.script_fail(no, &msg);
+                    }
+                }
+                Cmd::ExpectPose {
+                    app_id,
+                    pos_mm,
+                    yaw_mdeg,
+                    tol_mm,
+                } => {
+                    if let Err(msg) = pose_check(&self.dump(), &app_id, pos_mm, yaw_mdeg, tol_mm) {
+                        return self.script_fail(no, &msg);
+                    }
                 }
                 Cmd::Shot(p) => {
                     self.before_shot();

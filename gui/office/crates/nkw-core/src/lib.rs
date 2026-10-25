@@ -13,22 +13,30 @@
 //! - [`walk_exit`]: where ANDAR lands in NAV (§3.5)
 //! - [`schedule`]: the frame scheduler (§5.6)
 //! - [`hints`]: SALTO labels (§3.8)
+//! - wave 5 (fase A, telas no espaço): [`arrange`], [`magnet`], [`history`],
+//!   [`dock`], [`layouts`], [`pointer`]
 //! - wave 2b stubs: [`persist`], [`rules`] (P2); [`palette`], [`line`],
 //!   [`dialog`] (P3)
 
 pub mod aim;
+pub mod arrange;
 pub mod carry;
 pub mod collide;
 pub mod dialog;
+pub mod dock;
 pub mod hints;
+pub mod history;
 pub mod ids;
 pub mod layout;
+pub mod layouts;
 pub mod library;
 pub mod line;
+pub mod magnet;
 pub mod mode;
 pub mod onetoone;
 pub mod palette;
 pub mod persist;
+pub mod pointer;
 pub mod pose;
 pub mod rules;
 pub mod schedule;
@@ -36,7 +44,11 @@ pub mod strip;
 pub mod tween;
 pub mod walk_exit;
 
+// `arrange::Hints` (xdg min/max) is not re-exported here: the root `Hints`
+// is SALTO's (`hints::Hints`), older; use `nkw_core::arrange::Hints`.
+pub use arrange::{AirPose, Grip, View};
 pub use collide::{Aabb, Door, Grid, TurnMode, WalkInput, WalkParams, Walker, Wall};
+pub use dock::{DockSlot, Rect};
 pub use hints::{HintMatch, Hints};
 pub use ids::*;
 pub use layout::RoomFrame;

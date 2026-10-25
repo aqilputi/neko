@@ -22,6 +22,9 @@ pub enum Lod {
     Far,
     /// out of view, another room, or frozen behind FOCO
     Hidden,
+    /// anchored to the view (a dock, composed in 2D, never in the world
+    /// pass): live like FOCO
+    Docked,
 }
 
 /// Beyond this a visible screen is `Far`, metres.
@@ -30,7 +33,7 @@ pub const NEAR_M: f32 = 6.0;
 /// The frame-callback throttle of a LOD (`Window::send_frame`).
 pub fn throttle(l: Lod) -> Duration {
     match l {
-        Lod::Focus | Lod::Current => Duration::ZERO,
+        Lod::Focus | Lod::Current | Lod::Docked => Duration::ZERO,
         Lod::Near => Duration::from_millis(66),
         Lod::Far => Duration::from_millis(250),
         Lod::Hidden => Duration::from_secs(1),
@@ -41,7 +44,7 @@ pub fn throttle(l: Lod) -> Duration {
 /// `None`: it only recomposes (FOCO, 2D); `Some(0)`: the texture is frozen.
 pub fn world_rate(l: Lod) -> Option<f64> {
     match l {
-        Lod::Focus => None,
+        Lod::Focus | Lod::Docked => None,
         Lod::Current => Some(30.0),
         Lod::Near => Some(15.0),
         Lod::Far => Some(4.0),
@@ -89,12 +92,18 @@ pub fn lod(w: &World, id: ScreenId) -> Lod {
 }
 
 /// A layer of the composed frame.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Layer {
     /// the overlay's elements (`Overlay::elements`: the mode label …)
     Hud,
     /// the sky-coloured fade of a cut
     Fade,
+    /// a docked screen, 2D at its rect (logical px); `scale` 1 = 1:1
+    Dock {
+        id: ScreenId,
+        rect: nkw_core::Rect,
+        scale: f32,
+    },
     /// the FOCO window and its popups, 1:1
     Focus(ScreenId),
     /// FOCO on a cat's terminal: `Cats::focus_buffer`, 1:1

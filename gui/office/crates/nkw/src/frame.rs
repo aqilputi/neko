@@ -21,7 +21,7 @@ use smithay::backend::renderer::utils::{
 use smithay::backend::renderer::{Bind, ExportMem, Renderer, Texture, TextureMapping};
 use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Physical, Point, Rectangle, Scale, Size, Transform};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
 use nkw_core::{Kind as ModeKind, ScreenId, Time, Want, schedule};
 use nkw_gl::draw::ClientTex;
@@ -614,6 +614,28 @@ impl Nkw {
                         1.0,
                         Kind::Unspecified,
                     )));
+                }
+                Layer::Dock { id, rect, scale: ds } => {
+                    // 2D at its rect: the window's geometry (not its CSD
+                    // shadow) lands on the rect's top-left; at 1× the
+                    // buffer is copied 1:1 (the FOCO pixel rule)
+                    let Some(w) = self.window(id).cloned() else {
+                        continue;
+                    };
+                    let ds = ds as f64;
+                    let g = w.geometry().loc.to_f64();
+                    let loc: Point<f64, Logical> =
+                        Point::from((rect.x as f64 - g.x * ds, rect.y as f64 - g.y * ds));
+                    let loc: Point<i32, Physical> = loc.to_physical_precise_round(scale);
+                    let r = self.gfx.renderer();
+                    let e: Vec<WaylandSurfaceRenderElement<GlowRenderer>> =
+                        w.render_elements(r, loc, Scale::from(scale * ds), 1.0);
+                    elems.extend(e.into_iter().map(Elem::Surface));
+                    if let Some(tl) = w.toplevel()
+                        && !presented.contains(tl.wl_surface())
+                    {
+                        presented.push(tl.wl_surface().clone());
+                    }
                 }
                 Layer::Focus(_) => {
                     let Some((id, loc)) = self.focus_location() else {

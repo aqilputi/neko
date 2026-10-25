@@ -238,6 +238,36 @@ impl Overlay {
         self.extra_items = items;
     }
 
+    /// S31: open the balloon (a compact phone page) anchored at a logical
+    /// point.
+    pub fn open_menu(&mut self, page: PhonePage, at: (i32, i32)) {
+        let _ = (page, at);
+    }
+
+    /// S31: a click at logical (x, y) while the balloon is open: `Some` =
+    /// it took the click (an item, or outside = close); `None` = no balloon.
+    pub fn menu_click(&mut self, x: f64, y: f64, ctx: &Ctx) -> Option<Vec<Req>> {
+        let _ = (x, y, ctx);
+        None
+    }
+
+    /// S31: the balloon's rect, logical px.
+    pub fn menu_rect(&self) -> Option<nkw_core::Rect> {
+        None
+    }
+
+    /// S31: what is clickable in 2D (balloon, phone panel, dialogue box).
+    pub fn ui_rects(&self) -> Vec<nkw_core::Rect> {
+        Vec::new()
+    }
+
+    /// S31: the rects the HUD occupies on an output of `out` logical px
+    /// (docks stay off them, plan §2.7).
+    pub fn hud_reserved(&self, out: [i32; 2]) -> Vec<nkw_core::Rect> {
+        let _ = out;
+        Vec::new()
+    }
+
     /// The phone's state while it is open (S21, for the hub's `hud_input`).
     pub fn phone_state(&self) -> Option<PhoneState> {
         self.phone.as_ref().map(|p| p.st.clone())

@@ -42,6 +42,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::collide::TurnMode;
+use crate::dock::DockFocus;
 use crate::persist::{DeskAt, Place};
 use crate::strip::Width;
 use crate::walk_exit::ExitRule;
@@ -71,7 +72,7 @@ impl Rule {
             room: self.room.clone(),
             desk: self.desk,
             width: self.width,
-            air: None,
+            ..Place::default()
         }
     }
 }
@@ -212,6 +213,229 @@ pub struct Config {
     /// what [`parse`] clamped, for the caller to log
     #[serde(skip)]
     pub notes: Vec<String>,
+    /// `[mouse]` (filled by [`parse`])
+    #[serde(skip)]
+    pub mouse: MouseConfig,
+    /// `[arrange]`
+    #[serde(skip)]
+    pub arrange: ArrangeConfig,
+    /// `[dock]`
+    #[serde(skip)]
+    pub dock: DockConfig,
+}
+
+/// `[mouse] drag_modifier`: what a plain drag needs to move a screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DragModifier {
+    #[default]
+    Ctrl,
+    Alt,
+    World,
+    /// a plain drag moves anywhere
+    None,
+}
+
+impl DragModifier {
+    /// `"ctrl" | "alt" | "world" | "none"`.
+    pub fn parse(s: &str) -> Option<DragModifier> {
+        match s.trim() {
+            "ctrl" => Some(DragModifier::Ctrl),
+            "alt" => Some(DragModifier::Alt),
+            "world" => Some(DragModifier::World),
+            "none" => Some(DragModifier::None),
+            _ => None,
+        }
+    }
+}
+
+/// `[mouse]` of `world.toml` (plan §2.3).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MouseConfig {
+    /// false: no mouse gesture moves or resizes (keyboard only)
+    pub drag: bool,
+    pub drag_modifier: DragModifier,
+    /// 2..=24
+    pub drag_threshold_px: f32,
+    /// 200..=800
+    pub double_click_ms: u32,
+    pub edge_turn: bool,
+    /// read only in phase B
+    pub hover_selects: bool,
+}
+
+impl Default for MouseConfig {
+    fn default() -> MouseConfig {
+        MouseConfig {
+            drag: true,
+            drag_modifier: DragModifier::Ctrl,
+            drag_threshold_px: 6.0,
+            double_click_ms: 400,
+            edge_turn: false,
+            hover_selects: false,
+        }
+    }
+}
+
+/// `[arrange]` of `world.toml`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ArrangeConfig {
+    /// undo steps, 10..=200
+    pub history: usize,
+    pub magnets: bool,
+    /// the settle cues
+    pub sound: bool,
+}
+
+impl Default for ArrangeConfig {
+    fn default() -> ArrangeConfig {
+        ArrangeConfig {
+            history: 50,
+            magnets: true,
+            sound: true,
+        }
+    }
+}
+
+/// `[dock]` of `world.toml`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DockConfig {
+    /// 0.2..=1.0
+    pub scale: f32,
+    /// 1..=8
+    pub max: usize,
+    pub focus: DockFocus,
+    pub hide_while_walking: bool,
+}
+
+impl Default for DockConfig {
+    fn default() -> DockConfig {
+        DockConfig {
+            scale: 0.33,
+            max: 4,
+            focus: DockFocus::Auto,
+            hide_while_walking: false,
+        }
+    }
+}
+
+/// Reads `[mouse]`, `[arrange]`, `[dock]` out of the whole file: wrong
+/// values are clamped or defaulted and noted (pt-BR), unknown keys noted;
+/// never an error.
+fn wm_tables(text: &str) -> (MouseConfig, ArrangeConfig, DockConfig, Vec<String>) {
+    let mut notes = Vec::new();
+    let table: toml::Table = toml::from_str(text).unwrap_or_default();
+    let empty = toml::Table::new();
+    let get = |name: &str| -> &toml::Table {
+        table.get(name).and_then(toml::Value::as_table).unwrap_or(&empty)
+    };
+    let mut r = TableReader { notes: &mut notes };
+
+    let t = get("mouse");
+    let d = MouseConfig::default();
+    r.unknown("mouse", t, &["drag", "drag_modifier", "drag_threshold_px", "double_click_ms", "edge_turn", "hover_selects"]);
+    let mouse = MouseConfig {
+        drag: r.flag("mouse", "drag", t, d.drag),
+        drag_modifier: match t.get("drag_modifier") {
+            None => d.drag_modifier,
+            Some(v) => match v.as_str().and_then(DragModifier::parse) {
+                Some(m) => m,
+                None => {
+                    r.notes.push(format!(
+                        "world.toml: mouse.drag_modifier = {v}: ctrl, alt, world ou none; usando ctrl"
+                    ));
+                    d.drag_modifier
+                }
+            },
+        },
+        drag_threshold_px: r.num("mouse", "drag_threshold_px", t, (2.0, 24.0), d.drag_threshold_px as f64) as f32,
+        double_click_ms: r.num("mouse", "double_click_ms", t, (200.0, 800.0), d.double_click_ms as f64).round() as u32,
+        edge_turn: r.flag("mouse", "edge_turn", t, d.edge_turn),
+        hover_selects: r.flag("mouse", "hover_selects", t, d.hover_selects),
+    };
+
+    let t = get("arrange");
+    let d = ArrangeConfig::default();
+    r.unknown("arrange", t, &["history", "magnets", "sound"]);
+    let arrange = ArrangeConfig {
+        history: r.num("arrange", "history", t, (10.0, 200.0), d.history as f64).round() as usize,
+        magnets: r.flag("arrange", "magnets", t, d.magnets),
+        sound: r.flag("arrange", "sound", t, d.sound),
+    };
+
+    let t = get("dock");
+    let d = DockConfig::default();
+    r.unknown("dock", t, &["scale", "max", "focus", "hide_while_walking"]);
+    let dock = DockConfig {
+        scale: r.num("dock", "scale", t, (0.2, 1.0), d.scale as f64) as f32,
+        max: r.num("dock", "max", t, (1.0, 8.0), d.max as f64).round() as usize,
+        focus: match t.get("focus") {
+            None => d.focus,
+            Some(v) => match v.as_str().map(str::trim) {
+                Some("beside") => DockFocus::Beside,
+                Some("over") => DockFocus::Over,
+                Some("auto") => DockFocus::Auto,
+                _ => {
+                    r.notes.push(format!(
+                        "world.toml: dock.focus = {v}: beside, over ou auto; usando auto"
+                    ));
+                    d.focus
+                }
+            },
+        },
+        hide_while_walking: r.flag("dock", "hide_while_walking", t, d.hide_while_walking),
+    };
+    (mouse, arrange, dock, notes)
+}
+
+struct TableReader<'a> {
+    notes: &'a mut Vec<String>,
+}
+
+impl TableReader<'_> {
+    fn unknown(&mut self, table: &str, t: &toml::Table, known: &[&str]) {
+        for k in t.keys() {
+            if !known.contains(&k.as_str()) {
+                self.notes
+                    .push(format!("world.toml: {table}.{k}: chave desconhecida (ignorada)"));
+            }
+        }
+    }
+
+    fn flag(&mut self, table: &str, key: &str, t: &toml::Table, def: bool) -> bool {
+        match t.get(key) {
+            None => def,
+            Some(v) => v.as_bool().unwrap_or_else(|| {
+                self.notes.push(format!(
+                    "world.toml: {table}.{key} = {v}: true ou false; usando {def}"
+                ));
+                def
+            }),
+        }
+    }
+
+    /// "mouse.drag_threshold_px 40 → 24"
+    fn num(&mut self, table: &str, key: &str, t: &toml::Table, r: (f64, f64), def: f64) -> f64 {
+        let Some(v) = t.get(key) else {
+            return def;
+        };
+        let x = match v {
+            toml::Value::Integer(i) => *i as f64,
+            toml::Value::Float(f) if f.is_finite() => *f,
+            _ => {
+                self.notes.push(format!(
+                    "world.toml: {table}.{key} = {v}: não é um número; usando {def}"
+                ));
+                return def;
+            }
+        };
+        if x < r.0 || x > r.1 {
+            let got = x.clamp(r.0, r.1);
+            self.notes
+                .push(format!("world.toml: {table}.{key} {x} → {got}"));
+            return got;
+        }
+        x
+    }
 }
 
 /// `"foot -e tmux"` or `["foot", "-e", "tmux"]`.
@@ -239,6 +463,9 @@ pub fn parse(text: &str) -> Result<Config, String> {
     let t: WalkTables = toml::from_str(text).map_err(err)?;
     c.walk_turn_set = t.walk.turn.is_some();
     (c.walk, c.notes) = t.config();
+    let (mouse, arrange, dock, notes) = wm_tables(text);
+    (c.mouse, c.arrange, c.dock) = (mouse, arrange, dock);
+    c.notes.extend(notes);
     Ok(c)
 }
 
@@ -655,6 +882,7 @@ turntable = true
                     desk: Some(DeskAt::Index(3)),
                     width: Some(Width::Third),
                     air: None,
+                    ..Place::default()
                 },
             ),
             (
@@ -664,6 +892,7 @@ turntable = true
                     desk: Some(DeskAt::Index(3)),
                     width: None,
                     air: None,
+                    ..Place::default()
                 },
             ),
             (
@@ -683,6 +912,7 @@ turntable = true
                     desk: Some(DeskAt::Last),
                     width: Some(Width::TwoThirds),
                     air: None,
+                    ..Place::default()
                 }),
             ),
             // a prefix rule with only a desk: the rest from memory
@@ -693,6 +923,7 @@ turntable = true
                     desk: Some(DeskAt::Index(0)),
                     width: None,
                     air: None,
+                    ..Place::default()
                 }),
             ),
             // memory only

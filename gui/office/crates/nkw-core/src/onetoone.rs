@@ -78,6 +78,50 @@ pub fn pose(out: &Output, fov_y: f32, logical: Vec2, place: &ScreenPlace) -> One
     }
 }
 
+/// As [`pose`] for a quad of `logical · scale` mm (a visually scaled
+/// screen): the 1:1 distance is `scale · distance(..)`.
+pub fn pose_scaled(
+    out: &Output,
+    fov_y: f32,
+    logical: Vec2,
+    place: &ScreenPlace,
+    scale: f32,
+) -> OneToOne {
+    let centre = Vec2::new(out.width_px as f32, out.height_px as f32) / 2.0;
+    pose_at(out, fov_y, logical, place, scale, centre)
+}
+
+/// As [`pose_scaled`], with the 2D rectangle centred on `centre_px`
+/// (physical) instead of the output centre (FOCO beside the docks); the
+/// top-left still snaps to a whole pixel.
+pub fn pose_at(
+    out: &Output,
+    fov_y: f32,
+    logical: Vec2,
+    place: &ScreenPlace,
+    scale: f32,
+    centre_px: Vec2,
+) -> OneToOne {
+    let size = logical * out.scale;
+    let half = Vec2::new(out.width_px as f32, out.height_px as f32) / 2.0;
+    let ideal = centre_px - size / 2.0;
+    let origin = ideal.round();
+    // At `scale · d` one metre on the plane is 1000·s/scale px. The rect's
+    // centre is `centre_px − half` px off the image centre (y down): the
+    // camera moves the other way, plus the snap's own shift.
+    let px_per_m = out.scale / (M_PER_PX * scale);
+    let off = (origin + size / 2.0 - half) / px_per_m;
+    let mut p = Pose::new(place.center, place.yaw, place.pitch);
+    p.pos = place.center - p.forward() * (scale * distance(out.height_px, out.scale, fov_y))
+        - p.right() * off.x
+        + p.up() * off.y;
+    OneToOne {
+        pose: p,
+        origin,
+        size,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

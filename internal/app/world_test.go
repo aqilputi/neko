@@ -157,6 +157,79 @@ var s9 = []struct {
 	{"world.phone", "world.phone_app_7", []string{"7"}},
 	{"world.phone", "world.phone_app_8", []string{"8"}},
 	{"world.phone", "world.phone_app_9", []string{"9"}},
+	// S30/S32 (wave 5): screens in space — frames, ARRUMAR, the drag and the balloon
+	{"normal.world", "world.new_screen", []string{"N"}},
+	{"world.walk", "world.new_screen", []string{"N"}},
+	{"normal.world", "world.frame", []string{"ctrl+n"}},
+	{"world.walk", "world.frame", []string{"ctrl+n"}},
+	{"world", "world.terminal_air", []string{"world+shift+enter"}},
+	{"normal.world", "world.arrange", []string{"v"}},
+	{"world.walk", "world.arrange", []string{"v"}},
+	{"normal.world", "world.undo", []string{"u"}},
+	{"normal.world", "world.redo", []string{"ctrl+r"}},
+	{"world.arrange", "world.undo", []string{"u"}},
+	{"world.arrange", "world.redo", []string{"ctrl+r"}},
+	{"normal.world", "world.dock", []string{"P"}},
+	{"world.arrange", "world.dock", []string{"p"}},
+	{"normal.world", "world.menu", []string{"shift+f10", "Menu"}},
+	{"world.arrange", "world.select_toggle", []string{"space"}},
+	{"world.arrange", "world.cluster", []string{"c"}},
+	{"world.arrange", "world.uncluster", []string{"C"}},
+	{"world.arrange", "world.layout_save", []string{"s"}},
+	{"world.arrange", "world.nudge_left", []string{"h", "left"}},
+	{"world.arrange", "world.nudge_right", []string{"l", "right"}},
+	{"world.arrange", "world.nudge_up", []string{"k", "up"}},
+	{"world.arrange", "world.nudge_down", []string{"j", "down"}},
+	{"world.arrange", "world.nudge_left_big", []string{"H"}},
+	{"world.arrange", "world.nudge_right_big", []string{"L"}},
+	{"world.arrange", "world.nudge_up_big", []string{"K"}},
+	{"world.arrange", "world.nudge_down_big", []string{"J"}},
+	{"world.arrange", "world.nudge_left_fine", []string{"alt+h"}},
+	{"world.arrange", "world.nudge_right_fine", []string{"alt+l"}},
+	{"world.arrange", "world.nudge_up_fine", []string{"alt+k"}},
+	{"world.arrange", "world.nudge_down_fine", []string{"alt+j"}},
+	{"world.arrange", "world.nearer", []string{"["}},
+	{"world.arrange", "world.farther", []string{"]"}},
+	{"world.arrange", "world.nearer_big", []string{"{"}},
+	{"world.arrange", "world.farther_big", []string{"}"}},
+	{"world.arrange", "world.yaw_left", []string{"q"}},
+	{"world.arrange", "world.yaw_right", []string{"e"}},
+	{"world.arrange", "world.yaw_left_fine", []string{"alt+q"}},
+	{"world.arrange", "world.yaw_right_fine", []string{"alt+e"}},
+	{"world.arrange", "world.pitch_up", []string{"ctrl+k"}},
+	{"world.arrange", "world.pitch_down", []string{"ctrl+j"}},
+	{"world.arrange", "world.narrower", []string{"-"}},
+	{"world.arrange", "world.wider", []string{"="}},
+	{"world.arrange", "world.shorter", []string{"_"}},
+	{"world.arrange", "world.taller", []string{"+"}},
+	{"world.arrange", "world.size_preset_1", []string{"1"}},
+	{"world.arrange", "world.size_preset_2", []string{"2"}},
+	{"world.arrange", "world.size_preset_3", []string{"3"}},
+	{"world.arrange", "world.size_preset_4", []string{"4"}},
+	{"world.arrange", "world.read_distance", []string{"0"}},
+	{"world.arrange", "world.scale_down", []string{"ctrl+-"}},
+	{"world.arrange", "world.scale_up", []string{"ctrl+="}},
+	{"world.arrange", "world.scale_reset", []string{"ctrl+0"}},
+	{"world.arrange", "world.snap_toggle", []string{"g"}},
+	{"world.arrange", "world.magnets_toggle", []string{"x"}},
+	{"world.arrange", "world.to_wall", []string{"w"}},
+	{"world.arrange", "world.to_desk", []string{"d"}},
+	{"world.arrange", "world.to_air", []string{"a"}},
+	{"world.arrange", "world.arrange_next", []string{"tab"}},
+	{"world.arrange", "world.arrange_prev", []string{"shift+tab"}},
+	{"world.arrange", "world.arrange_done", []string{"enter"}},
+	{"world.arrange", "world.arrange_cancel", []string{"esc"}},
+	{"world.drag", "world.drag_cancel", []string{"esc"}},
+	{"world.drag", "world.nearer", []string{"["}},
+	{"world.drag", "world.farther", []string{"]"}},
+	{"world.drag", "world.yaw_left", []string{"q"}},
+	{"world.drag", "world.yaw_right", []string{"e"}},
+	{"world.drag", "world.snap_toggle", []string{"g"}},
+	{"world.drag", "world.magnets_toggle", []string{"x"}},
+	{"world.menu", "world.menu_up", []string{"k", "up"}},
+	{"world.menu", "world.menu_down", []string{"j", "down"}},
+	{"world.menu", "world.menu_open", []string{"enter", "space"}},
+	{"world.menu", "world.menu_close", []string{"esc"}},
 }
 
 // s26Titles are S26's titles (the ones the contract names).
@@ -209,7 +282,8 @@ var s19Titles = map[string]string{
 // s9PaletteOnly are S9's commands with no keys.
 var s9PaletteOnly = strings.Fields(`world.fullscreen world.maximize world.room_new world.goto_room
 	world.goto_object brightness.up brightness.down world.open world.vault_lock
-	world.tour world.walk_set world.launch_isolated world.xwayland world.goto_cat world.focus_cat`)
+	world.tour world.walk_set world.launch_isolated world.xwayland world.goto_cat world.focus_cat
+	world.select_clear world.layout_load world.layout_delete world.layout_rename`)
 
 // s26NotCore are the nkw's internal names (S26): never core commands.
 var s26NotCore = strings.Fields(`world.tour_done phone.sub phone.app`)
@@ -370,7 +444,7 @@ func TestWorldKeymapRules(t *testing.T) {
 			}
 		}
 	}
-	if len(chords) != 16 {
+	if len(chords) != 17 {
 		t.Errorf("%d chords: %v", len(chords), chords)
 	}
 	// world.quit asks first; the arguments the palette asks for
@@ -386,6 +460,7 @@ func TestWorldKeymapRules(t *testing.T) {
 		"world.open":           {{Name: "path", Type: core.ArgString, Required: true}},
 	}
 	maps.Copy(args, s26Args)
+	maps.Copy(args, s32Args)
 	for name, want := range args {
 		c, _ := a.Registry().Lookup(name)
 		if len(c.Args) != len(want) {

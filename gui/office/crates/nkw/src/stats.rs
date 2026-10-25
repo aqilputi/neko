@@ -85,6 +85,12 @@ pub struct Summary {
     /// `NKW_STATS=ext`: each plugin's `drain`+`tick` per frame, p95 µs
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ext_plugin_us_p95: Option<std::collections::BTreeMap<&'static str, u64>>,
+    /// the most live configures sent in one second while resizing (≤ 10)
+    pub configure_live_max_per_s: u64,
+    /// the pointer's pick, p95 µs (0: none sampled)
+    pub pick_us_p95: u64,
+    /// frames composed while a mouse drag was live
+    pub drag_frames: u64,
 }
 
 /// The nearest-rank percentile of `v` (sorted in place); 0 when empty.
@@ -149,6 +155,34 @@ pub struct Stats {
     pub look_events: u64,
     /// the vblank period of the last frame
     period: f64,
+    /// [`Stats::sample_us`] of `pick_us`
+    pick_us: Vec<u64>,
+    /// [`Stats::count`]: per key, the total and the most in one second
+    counts: std::cell::RefCell<std::collections::BTreeMap<&'static str, Counter>>,
+}
+
+/// One counted key ([`Stats::count`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Counter {
+    pub total: u64,
+    /// the second (mono s, floored) being counted, and its count
+    pub sec: u64,
+    pub in_sec: u64,
+    pub max_per_s: u64,
+}
+
+impl Counter {
+    /// One more at `now` (mono s).
+    pub fn add(&mut self, now: f64) {
+        let sec = now.max(0.0).floor() as u64;
+        if sec != self.sec || self.total == 0 {
+            self.sec = sec;
+            self.in_sec = 0;
+        }
+        self.total += 1;
+        self.in_sec += 1;
+        self.max_per_s = self.max_per_s.max(self.in_sec);
+    }
 }
 
 impl Stats {
@@ -269,6 +303,29 @@ impl Stats {
         }
     }
 
+    /// Count one `key` ("configure_live", "drag_frames" …): cheap, always
+    /// on (the summary reads it).
+    pub fn count(&self, key: &'static str) {
+        self.count_at(key, mono_s());
+    }
+
+    /// [`Stats::count`] at `now` (mono s; tests).
+    pub fn count_at(&self, key: &'static str, now: f64) {
+        self.counts.borrow_mut().entry(key).or_default().add(now);
+    }
+
+    /// What [`Stats::count`] gathered for `key`.
+    pub fn counted(&self, key: &str) -> Counter {
+        self.counts.borrow().get(key).copied().unwrap_or_default()
+    }
+
+    /// One pick of the pointer took `us` (the summary's `pick_us_p95`).
+    pub fn pick_us(&mut self, us: u64) {
+        if self.pick_us.len() < 100_000 {
+            self.pick_us.push(us);
+        }
+    }
+
     /// A pending late gap with no next frame counts alone.
     fn flush_late(&mut self, period: f64) {
         if let Some(g) = self.late_gap.take() {
@@ -304,6 +361,9 @@ impl Stats {
                     .map(|(n, v)| (*n, percentile(&mut v.clone(), 95.0)))
                     .collect()
             }),
+            configure_live_max_per_s: self.counted("configure_live").max_per_s,
+            pick_us_p95: percentile(&mut self.pick_us.clone(), 95.0),
+            drag_frames: self.counted("drag_frames").total,
         }
     }
 

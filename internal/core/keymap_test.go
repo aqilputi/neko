@@ -34,6 +34,8 @@ func TestParentMode(t *testing.T) {
 		ModeNormalTodos: ModeNormal, ModeNormal: ModeAny, ModeInsert: ModeAny, ModeAny: "", "": "", "a.b.c": "a.b",
 		ModeNormalWorld: ModeNormal, ModeWorld: ModeAny, ModeWorldWalk: ModeWorld, ModeWorldLibrary: ModeNormalWorld,
 		ModeWorldPhone: "", // the phone has no fallback (S26)
+		// S32 (wave 5): ARRUMAR, the mouse drag and the balloon have none either
+		ModeWorldArrange: "", ModeWorldDrag: "", ModeWorldMenu: "",
 	} {
 		if got := ParentMode(in); got != want {
 			t.Errorf("ParentMode(%q) = %q, want %q", in, got, want)
@@ -48,7 +50,7 @@ func TestIsWorldMode(t *testing.T) {
 			t.Errorf("%s is not a world mode", m)
 		}
 	}
-	if len(WorldModes) != 10 {
+	if len(WorldModes) != 13 {
 		t.Fatalf("WorldModes = %v", WorldModes)
 	}
 	for _, m := range []string{ModeNormal, ModeNormalTodos, ModeInsert, ModeAny, "", "worldly", "normal.worldx", "x.world"} {
@@ -177,6 +179,35 @@ func TestWorldPhoneMode(t *testing.T) {
 	for _, k := range []string{"world+n", "ctrl+c"} {
 		if c, ok := km.Resolve(ModeWorldPhone, k); ok {
 			t.Errorf("%s falls back to %q", k, c)
+		}
+	}
+}
+
+// A "*" binding counts in a mode only when the mode falls back to "*":
+// world.arrange's ctrl+k (the pitch) is not the switcher's.
+func TestCollisionsNoFallbackMode(t *testing.T) {
+	km := Keymap{
+		{Command: "switcher.open", Keys: []string{"ctrl+k"}, Mode: ModeAny},
+		{Command: "world.pitch_up", Keys: []string{"ctrl+k"}, Mode: ModeWorldArrange},
+		{Command: "world.menu_up", Keys: []string{"ctrl+k"}, Mode: ModeWorldMenu},
+		{Command: "nav.x", Keys: []string{"ctrl+k"}, Mode: ModeNormal},
+	}
+	got := km.Collisions()
+	want := []string{`normal "ctrl+k": switcher.open, nav.x`}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("Collisions = %q, want %q", got, want)
+	}
+	if c, _ := km.Resolve(ModeWorldArrange, "ctrl+k"); c != "world.pitch_up" {
+		t.Fatalf("resolve = %q", c)
+	}
+	for _, m := range []string{ModeWorldArrange, ModeWorldDrag, ModeWorldMenu, ModeWorldPhone} {
+		if fallsBackToAny(m) {
+			t.Errorf("%s reaches *", m)
+		}
+	}
+	for _, m := range []string{ModeNormal, ModeNormalWorld, ModeWorldWalk, ModeWorldLibrary, ModeAny} {
+		if !fallsBackToAny(m) {
+			t.Errorf("%s does not reach *", m)
 		}
 	}
 }

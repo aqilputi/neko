@@ -148,6 +148,7 @@ func worldRows() []worldRow {
 		row(phone, "busca", wk("world.phone_search", "", "/")),
 	)
 	rows = append(rows, numbered(phone, "world.phone_app", "app")...)
+	rows = append(rows, arrangeRows()...)
 	return append(rows,
 		row(hint, "cancela", wk("world.hint_cancel", "", "esc")),
 		row(hint, "apaga", wk("world.hint_backspace", "", "backspace")),
@@ -173,6 +174,73 @@ func worldRows() []worldRow {
 	)
 }
 
+// arrangeRows are S30's rows (wave 5, screens in space): frames, ARRUMAR
+// and its keys, the mouse drag's keys and the balloon's. A pair "a · b" is
+// one row, each command with its hint. world.nearer/farther and
+// world.narrower/wider already exist: these rows only add their bindings
+// in the new modes.
+func arrangeRows() []worldRow {
+	const nav, glob, walk = core.ModeNormalWorld, core.ModeWorld, core.ModeWorldWalk
+	const arr, drag, menu = core.ModeWorldArrange, core.ModeWorldDrag, core.ModeWorldMenu
+	return []worldRow{
+		row(nav+","+walk, "nova tela aqui (escolhe o app)", wk("world.new_screen", "", "N")),
+		row(nav+","+walk, "moldura vazia aqui (a próxima janela vai nela)", wk("world.frame", "", "ctrl+n")),
+		row(glob, "terminal no ar, na mira", wk("world.terminal_air", "", "world+shift+enter")),
+		row(nav+","+walk, "ARRUMAR a tela", wk("world.arrange", "", "v")),
+		row(nav+","+arr, "desfaz · refaz (arrumação)", wk("world.undo", "desfaz", "u"),
+			wk("world.redo", "refaz", "ctrl+r")),
+		row(nav, "ancora na vista / desancora", wk("world.dock", "", "P")),
+		row(arr, "ancora na vista / desancora", wk("world.dock", "", "p")),
+		row(nav, "menu da tela", wk("world.menu", "", "shift+f10", "Menu")),
+		row(nav, "limpa a seleção", wk("world.select_clear", "")),
+		row(nav, "carrega · apaga um arranjo", wk("world.layout_load", "carrega"),
+			wk("world.layout_delete", "apaga")),
+		row(nav, "renomeia um arranjo", wk("world.layout_rename", "")),
+		row(arr, "marca/desmarca a tela", wk("world.select_toggle", "", "space")),
+		row(arr, "agrupa a seleção · desfaz o grupo", wk("world.cluster", "agrupa", "c"),
+			wk("world.uncluster", "desfaz o grupo", "C")),
+		row(arr, "salva o arranjo da sala", wk("world.layout_save", "", "s")),
+		row(arr, "move 10 cm", wk("world.nudge_left", "à esquerda", "h", "left"),
+			wk("world.nudge_right", "à direita", "l", "right"), wk("world.nudge_up", "para cima", "k", "up"),
+			wk("world.nudge_down", "para baixo", "j", "down")),
+		row(arr, "move 50 cm", wk("world.nudge_left_big", "à esquerda", "H"),
+			wk("world.nudge_right_big", "à direita", "L"), wk("world.nudge_up_big", "para cima", "K"),
+			wk("world.nudge_down_big", "para baixo", "J")),
+		row(arr, "move 1 cm", wk("world.nudge_left_fine", "à esquerda", "alt+h"),
+			wk("world.nudge_right_fine", "à direita", "alt+l"), wk("world.nudge_up_fine", "para cima", "alt+k"),
+			wk("world.nudge_down_fine", "para baixo", "alt+j")),
+		row(arr+","+drag, "mais perto · mais longe", wk("world.nearer", "mais perto", "["),
+			wk("world.farther", "mais longe", "]")),
+		row(arr, "50 cm mais perto · longe", wk("world.nearer_big", "mais perto", "{"),
+			wk("world.farther_big", "mais longe", "}")),
+		row(arr+","+drag, "gira 15°", wk("world.yaw_left", "à esquerda", "q"), wk("world.yaw_right", "à direita", "e")),
+		row(arr, "gira 5°", wk("world.yaw_left_fine", "à esquerda", "alt+q"),
+			wk("world.yaw_right_fine", "à direita", "alt+e")),
+		row(arr, "inclina 5°", wk("world.pitch_up", "para cima", "ctrl+k"), wk("world.pitch_down", "para baixo", "ctrl+j")),
+		row(arr, "largura (preset)", wk("world.narrower", "mais estreita", "-"), wk("world.wider", "mais larga", "=")),
+		row(arr, "altura (preset)", wk("world.shorter", "mais baixa", "_"), wk("world.taller", "mais alta", "+")),
+		row(arr, "largura 1/3 · 1/2 · 2/3 · 1", wk("world.size_preset_1", "1/3", "1"),
+			wk("world.size_preset_2", "1/2", "2"), wk("world.size_preset_3", "2/3", "3"),
+			wk("world.size_preset_4", "1", "4")),
+		row(arr, "ponto de leitura (1:1)", wk("world.read_distance", "", "0")),
+		row(arr, "escala visual", wk("world.scale_down", "menor", "ctrl+-"), wk("world.scale_up", "maior", "ctrl+="),
+			wk("world.scale_reset", "original", "ctrl+0")),
+		row(arr+","+drag, "grade · sem ímã", wk("world.snap_toggle", "grade", "g"),
+			wk("world.magnets_toggle", "sem ímã", "x")),
+		row(arr, "encosta na parede · vai para a mesa · fica no ar", wk("world.to_wall", "parede", "w"),
+			wk("world.to_desk", "mesa", "d"), wk("world.to_air", "ar", "a")),
+		row(arr, "próxima · anterior tela", wk("world.arrange_next", "próxima", "tab"),
+			wk("world.arrange_prev", "anterior", "shift+tab")),
+		row(arr, "confirma · cancela", wk("world.arrange_done", "confirma", "enter"),
+			wk("world.arrange_cancel", "cancela", "esc")),
+		row(drag, "cancela o arrasto", wk("world.drag_cancel", "", "esc")),
+		row(menu, "item de cima", wk("world.menu_up", "", "k", "up")),
+		row(menu, "item de baixo", wk("world.menu_down", "", "j", "down")),
+		row(menu, "abre o item", wk("world.menu_open", "", "enter", "space")),
+		row(menu, "fecha o menu", wk("world.menu_close", "", "esc")),
+	}
+}
+
 // worldArgs are the arguments the palette asks for, in order (it asks the
 // required ones only); world.quit confirms.
 var worldArgs = map[string][]core.Arg{
@@ -192,6 +260,22 @@ var worldArgs = map[string][]core.Arg{
 	"world.goto_cat":        {{Name: "cat", Type: core.ArgString, Prompt: "gato › ", Required: true}},
 	"world.focus_cat":       {{Name: "cat", Type: core.ArgString, Prompt: "gato › ", Required: true}},
 	"world.talk":            {{Name: "cat", Type: core.ArgString, Prompt: "gato › "}}, // none: the station's
+	// S32 (wave 5): the layouts' names are asked; the rest is optional and
+	// never prompted (the pointer, the balloon and the phone pass them)
+	"world.layout_save":   {{Name: "name", Type: core.ArgString, Prompt: "nome do arranjo › ", Required: true}},
+	"world.layout_load":   {{Name: "name", Type: core.ArgString, Prompt: "arranjo › ", Required: true}},
+	"world.layout_delete": {{Name: "name", Type: core.ArgString, Prompt: "arranjo › ", Required: true}},
+	"world.layout_rename": {
+		{Name: "name", Type: core.ArgString, Prompt: "arranjo › ", Required: true},
+		{Name: "to", Type: core.ArgString, Prompt: "novo nome › ", Required: true},
+	},
+	"world.cluster": {{Name: "name", Type: core.ArgString, Prompt: "nome do grupo › "}},
+	"world.new_screen": {
+		{Name: "at", Type: core.ArgString, Prompt: "posição (x_mm,y_mm,z_mm,yaw_mdeg) › "},
+		{Name: "app", Type: core.ArgString, Prompt: "app › "},
+		{Name: "frame", Type: core.ArgString, Prompt: "moldura › "},
+	},
+	"world.frame": {{Name: "at", Type: core.ArgString, Prompt: "posição (x_mm,y_mm,z_mm,yaw_mdeg) › "}},
 }
 
 // worldCommands builds the commands from worldRows (each once, in its

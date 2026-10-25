@@ -43,6 +43,14 @@ id!(
     /// A sound source: an app stream or one of our own sounds.
     SourceId
 );
+id!(
+    /// An empty frame: a screen without a window yet (the next window lands in it).
+    FrameId
+);
+id!(
+    /// A rigid group of screens in the air: one station.
+    ClusterId
+);
 
 #[cfg(test)]
 mod tests {

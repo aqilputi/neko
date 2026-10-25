@@ -423,6 +423,7 @@ impl World {
             air: st
                 .air
                 .map(|p| nkw_core::persist::Air::new(p.center.to_array(), p.yaw, st.wall)),
+            ..Place::default()
         })
     }
 
@@ -452,6 +453,7 @@ impl World {
                     width: d.width,
                     screens: apps,
                     cat: d.cat.is_some(),
+                    tabbed: false,
                 });
                 for s in &d.screens {
                     let Some(sc) = self.screens.get(s) else {
@@ -491,6 +493,7 @@ impl World {
             places: Default::default(),
             // the WM's flag (`world.tour_done`), set on its copy
             tour_done: false,
+            ..WorldFile::default()
         }
     }
 
@@ -1986,6 +1989,7 @@ mod tests {
             desk: Some(DeskAt::Last),
             width: Some(Width::TwoThirds),
             air: None,
+            ..Place::default()
         };
         let out = w.place_new(id, &p, 0.0);
         assert_eq!(sizes(&out), [(id.0, Vec2::new(837.0, 720.0))]);
@@ -2018,6 +2022,7 @@ mod tests {
                 desk: Some(DeskAt::Index(1)),
                 width: Some(Width::TwoThirds),
                 air: None,
+                ..Place::default()
             })
         );
     }

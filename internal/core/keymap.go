@@ -31,11 +31,21 @@ const (
 	// the phone is open over COMANDOS and chains "world" before it by
 	// itself; it has no fallback of its own.
 	ModeWorldPhone = "world.phone"
+	// ModeWorldArrange is ARRUMAR (wave 5): arranging a screen by keyboard.
+	// No fallback: only its keys and the global world+ chords work there.
+	ModeWorldArrange = "world.arrange"
+	// ModeWorldDrag is a live mouse drag (the pointer's state, not a mode
+	// of the machine): esc, [ ], q e, g x. No fallback.
+	ModeWorldDrag = "world.drag"
+	// ModeWorldMenu is the balloon (the context menu) while it is open. No
+	// fallback.
+	ModeWorldMenu = "world.menu"
 )
 
 // WorldModes lists the world's modes.
 var WorldModes = []string{ModeWorld, ModeNormalWorld, ModeWorldWalk, ModeWorldFocus, ModeWorldTalk,
-	ModeWorldHint, ModeWorldPalette, ModeWorldLine, ModeWorldLibrary, ModeWorldPhone}
+	ModeWorldHint, ModeWorldPalette, ModeWorldLine, ModeWorldLibrary, ModeWorldPhone,
+	ModeWorldArrange, ModeWorldDrag, ModeWorldMenu}
 
 // IsWorldMode reports whether mode is one of the world's ("world",
 // "world.*", "normal.world"): bindings the TUI and the GUI never show.
@@ -67,10 +77,12 @@ func helpKey(keys []string) string { return strings.Join(keys, "/") }
 // ParentMode is the mode a mode falls back to: "normal.todos" → "normal" →
 // "*" → "". The world has two exceptions: "world.library" →
 // "normal.world" (the shelf keys shadow NAV's, the rest is NAV) and
-// "world.phone" → "" (the phone's own keys only).
+// "world.phone", "world.arrange", "world.drag" and "world.menu" → "" (their
+// own keys only).
 func ParentMode(mode string) string {
 	switch {
-	case mode == ModeAny || mode == "" || mode == ModeWorldPhone:
+	case mode == ModeAny || mode == "" || mode == ModeWorldPhone || mode == ModeWorldArrange ||
+		mode == ModeWorldDrag || mode == ModeWorldMenu:
 		return ""
 	case mode == ModeWorldLibrary:
 		return ModeNormalWorld
@@ -257,8 +269,9 @@ func (k Keymap) Overlay(over Keymap) Keymap {
 }
 
 // Collisions lists every key bound to more than one command in the same
-// mode, as `mode "key": cmd, cmd`. A "*" binding counts in every mode; a
-// sub-mode shadowing its parent is not a collision.
+// mode, as `mode "key": cmd, cmd`. A "*" binding counts in every mode that
+// falls back to "*" (not in world.phone, world.arrange …); a sub-mode
+// shadowing its parent is not a collision.
 func (k Keymap) Collisions() []string {
 	type slot struct{ mode, key string }
 	var order []slot
@@ -275,7 +288,7 @@ func (k Keymap) Collisions() []string {
 	var out []string
 	for _, s := range order {
 		idx := by[s]
-		if s.mode != ModeAny {
+		if s.mode != ModeAny && fallsBackToAny(s.mode) {
 			idx = merge(idx, by[slot{ModeAny, s.key}])
 		}
 		if len(idx) < 2 {
@@ -288,6 +301,17 @@ func (k Keymap) Collisions() []string {
 		out = append(out, fmt.Sprintf("%s %q: %s", s.mode, s.key, strings.Join(names, ", ")))
 	}
 	return out
+}
+
+// fallsBackToAny reports whether mode's fallback chain reaches "*" (a "*"
+// binding is live there).
+func fallsBackToAny(mode string) bool {
+	for m := mode; m != ""; m = ParentMode(m) {
+		if m == ModeAny {
+			return true
+		}
+	}
+	return false
 }
 
 // merge joins two ascending index lists, keeping the order.

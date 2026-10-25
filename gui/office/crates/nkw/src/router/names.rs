@@ -102,6 +102,7 @@ pub fn mode_of(mode: &Mode, sub: Option<&str>) -> &'static str {
         (Some(Kind::Palette), _) => "world.palette",
         (None, Base::Walk) => "world.walk",
         (None, Base::Nav) => "normal.world",
+        (Some(Kind::Arrange), _) => "world.arrange",
     }
 }
 

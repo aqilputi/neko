@@ -13,10 +13,29 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::dock::DockSlot;
+use crate::ids::FrameId;
 use crate::strip::Width;
 
-/// The current file version.
-pub const VERSION: u32 = 1;
+/// The current file version (2: wave 5's poses with pitch/scale, docks,
+/// frames, clusters; version 1 reads unchanged).
+pub const VERSION: u32 = 2;
+
+fn is_zero(v: &i32) -> bool {
+    *v == 0
+}
+
+fn pct_100() -> u16 {
+    100
+}
+
+fn is_100(v: &u16) -> bool {
+    *v == 100
+}
+
+fn pct_33() -> u16 {
+    33
+}
 
 /// What a room is for (§6.1).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,16 +126,40 @@ pub struct Place {
     /// in the air at a pose (pinned, dropped from the hand), or on a wall
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub air: Option<Air>,
+    /// anchored on the output (a dock)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dock: Option<DockAt>,
+    /// runtime only (ids change across runs): land in this frame
+    #[serde(skip)]
+    pub frame: Option<FrameId>,
+}
+
+/// A dock's slot and scale, in a place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockAt {
+    pub slot: DockSlot,
+    pub scale_pct: u16,
 }
 
 /// A screen's pose in the air, in whole millimetres and millidegrees (so
-/// the file stays exact and `Eq`); `wall`: dropped against a wall.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// the file stays exact and `Eq`); `wall`: dropped against a wall. Pitch
+/// and scale (v2) are left out of the file at 0 and 100 %.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Air {
     pub pos_mm: [i32; 3],
     pub yaw_mdeg: i32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pitch_mdeg: i32,
+    #[serde(default = "pct_100", skip_serializing_if = "is_100")]
+    pub scale_pct: u16,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub wall: bool,
+}
+
+impl Default for Air {
+    fn default() -> Air {
+        Air::new([0.0; 3], 0.0, false)
+    }
 }
 
 impl Air {
@@ -126,8 +169,20 @@ impl Air {
         Air {
             pos_mm: pos.map(mm),
             yaw_mdeg: (yaw.to_degrees() * 1000.0).round() as i32,
+            pitch_mdeg: 0,
+            scale_pct: 100,
             wall,
         }
+    }
+
+    /// Radians.
+    pub fn pitch(&self) -> f32 {
+        (self.pitch_mdeg as f32 / 1000.0).to_radians()
+    }
+
+    /// The visual scale (1 = 100 %).
+    pub fn scale(&self) -> f32 {
+        self.scale_pct as f32 / 100.0
     }
 
     /// Metres.
@@ -143,7 +198,12 @@ impl Air {
 
 impl Place {
     pub fn is_empty(&self) -> bool {
-        self.room.is_none() && self.desk.is_none() && self.width.is_none() && self.air.is_none()
+        self.room.is_none()
+            && self.desk.is_none()
+            && self.width.is_none()
+            && self.air.is_none()
+            && self.dock.is_none()
+            && self.frame.is_none()
     }
 
     /// Field by field: `self` where set, else `other`.
@@ -153,6 +213,8 @@ impl Place {
             desk: self.desk.or(other.desk),
             width: self.width.or(other.width),
             air: self.air.or(other.air),
+            dock: self.dock.or(other.dock),
+            frame: self.frame.or(other.frame),
         }
     }
 }
@@ -175,6 +237,41 @@ pub struct DeskRec {
     /// a cat's desk (comes back with the cat, not from the file)
     #[serde(default)]
     pub cat: bool,
+    /// reserved for phase B (tabbed desks)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tabbed: bool,
+}
+
+/// A docked screen, by app_id (v2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DockRec {
+    pub app_id: String,
+    #[serde(default)]
+    pub output: Option<String>,
+    pub slot: DockSlot,
+    #[serde(default = "pct_33")]
+    pub scale_pct: u16,
+}
+
+/// An empty frame (v2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameRec {
+    pub room: String,
+    pub air: Air,
+    #[serde(default)]
+    pub armed: bool,
+    /// phase D's crash restore (frames armed per app_id); phase A always
+    /// writes None
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+}
+
+/// A cluster of screens, by app_id (v2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterRec {
+    pub name: String,
+    pub room: String,
+    pub app_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,6 +319,13 @@ pub struct WorldFile {
     /// the receptionist's first-run tour was seen (or skipped)
     #[serde(default)]
     pub tour_done: bool,
+    /// v2
+    #[serde(default)]
+    pub docks: Vec<DockRec>,
+    #[serde(default)]
+    pub frames: Vec<FrameRec>,
+    #[serde(default)]
+    pub clusters: Vec<ClusterRec>,
 }
 
 impl Default for WorldFile {
@@ -234,6 +338,9 @@ impl Default for WorldFile {
             station: None,
             places: BTreeMap::new(),
             tour_done: false,
+            docks: Vec::new(),
+            frames: Vec::new(),
+            clusters: Vec::new(),
         }
     }
 }
@@ -294,9 +401,20 @@ pub fn migrate(v: Value) -> Result<WorldFile, PersistError> {
     };
     match version {
         0 => migrate_v0(map),
-        VERSION => serde_json::from_value(v).map_err(|e| PersistError::Shape(e.to_string())),
+        1 | VERSION => {
+            let mut f: WorldFile =
+                serde_json::from_value(v).map_err(|e| PersistError::Shape(e.to_string()))?;
+            f.version = VERSION;
+            Ok(f)
+        }
         v => Err(PersistError::Version(v)),
     }
+}
+
+/// A version-1 file (the WM writes `world.json.v1.bak` once before it
+/// overwrites it with v2).
+pub fn needs_backup(v: &Value) -> bool {
+    v.get("version").and_then(Value::as_u64) == Some(1)
 }
 
 fn migrate_v0(map: &serde_json::Map<String, Value>) -> Result<WorldFile, PersistError> {
@@ -329,6 +447,7 @@ fn migrate_v0(map: &serde_json::Map<String, Value>) -> Result<WorldFile, Persist
                     desk: Some(DeskAt::Index(desk)),
                     width: None,
                     air: None,
+                    ..Place::default()
                 },
             );
         }
@@ -432,6 +551,7 @@ mod tests {
                 width: Width::TwoThirds,
                 screens: vec!["acme.term".into()],
                 cat: false,
+                tabbed: false,
             }],
             screens: vec![
                 ScreenRec {
@@ -441,6 +561,7 @@ mod tests {
                         desk: Some(DeskAt::Index(1)),
                         width: Some(Width::TwoThirds),
                         air: None,
+                        ..Place::default()
                     },
                 },
                 ScreenRec {
@@ -450,6 +571,7 @@ mod tests {
                         desk: Some(DeskAt::Index(0)),
                         width: None,
                         air: None,
+                        ..Place::default()
                     },
                 },
             ],
@@ -465,9 +587,11 @@ mod tests {
                     desk: Some(DeskAt::Last),
                     width: Some(Width::Third),
                     air: None,
+                    ..Place::default()
                 },
             )]),
             tour_done: true,
+            ..WorldFile::default()
         }
     }
 
@@ -564,6 +688,7 @@ mod tests {
                     desk: Some(DeskAt::Index(2)),
                     width: None,
                     air: None,
+                    ..Place::default()
                 }
             );
         }
@@ -628,6 +753,7 @@ mod tests {
             desk: Some(DeskAt::Index(d)),
             width: None,
             air: None,
+            ..Place::default()
         };
         remember(&mut m, "acme.term", at("acme", 0));
         remember(&mut m, "acme.term", at("bravo", 2));
@@ -648,6 +774,7 @@ mod tests {
             desk: Some(DeskAt::Last),
             width: Some(Width::Full),
             air: None,
+            ..Place::default()
         };
         let m = a.or(b);
         assert_eq!(m.room.as_deref(), Some("acme"));

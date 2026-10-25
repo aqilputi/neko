@@ -75,6 +75,9 @@ pub enum Kind {
     Hint { focus: bool },
     /// COMANDOS
     Palette,
+    /// ARRUMAR: arranging the selected (NAV) or aimed (ANDAR) screen by
+    /// keyboard; the camera stays
+    Arrange,
 }
 
 /// An overlay and where it goes back to.
@@ -164,6 +167,13 @@ pub enum Action {
     /// `h`/`l` on the object in sight
     Prev(ObjectId),
     Next(ObjectId),
+    /// `v` (NAV, ANDAR): ARRUMAR over the base, the camera stays
+    Arrange,
+    /// `enter` in ARRUMAR
+    ArrangeDone,
+    /// a click on a pickable in NAV / ANDAR with a free pointer: what its
+    /// SALTO label does (never FOCO)
+    Click(Pick),
 }
 
 /// What the `nkw` side must do.
@@ -226,6 +236,13 @@ pub enum Effect {
     Object(ObjectId, ObjectAction),
     /// NAV: glide to an object's stand (the station becomes `Free`)
     GoToStand(Pose),
+    /// derived: entering ARRUMAR (the World takes the history mark and the
+    /// subject)
+    ArrangeStart,
+    /// `enter`, or the arranged window closed
+    ArrangeCommit,
+    /// `esc`: undo back to the mark
+    ArrangeRevert,
 }
 
 impl Mode {
@@ -259,6 +276,7 @@ impl Mode {
             (Some(Kind::Talk { .. }), _) => "CONVERSA",
             (Some(Kind::Hint { .. }), _) => "SALTO",
             (Some(Kind::Palette), _) => "COMANDOS",
+            (Some(Kind::Arrange), _) => "ARRUMAR",
             (None, Base::Nav) => "NAVEGAR",
             (None, Base::Walk) => "ANDAR",
         }
@@ -286,6 +304,11 @@ impl Mode {
 
     fn palette(&self) -> bool {
         self.kind() == Some(Kind::Palette)
+    }
+
+    /// In ARRUMAR.
+    pub fn arranging(&self) -> bool {
+        self.kind() == Some(Kind::Arrange)
     }
 
     fn talk(&self) -> Option<(CatId, bool)> {
@@ -357,6 +380,9 @@ fn enter(old: &Mode, new: &Mode, fx: &mut Vec<Effect>) {
     if new.palette() && !old.palette() {
         fx.push(Effect::OpenPalette);
     }
+    if new.arranging() && !old.arranging() {
+        fx.push(Effect::ArrangeStart);
+    }
     if new.line() && !old.line() {
         fx.push(Effect::OpenLine);
     }
@@ -405,6 +431,39 @@ fn focus_on(t: Target, back: &Mode, pose: Pose, fx: &mut Vec<Effect>) -> Mode {
     }
     fx.push(Effect::GlideOneToOne(t));
     Mode::over(Kind::Focus(t), back, pose)
+}
+
+/// What a picked label does (SALTO's label, or a click on a pickable with
+/// `focus` false): `back` is the mode it returns to, `pose` its camera.
+fn picked(pick: Pick, focus: bool, back: &Mode, pose: Pose, fx: &mut Vec<Effect>) -> Mode {
+    match pick {
+        Pick::Screen { screen, .. } if focus => focus_on(Target::Screen(screen), back, pose, fx),
+        Pick::Screen { station, .. } => {
+            fx.push(Effect::GoTo(station));
+            Mode::base(Base::Nav)
+        }
+        Pick::Cat(cat) => {
+            fx.push(Effect::FrameFace(cat));
+            Mode::over(talk(cat, TalkPurpose::Session), back, pose)
+        }
+        Pick::Object { id, stand } => {
+            if back.base == Base::Walk {
+                fx.push(Effect::Object(id, ObjectAction::Interact));
+                back.clone()
+            } else {
+                fx.push(Effect::GoToStand(stand));
+                Mode::base(Base::Nav)
+            }
+        }
+        Pick::Door(room) => {
+            fx.push(Effect::GoToRoom(room));
+            back.clone()
+        }
+        Pick::Book(book) => {
+            fx.push(Effect::OpenBook(book));
+            back.clone()
+        }
+    }
 }
 
 /// Back to where the overlay came from, gliding to the saved pose.
@@ -499,6 +558,8 @@ impl Machine {
             (None, A::Prev(id)) => return object(fx, id, ObjectAction::Prev),
             (None, A::Next(id)) => return object(fx, id, ObjectAction::Next),
             (None, A::Hint { focus }) => Mode::over(Kind::Hint { focus }, m, cam),
+            (None, A::Arrange) => Mode::over(Kind::Arrange, m, cam),
+            (None, A::Click(pick)) => picked(pick, false, m, cam, fx),
             (None | Some(Kind::Focus(_)), A::Palette) => Mode::over(Kind::Palette, m, cam),
 
             // FOCO
@@ -538,41 +599,23 @@ impl Machine {
             // SALTO
             (Some(Kind::Hint { focus }), A::Pick(pick)) => {
                 let o = o?;
-                match pick {
-                    Pick::Screen { screen, .. } if focus => {
-                        focus_on(Target::Screen(screen), &o.back, o.pose, fx)
-                    }
-                    Pick::Screen { station, .. } => {
-                        fx.push(Effect::GoTo(station));
-                        Mode::base(Base::Nav)
-                    }
-                    Pick::Cat(cat) => {
-                        fx.push(Effect::FrameFace(cat));
-                        Mode::over(talk(cat, TalkPurpose::Session), &o.back, o.pose)
-                    }
-                    Pick::Object { id, stand } => {
-                        if o.back.base == Base::Walk {
-                            fx.push(Effect::Object(id, ObjectAction::Interact));
-                            (*o.back).clone()
-                        } else {
-                            fx.push(Effect::GoToStand(stand));
-                            Mode::base(Base::Nav)
-                        }
-                    }
-                    Pick::Door(room) => {
-                        fx.push(Effect::GoToRoom(room));
-                        (*o.back).clone()
-                    }
-                    Pick::Book(book) => {
-                        fx.push(Effect::OpenBook(book));
-                        (*o.back).clone()
-                    }
-                }
+                picked(pick, focus, &o.back, o.pose, fx)
             }
             (Some(Kind::Hint { .. }), A::Back) => go_back(o?, fx),
 
             // COMANDOS
             (Some(Kind::Palette), A::Back | A::PaletteDone) => go_back(o?, fx),
+
+            // ARRUMAR: back where it came from without a glide (the camera
+            // never moved)
+            (Some(Kind::Arrange), A::ArrangeDone | A::WindowClosed) => {
+                fx.push(Effect::ArrangeCommit);
+                (*o?.back).clone()
+            }
+            (Some(Kind::Arrange), A::Back) => {
+                fx.push(Effect::ArrangeRevert);
+                (*o?.back).clone()
+            }
 
             _ => return None,
         };

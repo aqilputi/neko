@@ -9,7 +9,8 @@
 use glam::Vec2;
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{CatId, DirId, RoomId, ScreenId};
+use crate::dock::DockSlot;
+use crate::ids::{CatId, ClusterId, DirId, FrameId, RoomId, ScreenId};
 use crate::onetoone::M_PER_PX;
 use crate::pose::Pose;
 
@@ -153,6 +154,12 @@ pub enum Station {
     Board,
     /// where ANDAR was left ("you are here"); forgotten on the next move
     Free(Pose),
+    /// a cluster of screens in the air: one station (`{"cluster": 3}`)
+    Cluster(ClusterId),
+    /// a docked screen's slot: the camera does not move (`{"dock": "top_left"}`)
+    Dock(DockSlot),
+    /// an empty frame (`{"frame": 2}`)
+    Frame(FrameId),
 }
 
 impl Station {

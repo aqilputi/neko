@@ -6,7 +6,8 @@
 use std::path::PathBuf;
 
 use smithay::backend::input::{
-    ButtonState, Device, DeviceCapability, Event, InputBackend, InputEvent, InputTime,
+    AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
+    DeviceCapability, Event, InputBackend, InputEvent, InputTime, PointerAxisEvent,
     PointerButtonEvent, PointerMotionEvent, UnusedEvent,
 };
 
@@ -96,13 +97,78 @@ impl PointerButtonEvent<ScriptInput> for Button {
     }
 }
 
+/// `pointer_to <x> <y>`: logical px of the output (the script already
+/// speaks the output's logical space; clamped into it).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MotionTo {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Event<ScriptInput> for MotionTo {
+    fn time(&self) -> InputTime {
+        InputTime::now()
+    }
+    fn device(&self) -> ScriptDevice {
+        ScriptDevice
+    }
+}
+
+impl smithay::backend::input::PointerMotionAbsoluteEvent<ScriptInput> for MotionTo {}
+
+impl AbsolutePositionEvent<ScriptInput> for MotionTo {
+    fn x(&self) -> f64 {
+        self.x
+    }
+    fn y(&self) -> f64 {
+        self.y
+    }
+    fn x_transformed(&self, width: i32) -> f64 {
+        self.x.clamp(0.0, width.max(1) as f64 - 1.0)
+    }
+    fn y_transformed(&self, height: i32) -> f64 {
+        self.y.clamp(0.0, height.max(1) as f64 - 1.0)
+    }
+}
+
+/// `scroll <steps>`: a vertical wheel of whole notches; `+` = away (wheel
+/// up), which Wayland sends as a negative value (v120 = −steps·120).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Wheel {
+    pub steps: i32,
+}
+
+impl Event<ScriptInput> for Wheel {
+    fn time(&self) -> InputTime {
+        InputTime::now()
+    }
+    fn device(&self) -> ScriptDevice {
+        ScriptDevice
+    }
+}
+
+impl PointerAxisEvent<ScriptInput> for Wheel {
+    fn amount(&self, axis: Axis) -> Option<f64> {
+        (axis == Axis::Vertical).then_some(-self.steps as f64 * 15.0)
+    }
+    fn amount_v120(&self, axis: Axis) -> Option<f64> {
+        (axis == Axis::Vertical).then_some(-self.steps as f64 * 120.0)
+    }
+    fn source(&self) -> AxisSource {
+        AxisSource::Wheel
+    }
+    fn relative_direction(&self, _axis: Axis) -> AxisRelativeDirection {
+        AxisRelativeDirection::Identical
+    }
+}
+
 impl InputBackend for ScriptInput {
     type Device = ScriptDevice;
     type KeyboardKeyEvent = UnusedEvent;
-    type PointerAxisEvent = UnusedEvent;
+    type PointerAxisEvent = Wheel;
     type PointerButtonEvent = Button;
     type PointerMotionEvent = Motion;
-    type PointerMotionAbsoluteEvent = UnusedEvent;
+    type PointerMotionAbsoluteEvent = MotionTo;
     type GestureSwipeBeginEvent = UnusedEvent;
     type GestureSwipeUpdateEvent = UnusedEvent;
     type GestureSwipeEndEvent = UnusedEvent;
@@ -128,6 +194,20 @@ impl InputBackend for ScriptInput {
 pub fn motion(dx: f64, dy: f64) -> InputEvent<ScriptInput> {
     InputEvent::PointerMotion {
         event: Motion { dx, dy },
+    }
+}
+
+/// The event of a `pointer_to` line.
+pub fn motion_to(x: f64, y: f64) -> InputEvent<ScriptInput> {
+    InputEvent::PointerMotionAbsolute {
+        event: MotionTo { x, y },
+    }
+}
+
+/// The event of a `scroll` line.
+pub fn wheel(steps: i32) -> InputEvent<ScriptInput> {
+    InputEvent::PointerAxis {
+        event: Wheel { steps },
     }
 }
 
@@ -158,6 +238,17 @@ mod tests {
             event.button(),
             Some(smithay::backend::input::MouseButton::Right)
         );
+        let InputEvent::PointerMotionAbsolute { event } = motion_to(640.0, 900.0) else {
+            panic!("motion_to");
+        };
+        let p = event.position_transformed((1280, 800).into());
+        assert_eq!((p.x, p.y), (640.0, 799.0), "clamped to the output");
+        let InputEvent::PointerAxis { event } = wheel(2) else {
+            panic!("wheel");
+        };
+        assert_eq!(event.amount_v120(Axis::Vertical), Some(-240.0), "away = up");
+        assert_eq!(event.amount_v120(Axis::Horizontal), None);
+        assert_eq!(event.source(), AxisSource::Wheel);
         assert!(ScriptDevice.has_capability(DeviceCapability::Pointer));
         assert!(!ScriptDevice.has_capability(DeviceCapability::Keyboard));
     }
