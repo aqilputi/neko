@@ -531,8 +531,13 @@ impl Nkw {
         let t = Instant::now();
         let mut hud = hud;
         let fading = self.world.fade(now) > 0.0;
+        let out_logical = [
+            (out_px[0] as f64 / scale).round() as i32,
+            (out_px[1] as f64 / scale).round() as i32,
+        ];
+        let hud_reserved = self.ext.overlay.hud_reserved(out_logical);
         let mut elems: Vec<Elem> = Vec::with_capacity(16);
-        for layer in render::layers(&self.world, fading) {
+        for layer in render::layers(&self.world, fading, out_logical, &hud_reserved) {
             match layer {
                 Layer::Hud => {
                     let t_hud = Instant::now();

@@ -709,11 +709,15 @@ pub fn run(cli: Cli, script: Option<Vec<Line>>) -> Result<i32, Fail> {
     let opts = Opts {
         reduced_motion: cli.reduced_motion,
     };
-    let world = if cli.demo {
+    let mut world = if cli.demo {
         crate::demo::world(out, opts)
     } else {
         World::new(out, opts)
     };
+    // layouts (plan §2.6, S32) persist under the same root as `world.json`;
+    // `cli.state_root()` is already `None` under `--demo` (persist_io's own
+    // rule: never used there), so this needs no extra `if cli.demo`.
+    world.state_dir = cli.state_root();
 
     let lh = event_loop.handle();
     let mut st = Nkw {

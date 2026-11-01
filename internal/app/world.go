@@ -238,6 +238,15 @@ func arrangeRows() []worldRow {
 		row(menu, "item de baixo", wk("world.menu_down", "", "j", "down")),
 		row(menu, "abre o item", wk("world.menu_open", "", "enter", "space")),
 		row(menu, "fecha o menu", wk("world.menu_close", "", "esc")),
+		// niri parity: until now these only existed in the Rust fallback
+		// keymap (router/table.rs) — Mod+CTRL+Home/End move a column to the
+		// front/back of niri's queue; nkw's own keys mirror that exactly
+		// (world+ctrl+home/end). niri's own screenshot default is
+		// CTRL+Shift+1/2/3 (whole/screen/window); nkw has one screenshot
+		// command so far (the whole composed frame), bound to Print.
+		row(glob, "mesa para o início da fila", wk("world.move_first", "", "world+ctrl+home")),
+		row(glob, "mesa para o fim da fila", wk("world.move_last", "", "world+ctrl+end")),
+		row(nav, "captura de tela", wk("world.screenshot", "", "Print")),
 	}
 }
 

@@ -68,6 +68,11 @@ pub fn lod(w: &World, id: ScreenId) -> Lod {
     if w.focus_target() == Some(id) {
         return Lod::Focus;
     }
+    if w.screen_state(id).dock.is_some() {
+        // anchored to the view: alive whatever FOCO or the freeze are doing
+        // elsewhere (plan §2.7, "no FOCO, as ancoradas continuam ... vivas")
+        return Lod::Docked;
+    }
     if w.frozen {
         return Lod::Hidden;
     }
@@ -114,10 +119,63 @@ pub enum Layer {
     World,
 }
 
+/// Every docked screen's `Layer::Dock` (plan §2.7): `nkw_core::dock::layout`
+/// placed on an output of `out` logical px, off the HUD's (and any other)
+/// `reserved` rects. `scale` is the *effective* one (`rect`'s size over the
+/// window's own logical size), not the dock's requested `DOCK_SCALE`: a dock
+/// that had to shrink to fit still composes at the size it was actually
+/// given.
+fn dock_layers(w: &World, out: [i32; 2], reserved: &[nkw_core::Rect]) -> Vec<Layer> {
+    let mut sizes: Vec<(ScreenId, glam::Vec2)> = Vec::new();
+    let docks: Vec<nkw_core::dock::DockIn> = w
+        .screens
+        .values()
+        .filter_map(|s| {
+            let slot = w.screen_state(s.id).dock?;
+            // the window's last committed size, or the plan's default PiP
+            // scale's own target (`dock::DOCK_SCALE`): there is no
+            // per-screen dock scale stored yet (another wave), so a freshly
+            // docked screen always starts at the plan's default.
+            let logical = if s.size.x > 0.0 && s.size.y > 0.0 {
+                s.size
+            } else {
+                w.usable().floor()
+            };
+            sizes.push((s.id, logical));
+            Some(nkw_core::dock::DockIn {
+                id: s.id,
+                slot,
+                logical,
+                scale: nkw_core::dock::DOCK_SCALE,
+            })
+        })
+        .collect();
+    if docks.is_empty() {
+        return Vec::new();
+    }
+    nkw_core::dock::layout(out, &docks, reserved)
+        .into_iter()
+        .filter_map(|(id, rect)| {
+            let rect = rect?;
+            let logical = sizes.iter().find(|(i, _)| *i == id)?.1;
+            let scale = if logical.x > 0.0 {
+                rect.w as f32 / logical.x
+            } else {
+                1.0
+            };
+            Some(Layer::Dock { id, rect, scale })
+        })
+        .collect()
+}
+
 /// The layers, topmost first (the order `render_output` wants). The
 /// overlay is always asked; it hides the mode label in FOCO itself.
-pub fn layers(w: &World, fading: bool) -> Vec<Layer> {
+/// `out`/`reserved`: the output's logical size and the HUD's rects on it
+/// (`Overlay::hud_reserved`), so a docked screen's `Layer::Dock` lands off
+/// the HUD, as the plan wants.
+pub fn layers(w: &World, fading: bool, out: [i32; 2], reserved: &[nkw_core::Rect]) -> Vec<Layer> {
     let mut l = vec![Layer::Hud];
+    l.extend(dock_layers(w, out, reserved));
     if fading {
         l.push(Layer::Fade);
     }
@@ -296,20 +354,25 @@ pub(crate) mod tests {
         assert_eq!(lod(&w, ScreenId(2)), Lod::Far);
     }
 
+    const OUT: [i32; 2] = [1280, 720];
+
     #[test]
     fn layer_order() {
         let mut w = world(&[&[1]]);
-        assert_eq!(layers(&w, false), [Layer::Hud, Layer::World]);
-        assert_eq!(layers(&w, true), [Layer::Hud, Layer::Fade, Layer::World]);
+        assert_eq!(layers(&w, false, OUT, &[]), [Layer::Hud, Layer::World]);
+        assert_eq!(
+            layers(&w, true, OUT, &[]),
+            [Layer::Hud, Layer::Fade, Layer::World]
+        );
         w.command(Cmd::Focus, 0.0);
         assert_eq!(
-            layers(&w, false),
+            layers(&w, false, OUT, &[]),
             [Layer::Hud, Layer::World],
             "gliding: still a quad"
         );
         w.tick(1e9);
         assert_eq!(
-            layers(&w, false),
+            layers(&w, false, OUT, &[]),
             [
                 Layer::Hud,
                 Layer::Focus(ScreenId(1)),
@@ -327,7 +390,7 @@ pub(crate) mod tests {
         w.tick(1e9);
         assert!(w.covers_output(Target::Screen(ScreenId(1))));
         assert_eq!(
-            layers(&w, false),
+            layers(&w, false, OUT, &[]),
             [Layer::Hud, Layer::Focus(ScreenId(1)), Layer::World]
         );
     }
@@ -339,7 +402,7 @@ pub(crate) mod tests {
         w.action(nkw_core::Action::Focus(Target::CatTerm(CatId(5))), 0.0);
         w.tick(1e9);
         assert_eq!(
-            layers(&w, false),
+            layers(&w, false, OUT, &[]),
             [
                 Layer::Hud,
                 Layer::FocusCat(CatId(5)),
@@ -347,6 +410,35 @@ pub(crate) mod tests {
                 Layer::World
             ]
         );
+    }
+
+    #[test]
+    fn a_docked_screen_is_live_and_composed_off_the_hud() {
+        let mut w = world(&[&[1]]);
+        assert_eq!(w.selected(), Some(ScreenId(1)), "docks the selected screen");
+        w.command(Cmd::Dock, 0.0);
+        w.screens.get_mut(&ScreenId(1)).unwrap().size = glam::Vec2::new(640.0, 480.0);
+        assert_eq!(
+            lod(&w, ScreenId(1)),
+            Lod::Docked,
+            "alive, not in the world pass"
+        );
+        let hud = nkw_core::Rect::new(0, 0, 300, 50);
+        let l = layers(&w, false, OUT, &[hud]);
+        let Layer::Dock { id, rect, scale } = l[1] else {
+            panic!("docked right after the HUD: {l:?}");
+        };
+        assert_eq!(id, ScreenId(1));
+        // DOCK_SCALE (0.33) of 640×480, moved clear of the HUD rect
+        assert!(!rect.intersects(&hud), "{rect:?}");
+        assert!((scale - nkw_core::dock::DOCK_SCALE).abs() < 1e-3, "{scale}");
+        assert_eq!(l[2], Layer::World);
+    }
+
+    #[test]
+    fn no_docks_means_no_dock_layer() {
+        let w = world(&[&[1]]);
+        assert_eq!(layers(&w, false, OUT, &[]), [Layer::Hud, Layer::World]);
     }
 
     fn list_with_screen() -> nkw_gl::draw::DrawList {

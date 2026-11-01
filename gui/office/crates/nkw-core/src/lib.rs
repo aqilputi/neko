@@ -14,7 +14,7 @@
 //! - [`schedule`]: the frame scheduler (§5.6)
 //! - [`hints`]: SALTO labels (§3.8)
 //! - wave 5 (fase A, telas no espaço): [`arrange`], [`magnet`], [`history`],
-//!   [`dock`], [`layouts`], [`pointer`]
+//!   [`dock`], [`layouts`], [`pointer`], [`spawn`] (where `N`/`ctrl+n` lands)
 //! - wave 2b stubs: [`persist`], [`rules`] (P2); [`palette`], [`line`],
 //!   [`dialog`] (P3)
 
@@ -40,6 +40,7 @@ pub mod pointer;
 pub mod pose;
 pub mod rules;
 pub mod schedule;
+pub mod spawn;
 pub mod strip;
 pub mod tween;
 pub mod walk_exit;

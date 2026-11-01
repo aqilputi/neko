@@ -230,6 +230,10 @@ var s9 = []struct {
 	{"world.menu", "world.menu_down", []string{"j", "down"}},
 	{"world.menu", "world.menu_open", []string{"enter", "space"}},
 	{"world.menu", "world.menu_close", []string{"esc"}},
+	// niri parity (router/table.rs's Rust fallback had these first)
+	{"world", "world.move_first", []string{"world+ctrl+home"}},
+	{"world", "world.move_last", []string{"world+ctrl+end"}},
+	{"normal.world", "world.screenshot", []string{"Print"}},
 }
 
 // s26Titles are S26's titles (the ones the contract names).
@@ -444,7 +448,7 @@ func TestWorldKeymapRules(t *testing.T) {
 			}
 		}
 	}
-	if len(chords) != 17 {
+	if len(chords) != 19 {
 		t.Errorf("%d chords: %v", len(chords), chords)
 	}
 	// world.quit asks first; the arguments the palette asks for

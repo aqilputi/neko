@@ -8,16 +8,21 @@
 //! the air) stay in their desk's `screens`, *after* the stack ("loose"), so
 //! the scene draws every screen of a desk through `World::screen_place`.
 
+use std::path::{Path, PathBuf};
+
 use glam::{Vec2, Vec3};
-use nkw_core::arrange::{self, AirPose};
+use nkw_core::arrange::{self, AirPose, Grab, Grip};
 use nkw_core::carry;
+use nkw_core::collide;
 use nkw_core::dock::{self, DockSlot};
 use nkw_core::history;
 use nkw_core::layout::{self, FOV_Y};
+use nkw_core::layouts;
 use nkw_core::magnet::{self, Strength};
 use nkw_core::persist::{
     DeskAt, DeskRec, Place, RoomKind, RoomRec, ScreenRec, StationRec, VERSION, WorldFile,
 };
+use nkw_core::pointer;
 use nkw_core::strip::{self, Desk, Dir, Station, Width};
 use nkw_core::{
     Action, ClusterId, FrameId, Kind, Pose, RoomId, ScreenId, ScreenPlace, Target, Time, Want,
@@ -28,6 +33,43 @@ use super::{
     ArrangeSnap, ArrangeTarget, Arranging, Cluster, Cmd, FramePose, FrameRec, MY_ROOM, Out,
     RECEPTION, World,
 };
+
+/// `d_px.x` → `yaw` radians while `alt`+dragging moves a screen by mouse
+/// (plan §2.3): a middling, not-configurable-yet sensitivity (no `[mouse]`
+/// key exists for it, unlike `drag_threshold_px`).
+const ROTATE_RAD_PER_PX: f32 = 0.01;
+
+/// A live mouse drag (Move/Resize/Lasso), the mouse-only counterpart of
+/// ARRUMAR's keyboard nudges (plan §2.3/D15): it rides on `World::arrange`
+/// (started by `World::arrange_start_at`, below) for the undo snapshot and
+/// the origin slot, so `DragCancel`/`DragEnd` just call the already-existing
+/// `arrange_revert`/`arrange_commit`; only the extra geometry a mouse drag
+/// needs — the grab offset/depth (`nkw_core::arrange::Grab`), the resize
+/// anchor — lives here.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum PointerDrag {
+    Move {
+        grab: Grab,
+        /// the pointer's last position (for `alt`-drag's incremental `yaw`)
+        last_at: Vec2,
+    },
+    Resize {
+        grip: Grip,
+        start_logical: Vec2,
+        start_at: Vec2,
+    },
+    Lasso {
+        start_at: Vec2,
+    },
+}
+
+/// A `ScreenId` out of a pointer `Hit`, when there is one.
+fn screen_of_hit(hit: pointer::Hit) -> Option<ScreenId> {
+    match hit {
+        pointer::Hit::Screen(id) | pointer::Hit::Dock { screen: id, .. } => Some(id),
+        _ => None,
+    }
+}
 
 /// How far a dialog floats in front of its mother (metres).
 pub const DIALOG_FRONT: f32 = 0.05;
@@ -144,9 +186,9 @@ pub struct ScreenState {
     /// visual scale in the air, plan §2.1 (`0.0` is the sentinel for "unset,
     /// 1×": `ScreenState::default()` must stay `Default`-derivable)
     pub scale: f32,
-    /// ancorada na vista (plan §2.7); `None` = not docked. Bookkeeping only:
-    /// the 2D compositing and `dock::layout` are not wired to the renderer
-    /// yet, so this does not change what is drawn.
+    /// ancorada na vista (plan §2.7); `None` = not docked. `render::layers`
+    /// feeds this slot through `dock::layout` into a `Layer::Dock`, and
+    /// `scene::draw_list_into` skips the screen's 3D quad while it is set.
     pub dock: Option<nkw_core::dock::DockSlot>,
 }
 
@@ -785,6 +827,7 @@ impl World {
                 out
             }
             Cmd::Frame { at } => self.make_frame(at, now),
+            Cmd::TerminalAir => self.terminal_air(now),
             Cmd::Arrange => self.action(Action::Arrange, now),
             Cmd::ArrangeDone => self.action(Action::ArrangeDone, now),
             Cmd::ArrangeCancel => self.action(Action::Back, now),
@@ -897,26 +940,10 @@ impl World {
             Cmd::MakeCluster(name) => self.make_cluster(name, now),
             Cmd::Uncluster => self.uncluster(now),
             Cmd::Dock => self.op_dock(now),
-            Cmd::LayoutSave(_)
-            | Cmd::LayoutLoad(_)
-            | Cmd::LayoutDelete(_)
-            | Cmd::LayoutRename { .. } => {
-                // arrangement files (plan §2.6) live under
-                // ~/.local/state/nekuroddo/layouts/*.json: real filesystem
-                // I/O that `World` (pure, no FS) cannot do, and that the
-                // `wm` plugin crate would own — outside this task's file
-                // scope. `s` in ARRUMAR reaches this directly, so this is a
-                // visible, honest "not yet" (a toast) rather than a
-                // `todo!()`: panicking the whole compositor on a single
-                // common keystroke would be worse than the silent no-op this
-                // task is otherwise meant to stamp out. See the final report.
-                self.note = Some((
-                    now,
-                    "arranjos: ainda sem armazenamento (onda futura)".into(),
-                ));
-                self.pending.push(Wish::compose(Want::Once));
-                Vec::new()
-            }
+            Cmd::LayoutSave(name) => self.layout_save(name, now),
+            Cmd::LayoutLoad(name) => self.layout_load(name, now),
+            Cmd::LayoutDelete(name) => self.layout_delete(name, now),
+            Cmd::LayoutRename { name, to } => self.layout_rename(name, to, now),
             Cmd::Undo => self.history_undo(now),
             Cmd::Redo => self.history_redo(now),
             Cmd::MoveFirst => self.op_move_edge(true, now),
@@ -1611,15 +1638,39 @@ impl World {
     // wave 5: screens in space (plan docs/plano-mundo-wm.md §2)
 
     /// `N` / `ctrl+n`: an armed, empty frame where the camera points (plan
-    /// §2.2). Simplification: the plan's order is wall, desk, then 1.2 m in
-    /// the air, found by a ray from the mira; without that ray-cast wired in
-    /// here, this always uses the "1.2 m ahead of the camera" fallback. The
-    /// frame itself is real (selectable, removable with `Q`, persists in
-    /// `self.frames`); a spawned window landing in it automatically is the
-    /// placement pipeline's job (the `wm` plugin crate), not wired here.
+    /// §2.2): a ray from the mira finds the current room's wall first, then
+    /// a desk's top, else 1.2 m ahead of the camera, in that order
+    /// (`nkw_core::spawn::frame_point`). The frame itself is real
+    /// (selectable, removable with `Q`, persists in `self.frames`); a
+    /// spawned window landing in it automatically is the placement
+    /// pipeline's job (the `wm` plugin crate), not wired here.
     fn make_frame(&mut self, at: Option<FramePose>, now: Time) -> Vec<Out> {
         let pose = at.unwrap_or_else(|| {
-            let p = carry::hand_pose(&self.camera, carry::HAND_DEFAULT);
+            let room = self.current_room();
+            let room_yaw = layout::room_frame(&self.slots()[room]).yaw;
+            let walls: Vec<nkw_core::spawn::WallQuad> = self
+                .room_walls(room)
+                .into_iter()
+                .map(|w| nkw_core::spawn::WallQuad {
+                    a: w.a,
+                    b: w.b,
+                    normal: w.normal,
+                    height: nkw_gl::shell::WALL_H,
+                })
+                .collect();
+            // no window yet, so no real footprint: the plan's generic desk
+            // size (elbow room for a 0-wide screen)
+            let footprint = Vec2::new(layout::desk_width(0.0), layout::DESK_DEPTH);
+            let desks: Vec<nkw_core::spawn::DeskQuad> = self
+                .room_desk_slots(room)
+                .into_iter()
+                .map(|d| nkw_core::spawn::DeskQuad {
+                    center: d.pos,
+                    yaw: room_yaw,
+                    size: footprint,
+                })
+                .collect();
+            let p = nkw_core::spawn::frame_point(&self.camera, &walls, &desks);
             FramePose::from_pose(p.pos, p.yaw)
         });
         let id = FrameId(self.next_frame);
@@ -1756,20 +1807,22 @@ impl World {
         out
     }
 
-    /// `esc` / `Effect::ArrangeRevert`: undo back to the mark. Today
-    /// `History::undo_to` always returns empty (a stub), so the screen's own
-    /// state as captured at `arrange_start` (`origin_state`/`origin_slot`)
-    /// is what actually restores it — already correct, and it keeps working
-    /// once `undo_to` is implemented for real (its result just wins first).
+    /// `esc` / `Effect::ArrangeRevert`: undo back to the mark. This always
+    /// restores `a.origin_state` (captured at `arrange_start`, before
+    /// `pin_loose` touched the screen) rather than an undone entry's
+    /// `before`: `arrange_touch`'s first call snapshots the *already
+    /// pinned-loose* state as its `before` (that pin happens so the working
+    /// pose is live from the first key/drag event), so that snapshot is not
+    /// the true pre-arrange state for a screen that started on a desk. We
+    /// still call `undo_to` for its side effect — dropping this session's
+    /// entries so a later `Cmd::Undo` does not replay these already-reverted
+    /// micro-steps — we just do not use what it returns.
     pub(super) fn arrange_revert(&mut self, now: Time) -> Vec<Out> {
         let Some(a) = self.arrange.take() else {
             return Vec::new();
         };
-        let entries = self.history.undo_to(a.mark);
-        let state = entries
-            .last()
-            .and_then(|e| e.before.get(&a.screen).copied())
-            .unwrap_or(a.origin_state);
+        self.history.undo_to(a.mark);
+        let state = a.origin_state;
         let mut out = Vec::new();
         if let Some((room, d, slot)) = a.origin_slot
             && let Some(r) = self.room_index(room)
@@ -2041,10 +2094,9 @@ impl World {
         Vec::new()
     }
 
-    /// `P` (NAV) / `p` (ARRUMAR): toggles docking (plan §2.7). Bookkeeping
-    /// only — `dock::layout` and the 2D compositing of a docked screen are
-    /// not wired to the renderer yet (another wave), so this only records
-    /// the intent and frees/claims a slot.
+    /// `P` (NAV) / `p` (ARRUMAR): toggles docking (plan §2.7). This only
+    /// records the intent and frees/claims a slot; `render::layers` is what
+    /// turns `dock` into an actual `Layer::Dock` composed over the view.
     fn op_dock(&mut self, now: Time) -> Vec<Out> {
         let Some(screen) = self
             .arrange
@@ -2111,8 +2163,9 @@ impl World {
     }
 
     /// niri's `move-column-to-first/last`: the whole desk at the station
-    /// moves to the front/back of its room's queue (not a `world.*` name
-    /// Go registers yet; see the Rust fallback keymap, `router/table.rs`).
+    /// moves to the front/back of its room's queue (`world.move_first` /
+    /// `world.move_last`: `internal/app/world.go` and the Rust fallback
+    /// keymap, `router/table.rs`, agree on `world+ctrl+home`/`world+ctrl+end`).
     fn op_move_edge(&mut self, first: bool, now: Time) -> Vec<Out> {
         let Some((r, d)) = self.station_desk() else {
             return Vec::new();
@@ -2132,6 +2185,776 @@ impl World {
         self.changed(now, None);
         Vec::new()
     }
+
+    // ---------------------------------------------------------------
+    // wave 5: arrangements on disk (plan §2.6/§2.9, S32) and the aimed
+    // terminal (plan §2.2/§2.12)
+
+    /// `world.terminal_air`: a frame where the camera points (`make_frame`,
+    /// untouched — another part of this wave owns its body), then a real
+    /// terminal spawned into the world (`Out::Spawn`, the same primitive
+    /// every `World`-originated spawn already uses; `Nkw::spawn` gives it
+    /// the world's `WAYLAND_DISPLAY` and a fresh activation token). Two
+    /// honest, documented gaps, not silent ones: (1) the spawned window is
+    /// not wired to land inside this exact frame — `make_frame`'s own doc
+    /// already says that placement is the `wm` plugin's job, not here; (2)
+    /// unlike `world.terminal` this does not read `[launch] terminal`
+    /// (`Config` lives on the `wm` plugin's `Wm`, out of `World`'s pure
+    /// reach) — it always runs `nkw_core::rules::DEFAULT_TERMINAL` ("foot").
+    fn terminal_air(&mut self, now: Time) -> Vec<Out> {
+        let mut out = self.make_frame(None, now);
+        out.push(Out::Spawn(vec![
+            nkw_core::rules::DEFAULT_TERMINAL.to_string(),
+        ]));
+        out
+    }
+
+    /// `<state-dir>/layouts/<room-slug>/`, or `None` with no `--state-dir`
+    /// (`--demo`, or a test that never sets `self.state_dir`).
+    fn layouts_dir(&self) -> Option<PathBuf> {
+        let base = self.state_dir.as_ref()?;
+        let room = self.rooms[self.current_room()].name.clone();
+        Some(base.join("layouts").join(layout_room_slug(&room)))
+    }
+
+    /// The open screens of `room` an arrangement can name: top-level
+    /// windows only (same filter `snapshot` uses: a dialog is its mother's,
+    /// never an entry of its own; an empty `app_id` has not announced
+    /// itself yet).
+    fn room_open(&self, room: usize) -> Vec<layouts::Open> {
+        self.rooms[room]
+            .desks
+            .iter()
+            .flat_map(|d| d.screens.iter())
+            .filter_map(|id| {
+                let sc = self.screens.get(id)?;
+                if sc.app_id.is_empty() || self.screen_state(*id).parent.is_some() {
+                    return None;
+                }
+                Some(layouts::Open {
+                    id: *id,
+                    app_id: sc.app_id.clone(),
+                    title: sc.title.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Where `id` sits today, as a [`layouts::LayoutAt`]: docked wins (it is
+    /// bookkeeping over whatever is under it); then air/wall (full fidelity:
+    /// pitch and the visual scale too, which `place_of`'s own `Air` leaves
+    /// at the defaults since `world.json` does not round-trip them yet);
+    /// else its desk, slot and width. A screen with none of these (should
+    /// not happen: every open screen is somewhere) saves nothing for it.
+    fn layout_at_for(&self, id: ScreenId) -> Option<layouts::LayoutAt> {
+        let st = self.screen_state(id);
+        if let Some(slot) = st.dock {
+            let scale_pct = pct(st.air_scale());
+            return Some(layouts::LayoutAt::Dock { slot, scale_pct });
+        }
+        if let Some(place) = st.air {
+            let mut air = nkw_core::persist::Air::new(place.center.to_array(), place.yaw, st.wall);
+            air.pitch_mdeg = (place.pitch.to_degrees() * 1000.0).round() as i32;
+            air.scale_pct = pct(st.air_scale());
+            return Some(if st.wall {
+                layouts::LayoutAt::Wall(air)
+            } else {
+                layouts::LayoutAt::Air(air)
+            });
+        }
+        let (r, d, slot) = self.locate(id)?;
+        Some(layouts::LayoutAt::Desk {
+            desk: d,
+            slot,
+            width: self.rooms[r].desks[d].width,
+        })
+    }
+
+    /// The current room's open screens as [`layouts::LayoutEntry`]s: a
+    /// title is only carried when the room has more than one open window of
+    /// that `app_id` (else a plain, title-less entry is more flexible to
+    /// reload with — `layouts::match_open`'s own doc).
+    fn layout_entries(&self, open: &[layouts::Open]) -> Vec<layouts::LayoutEntry> {
+        let mut counts: std::collections::BTreeMap<&str, u32> = std::collections::BTreeMap::new();
+        for o in open {
+            *counts.entry(o.app_id.as_str()).or_default() += 1;
+        }
+        open.iter()
+            .filter_map(|o| {
+                let at = self.layout_at_for(o.id)?;
+                let title = (counts[o.app_id.as_str()] > 1).then(|| o.title.clone());
+                Some(layouts::LayoutEntry {
+                    app_id: o.app_id.clone(),
+                    title,
+                    at,
+                })
+            })
+            .collect()
+    }
+
+    /// Moves `id` to `at` (a loaded arrangement's entry, matched to it by
+    /// `layouts::match_open`). `Cluster`'s group itself is not reconstructed
+    /// (that is ARRUMAR's own, cross-screen geometry, elsewhere in this
+    /// file): the screen just goes back to its saved pose, same as `Air`.
+    fn apply_layout_at(&mut self, id: ScreenId, at: &layouts::LayoutAt, now: Time) -> Vec<Out> {
+        match at {
+            layouts::LayoutAt::Dock { slot, scale_pct } => {
+                let st = self.wm.entry(id).or_default();
+                st.dock = Some(*slot);
+                st.scale = *scale_pct as f32 / 100.0;
+                self.changed(now, None);
+                Vec::new()
+            }
+            layouts::LayoutAt::Air(air) => self.apply_air(id, air, false),
+            layouts::LayoutAt::Wall(air) => self.apply_air(id, air, true),
+            layouts::LayoutAt::Cluster { air, .. } => self.apply_air(id, air, air.wall),
+            layouts::LayoutAt::Desk { desk, slot, width } => {
+                let Some((r, _, _)) = self.locate(id) else {
+                    return Vec::new();
+                };
+                if self.rooms[r].desks.is_empty() {
+                    return Vec::new();
+                }
+                let d = (*desk).min(self.rooms[r].desks.len() - 1);
+                self.unpin_at(r, d, id, *slot);
+                self.rooms[r].desks[d].width = *width;
+                self.configure_desk(r, d)
+            }
+        }
+    }
+
+    fn apply_air(&mut self, id: ScreenId, air: &nkw_core::persist::Air, wall: bool) -> Vec<Out> {
+        let Some((r, d, _)) = self.locate(id) else {
+            return Vec::new();
+        };
+        let place = ScreenPlace {
+            center: Vec3::from(air.pos()),
+            yaw: air.yaw(),
+            pitch: air.pitch(),
+        };
+        self.pin_loose(r, d, id, place);
+        let out = self.configure_desk(r, d);
+        let st = self.wm.entry(id).or_default();
+        st.wall = wall;
+        st.scale = air.scale();
+        out
+    }
+
+    /// A short pt-BR note (the layout badge doubles as this file's only
+    /// error channel: `World` is pure, with no `Req::Toast` of its own —
+    /// `apps.rs`'s `toast()` is the `wm` plugin's equivalent).
+    fn layout_toast(&mut self, now: Time, msg: String) -> Vec<Out> {
+        self.note = Some((now, msg));
+        self.pending.push(Wish::compose(Want::Once));
+        Vec::new()
+    }
+
+    /// `s` in ARRUMAR / the palette's Arranjos: the current room's open
+    /// screens, saved as `<state-dir>/layouts/<room>/<name>.json`.
+    fn layout_save(&mut self, name: ShortName, now: Time) -> Vec<Out> {
+        let valid = match layouts::valid_name(name.as_str()) {
+            Ok(v) => v,
+            Err(e) => return self.layout_toast(now, e),
+        };
+        let Some(dir) = self.layouts_dir() else {
+            return self.layout_toast(now, "sem diretório de estado: arranjo não foi salvo".into());
+        };
+        let room = self.current_room();
+        let room_name = self.rooms[room].name.clone();
+        let open = self.room_open(room);
+        let file = layouts::LayoutFile {
+            version: layouts::LAYOUT_VERSION,
+            name: valid.clone(),
+            room: room_name,
+            entries: self.layout_entries(&open),
+        };
+        match save_layout_file(&dir, &valid, &layouts::to_string(&file)) {
+            Ok(()) => self.layout_toast(now, format!("arranjo salvo: {valid}")),
+            Err(e) => self.layout_toast(
+                now,
+                format!("arranjo \"{valid}\": não deu para salvar ({e})"),
+            ),
+        }
+    }
+
+    /// `world.layout_load` / the palette's Arranjos: matches the file's
+    /// entries against the current room's open screens (`match_open`) and
+    /// moves what matched; what did not is reported, not forced into
+    /// existence (the plan's "só arruma o que está aberto").
+    fn layout_load(&mut self, name: ShortName, now: Time) -> Vec<Out> {
+        let valid = match layouts::valid_name(name.as_str()) {
+            Ok(v) => v,
+            Err(e) => return self.layout_toast(now, e),
+        };
+        let Some(dir) = self.layouts_dir() else {
+            return self.layout_toast(now, "sem diretório de estado: nada para carregar".into());
+        };
+        let text = match std::fs::read_to_string(dir.join(format!("{valid}.json"))) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return self.layout_toast(now, format!("arranjo \"{valid}\" não existe"));
+            }
+            Err(e) => return self.layout_toast(now, format!("arranjo \"{valid}\": {e}")),
+        };
+        let file = match layouts::parse(&text) {
+            Ok(f) => f,
+            Err(e) => return self.layout_toast(now, format!("arranjo \"{valid}\": {e}")),
+        };
+        let room = self.current_room();
+        let open = self.room_open(room);
+        let matched = layouts::match_open(&file, &open);
+        let mut out = Vec::new();
+        for (id, at) in &matched.moves {
+            out.extend(self.apply_layout_at(*id, at, now));
+        }
+        let note = if matched.missing.is_empty() {
+            format!("arranjo: {valid}")
+        } else {
+            format!(
+                "arranjo: {valid} ({} de fora: {})",
+                matched.missing.len(),
+                matched.missing.join(", ")
+            )
+        };
+        self.changed(now, Some(note));
+        out
+    }
+
+    /// `world.layout_delete` / the palette's Arranjos.
+    fn layout_delete(&mut self, name: ShortName, now: Time) -> Vec<Out> {
+        let valid = match layouts::valid_name(name.as_str()) {
+            Ok(v) => v,
+            Err(e) => return self.layout_toast(now, e),
+        };
+        let Some(dir) = self.layouts_dir() else {
+            return self.layout_toast(now, "sem diretório de estado: nada para apagar".into());
+        };
+        match std::fs::remove_file(dir.join(format!("{valid}.json"))) {
+            Ok(()) => self.layout_toast(now, format!("arranjo apagado: {valid}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.layout_toast(now, format!("arranjo \"{valid}\" não existe"))
+            }
+            Err(e) => self.layout_toast(now, format!("arranjo \"{valid}\": {e}")),
+        }
+    }
+
+    /// `world.layout_rename` / the palette's Arranjos: both names are
+    /// validated; an existing `to` is never overwritten silently.
+    fn layout_rename(&mut self, name: ShortName, to: ShortName, now: Time) -> Vec<Out> {
+        let from = match layouts::valid_name(name.as_str()) {
+            Ok(v) => v,
+            Err(e) => return self.layout_toast(now, e),
+        };
+        let to = match layouts::valid_name(to.as_str()) {
+            Ok(v) => v,
+            Err(e) => return self.layout_toast(now, e),
+        };
+        let Some(dir) = self.layouts_dir() else {
+            return self.layout_toast(now, "sem diretório de estado: nada para renomear".into());
+        };
+        if from == to {
+            return self.layout_toast(now, format!("arranjo \"{from}\": mesmo nome"));
+        }
+        let to_path = dir.join(format!("{to}.json"));
+        if to_path.exists() {
+            return self.layout_toast(now, format!("já existe um arranjo \"{to}\""));
+        }
+        match std::fs::rename(dir.join(format!("{from}.json")), &to_path) {
+            Ok(()) => self.layout_toast(now, format!("arranjo renomeado: {from} → {to}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                self.layout_toast(now, format!("arranjo \"{from}\" não existe"))
+            }
+            Err(e) => self.layout_toast(now, format!("arranjo \"{from}\": {e}")),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // wave 5: the pointer, for real mouse events (plan §2.3/§2.4, D15)
+
+    /// The `PtrMode` of `nkw_core::pointer` that matches the world's own
+    /// mode right now: FOCO, ARRUMAR and CONVERSA/SALTO/COMANDOS (`Ui`) come
+    /// straight from the mode machine; plain ANDAR splits into `WalkAim`
+    /// (mouse-look, the pointer locked to the crosshair) and `WalkFree`
+    /// (`[walk] mouse_look = false`) by `walk_config`; anything else is NAV.
+    pub fn pointer_mode(&self) -> pointer::PtrMode {
+        if self.mode().focus().is_some() {
+            return pointer::PtrMode::Focus;
+        }
+        if self.mode().arranging() {
+            return pointer::PtrMode::Arrange;
+        }
+        if matches!(
+            self.mode().kind(),
+            Some(Kind::Talk { .. } | Kind::Hint { .. } | Kind::Palette)
+        ) {
+            return pointer::PtrMode::Ui;
+        }
+        if self.mode().walking() {
+            return if self.walk_config().mouse_look {
+                pointer::PtrMode::WalkAim
+            } else {
+                pointer::PtrMode::WalkFree
+            };
+        }
+        pointer::PtrMode::Nav
+    }
+
+    /// Whether a mouse drag (Move/Resize/Lasso) is live right now (`nkw`'s
+    /// `input.rs` uses this to let a wheel step depth/scale instead of
+    /// paging rooms, and to let `esc` cancel the drag instead of whatever it
+    /// would otherwise do).
+    pub fn pointer_dragging(&self) -> bool {
+        matches!(self.pointer.state(), pointer::State::Drag { .. })
+    }
+
+    fn pointer_view(&self) -> arrange::View {
+        arrange::View {
+            cam: self.camera,
+            fov_y: FOV_Y,
+            size_px: Vec2::new(self.out.width_px as f32, self.out.height_px as f32),
+        }
+    }
+
+    /// The plan's "pick 3D" (D15 #6): a resize handle (NAV/ARRUMAR/ANDAR
+    /// livre only — "alça é alça"), else the nearest screen the ray through
+    /// `at` (physical px) crosses, else empty. Frames, pickables, cats,
+    /// doors and books are not ray-cast here yet (the final report says so);
+    /// FOCO/CONVERSA/SALTO/COMANDOS do not call this at all — `nkw`'s
+    /// `input.rs` resolves `Hit::Client`/`Outside`/`Ui` itself, since only it
+    /// knows about Wayland surfaces and the 2D overlay.
+    pub fn pointer_hit(&self, at: Vec2) -> pointer::Hit {
+        let view = self.pointer_view();
+        let room = self.current_room();
+        let mut screens: Vec<(ScreenId, AirPose, Vec2)> = Vec::new();
+        for d in 0..self.rooms[room].desks.len() {
+            for k in 0..self.rooms[room].desks[d].screens.len() {
+                let id = self.rooms[room].desks[d].screens[k];
+                let place = self.screen_place(room, d, k);
+                let logical = self.screen_logical(room, d, k);
+                let pose = AirPose {
+                    pos: place.center,
+                    yaw: place.yaw,
+                    pitch: place.pitch,
+                    scale: self.screen_state(id).air_scale(),
+                };
+                screens.push((id, pose, logical));
+            }
+        }
+        if matches!(
+            self.pointer_mode(),
+            pointer::PtrMode::Nav | pointer::PtrMode::Arrange | pointer::PtrMode::WalkFree
+        ) {
+            let mut best: Option<(f32, pointer::Hit)> = None;
+            for (id, pose, logical) in &screens {
+                if let Some(grip) = arrange::grip_at(&view, pose, *logical, at, self.out.scale) {
+                    let dist = (pose.pos - view.cam.pos).length();
+                    if best.is_none_or(|(d, _)| dist < d) {
+                        best = Some((dist, pointer::Hit::Handle { screen: *id, grip }));
+                    }
+                }
+            }
+            if let Some((_, hit)) = best {
+                return hit;
+            }
+        }
+        let (origin, dir) = view.ray(at);
+        let mut nearest: Option<(f32, ScreenId)> = None;
+        for (id, pose, logical) in &screens {
+            let model = pose.model(*logical);
+            if let Some(t) = collide::ray_hit_quad(origin, dir, model)
+                && nearest.is_none_or(|(bt, _)| t < bt)
+            {
+                nearest = Some((t, *id));
+            }
+        }
+        match nearest {
+            Some((_, id)) => pointer::Hit::Screen(id),
+            None => pointer::Hit::Empty,
+        }
+    }
+
+    /// Feed one event to the pointer machine (`nkw_core::pointer::Machine`):
+    /// a thin wrapper that supplies the mode. `nkw`'s `input.rs` is the only
+    /// caller; it then passes the `PtrOut`s to `pointer_apply` (and, for
+    /// `PassPress`/`PassRelease`, forwards the button to the seat itself —
+    /// `World` knows nothing of Wayland clients).
+    pub fn pointer_step(
+        &mut self,
+        ev: pointer::PtrEv,
+        cfg: &pointer::Config,
+        now: Time,
+    ) -> Vec<pointer::PtrOut> {
+        let mode = self.pointer_mode();
+        self.pointer.step(ev, mode, cfg, now)
+    }
+
+    /// Turn what the pointer machine returned into world changes: every
+    /// `PtrOut` that is not `nkw`'s own business (`Hover`/`Cursor` are
+    /// cosmetic cursor-shape hints, not wired to a real cursor theme yet;
+    /// `PassPress`/`PassRelease` are `input.rs`'s to forward).
+    pub fn pointer_apply(&mut self, outs: &[pointer::PtrOut], now: Time) -> Vec<Out> {
+        let mut out = Vec::new();
+        for o in outs {
+            match *o {
+                pointer::PtrOut::Hover(_)
+                | pointer::PtrOut::Cursor(_)
+                | pointer::PtrOut::PassPress(_)
+                | pointer::PtrOut::PassRelease(_) => {}
+                pointer::PtrOut::Click {
+                    button,
+                    hit,
+                    double,
+                    ..
+                } => out.extend(self.pointer_click(hit, button, double, now)),
+                pointer::PtrOut::DragStart { gesture, hit, at } => {
+                    out.extend(self.pointer_drag_start(gesture, hit, at, now));
+                }
+                pointer::PtrOut::DragMove { at, eff } => {
+                    out.extend(self.pointer_drag_move(at, eff, now));
+                }
+                pointer::PtrOut::DragWheel { steps, scale } => {
+                    out.extend(self.pointer_drag_wheel(steps, scale, now));
+                }
+                pointer::PtrOut::DragEnd { at, eff } => {
+                    out.extend(self.pointer_drag_end(at, eff, now));
+                }
+                pointer::PtrOut::DragCancel => {
+                    self.pointer_drag = None;
+                    out.extend(self.arrange_revert(now));
+                }
+                pointer::PtrOut::Scale { hit, steps } => {
+                    out.extend(self.pointer_scale(hit, steps, now))
+                }
+            }
+        }
+        out
+    }
+
+    /// A single click (not a drag): on a screen (or an anchored one), select
+    /// it (`world.goto_screen`, like a SALTO pick); a double click also
+    /// opens FOCO (plan §2.3, "clique simples continua selecionando... duplo
+    /// clique = FOCO"). Lasso/handles/objects are not clickable targets.
+    fn pointer_click(
+        &mut self,
+        hit: pointer::Hit,
+        button: pointer::Button,
+        double: bool,
+        now: Time,
+    ) -> Vec<Out> {
+        if button != pointer::Button::Left {
+            return Vec::new();
+        }
+        let Some(id) = screen_of_hit(hit) else {
+            return Vec::new();
+        };
+        let mut out = self.command(Cmd::GotoScreen(id), now);
+        if double {
+            out.extend(self.command(Cmd::Focus, now));
+        }
+        out
+    }
+
+    /// Start (or switch) ARRUMAR's live state on `screen` without moving the
+    /// station's own camera glide (plan §2.1: "a câmera nunca se move por
+    /// causa de um arrasto") — it only points the station there directly, as
+    /// `arrange_start` itself already does when it pins a screen into the
+    /// air. A screen already being arranged (by keyboard or an earlier
+    /// mouse-down) is left alone; a *different* one being arranged is
+    /// committed first, exactly like `tab`'s `arrange_step`.
+    fn arrange_start_at(&mut self, screen: ScreenId, now: Time) -> Vec<Out> {
+        let mut out = Vec::new();
+        if let Some(a) = self.arrange.as_ref() {
+            if a.screen == screen {
+                return out;
+            }
+            out.extend(self.arrange_commit(now));
+        }
+        if let Some(st) = self.station_of(screen) {
+            self.station = st;
+        }
+        out.extend(self.arrange_start(now));
+        out
+    }
+
+    fn pointer_move_start(&mut self, screen: ScreenId, at: Vec2, now: Time) -> Vec<Out> {
+        let out = self.arrange_start_at(screen, now);
+        if let Some(a) = self.arrange.as_ref() {
+            let view = self.pointer_view();
+            // billboard while dragging (plan §2.3: facing the eye until
+            // `alt` rotates it, then it keeps whatever it had on drop)
+            let grab = arrange::grab(&view, &a.pose, at, true);
+            self.pointer_drag = Some(PointerDrag::Move { grab, last_at: at });
+        }
+        out
+    }
+
+    fn pointer_resize_start(
+        &mut self,
+        screen: ScreenId,
+        grip: Grip,
+        at: Vec2,
+        now: Time,
+    ) -> Vec<Out> {
+        let out = self.arrange_start_at(screen, now);
+        if self.arrange.is_some() {
+            let logical = self.loose_logical(screen).unwrap_or_else(|| self.usable());
+            self.pointer_drag = Some(PointerDrag::Resize {
+                grip,
+                start_logical: logical,
+                start_at: at,
+            });
+        }
+        out
+    }
+
+    fn pointer_drag_start(
+        &mut self,
+        gesture: pointer::Gesture,
+        hit: pointer::Hit,
+        at: Vec2,
+        now: Time,
+    ) -> Vec<Out> {
+        match gesture {
+            pointer::Gesture::Move => match screen_of_hit(hit) {
+                Some(screen) => self.pointer_move_start(screen, at, now),
+                None => Vec::new(),
+            },
+            pointer::Gesture::Resize(grip) => match hit {
+                pointer::Hit::Handle { screen, .. } => {
+                    self.pointer_resize_start(screen, grip, at, now)
+                }
+                _ => Vec::new(),
+            },
+            pointer::Gesture::ResizeNearest => match screen_of_hit(hit) {
+                Some(screen) => {
+                    let out = self.arrange_start_at(screen, now);
+                    if let Some(a) = self.arrange.as_ref() {
+                        let logical = self.loose_logical(screen).unwrap_or_else(|| self.usable());
+                        let view = self.pointer_view();
+                        let grip = arrange::nearest_corner(&view, &a.pose, logical, at);
+                        self.pointer_drag = Some(PointerDrag::Resize {
+                            grip,
+                            start_logical: logical,
+                            start_at: at,
+                        });
+                    }
+                    out
+                }
+                None => Vec::new(),
+            },
+            pointer::Gesture::Lasso { .. } => {
+                self.pointer_drag = Some(PointerDrag::Lasso { start_at: at });
+                Vec::new()
+            }
+            // ANDAR com mira: `g` / `world.grab` (`World::grab`) already
+            // does this by keyboard; the mouse hold-to-carry gesture
+            // (ctrl+esquerdo segurado) is a follow-up — see the report.
+            pointer::Gesture::Carry => Vec::new(),
+        }
+    }
+
+    fn pointer_drag_move(&mut self, at: Vec2, eff: pointer::Effective, now: Time) -> Vec<Out> {
+        let Some(drag) = self.pointer_drag else {
+            return Vec::new();
+        };
+        match drag {
+            PointerDrag::Move { grab, last_at } => {
+                if let Some(a) = self.arrange.as_mut() {
+                    a.strong = eff.strong;
+                    a.magnets_off = eff.no_magnets;
+                }
+                self.pointer_drag = Some(PointerDrag::Move { grab, last_at: at });
+                if eff.rotate {
+                    let d = at - last_at;
+                    self.arrange_touch(
+                        "girar",
+                        move |p| arrange::rotate(p, d, ROTATE_RAD_PER_PX),
+                        now,
+                    )
+                } else {
+                    let view = self.pointer_view();
+                    let new_pose = arrange::drag_to(&view, &grab, at);
+                    self.arrange_touch("mover", move |_| new_pose, now)
+                }
+            }
+            PointerDrag::Resize {
+                grip,
+                start_logical,
+                start_at,
+            } => self.pointer_resize(grip, start_logical, start_at, at, eff.strong, now),
+            PointerDrag::Lasso { .. } => Vec::new(),
+        }
+    }
+
+    /// Resizing from a handle (plan §2.4): `nkw_core::arrange::resize` does
+    /// the anchor-preserving geometry; `xdg_toplevel` min/max hints are not
+    /// threaded through to `World` yet, so only `arrange::MIN_LOGICAL`/the
+    /// usable size bound it (see the report).
+    fn pointer_resize(
+        &mut self,
+        grip: Grip,
+        start_logical: Vec2,
+        start_at: Vec2,
+        at: Vec2,
+        keep_aspect: bool,
+        now: Time,
+    ) -> Vec<Out> {
+        let Some(a) = self.arrange.as_ref() else {
+            return Vec::new();
+        };
+        let (screen, pose) = (a.screen, a.pose);
+        let view = self.pointer_view();
+        let usable = self.usable();
+        let hints = arrange::Hints::default();
+        let (logical, new_pose) = arrange::resize(
+            &view,
+            &pose,
+            start_logical,
+            grip,
+            start_at,
+            at,
+            keep_aspect,
+            &hints,
+            usable,
+        );
+        let mut out = self.arrange_touch("redimensionar", move |_| new_pose, now);
+        out.push(Out::Configure {
+            screen,
+            size: Some(logical),
+            fullscreen: None,
+            maximized: None,
+        });
+        out
+    }
+
+    /// The wheel during a Move drag (plan §2.3): depth by default, visual
+    /// scale with `alt` effective.
+    fn pointer_drag_wheel(&mut self, steps: i32, scale: bool, now: Time) -> Vec<Out> {
+        let Some(PointerDrag::Move { grab, last_at }) = self.pointer_drag else {
+            return Vec::new();
+        };
+        if scale {
+            return self.arrange_touch("escala", move |p| arrange::rescale(p, steps), now);
+        }
+        let mut grab = grab;
+        arrange::step_depth(&mut grab, steps, false, now);
+        self.pointer_drag = Some(PointerDrag::Move { grab, last_at });
+        let view = self.pointer_view();
+        let new_pose = arrange::drag_to(&view, &grab, last_at);
+        self.arrange_touch("profundidade", move |_| new_pose, now)
+    }
+
+    fn pointer_drag_end(&mut self, at: Vec2, eff: pointer::Effective, now: Time) -> Vec<Out> {
+        match self.pointer_drag {
+            Some(PointerDrag::Lasso { start_at }) => {
+                self.pointer_drag = None;
+                return self.pointer_lasso_end(start_at, at, eff.strong, now);
+            }
+            Some(_) => {}
+            None => return Vec::new(),
+        }
+        let mut out = self.pointer_drag_move(at, eff, now);
+        self.pointer_drag = None;
+        out.extend(self.arrange_commit(now));
+        out
+    }
+
+    /// Box-select on release (plan §2.3's "em espaço vazio, laçada"):
+    /// `nkw_core::arrange::lasso` by projected centre, over the current
+    /// room's screens; `additive` (`shift`) adds to `arrange_selection`
+    /// instead of replacing it.
+    fn pointer_lasso_end(&mut self, a: Vec2, b: Vec2, additive: bool, now: Time) -> Vec<Out> {
+        let _ = now;
+        let view = self.pointer_view();
+        let room = self.current_room();
+        let mut centres = Vec::new();
+        for d in 0..self.rooms[room].desks.len() {
+            for k in 0..self.rooms[room].desks[d].screens.len() {
+                let id = self.rooms[room].desks[d].screens[k];
+                centres.push((id, self.screen_place(room, d, k).center));
+            }
+        }
+        let picked = arrange::lasso(&view, a, b, &centres);
+        if !additive {
+            self.arrange_selection.clear();
+        }
+        self.arrange_selection.extend(picked);
+        self.layout_gen += 1;
+        self.pending.push(Wish::world(Want::Once));
+        Vec::new()
+    }
+
+    /// `alt`+wheel with nothing pressed (plan §2.4): visual scale, and only
+    /// on a screen already in the air — a desk-stack screen's `scale` has no
+    /// visible effect (`place_depth` only reads it for `st.air`).
+    fn pointer_scale(&mut self, hit: pointer::Hit, steps: i32, now: Time) -> Vec<Out> {
+        let Some(id) = screen_of_hit(hit) else {
+            return Vec::new();
+        };
+        let before = self.screen_state(id);
+        if before.air.is_none() {
+            return Vec::new();
+        }
+        let new_scale = (before.air_scale() + steps as f32 * arrange::SCALE_STEP)
+            .clamp(arrange::SCALE_MIN, arrange::SCALE_MAX);
+        self.wm.entry(id).or_default().scale = new_scale;
+        let after = self.screen_state(id);
+        if after != before {
+            self.history.push(history::Entry {
+                kind: history::OpKind::Move,
+                label: "escala".to_string(),
+                subjects: vec![id.0 as u64],
+                before: ArrangeSnap::from([(id, before)]),
+                after: ArrangeSnap::from([(id, after)]),
+                at: now,
+            });
+        }
+        self.layout_gen += 1;
+        self.pending.push(Wish::world(Want::Once));
+        Vec::new()
+    }
+}
+
+/// 0..=100-clamped percentage (`Air::scale_pct` / `LayoutAt::Dock`'s), from
+/// a `1.0`-centred visual scale.
+fn pct(scale: f32) -> u16 {
+    (scale * 100.0).round().clamp(0.0, u16::MAX as f32) as u16
+}
+
+/// A room's display name as a path component: `/` and NUL cannot survive
+/// one, so each becomes `_`; an empty name (or `.`/`..`, once trimmed)
+/// does too, so a stray room name never escapes `layouts/`. Anything else
+/// (spaces, accents: both of nkw's own room names have one) is kept as-is.
+fn layout_room_slug(room: &str) -> String {
+    let s: String = room
+        .trim()
+        .chars()
+        .map(|c| if c == '/' || c == '\0' { '_' } else { c })
+        .collect();
+    if s.is_empty() || s == "." || s == ".." {
+        "_".to_string()
+    } else {
+        s
+    }
+}
+
+/// `dir` (made if missing) then `<name>.json`, written atomically: a temp
+/// file in the same dir, `fsync`ed, then `rename`d over the real path —
+/// the same durability `persist_io::Store::save` gives `world.json`.
+/// Unlike it, a corrupt *load* here is never moved aside to `.bak`:
+/// loading a named arrangement is a one-off, visible, user-chosen action
+/// (not boot-time recovery, which must never refuse to start), so an error
+/// toast is the honest response; the user can just save over it again.
+fn save_layout_file(dir: &Path, name: &str, text: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{name}.json.tmp"));
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, dir.join(format!("{name}.json")))
 }
 
 /// `p`, `dist` metres toward whoever looks at it.
@@ -2906,5 +3729,421 @@ mod tests {
         }
         assert_eq!(NAMES.len(), COMMANDS.len());
         assert!(info("world.summon").is_none(), "the cats' command");
+    }
+
+    // ---------------------------------------------------------------
+    // wave 5: arrangements on disk, and the aimed terminal
+
+    fn note(w: &World) -> String {
+        w.note.as_ref().map(|(_, m)| m.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn layout_save_and_load_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut w = fixture();
+        w.state_dir = Some(tmp.path().to_path_buf());
+        w.command(Cmd::LayoutSave(ShortName::new("padrao")), 0.0);
+        assert_eq!(note(&w), "arranjo salvo: padrao");
+        assert!(tmp.path().join("layouts/acme/padrao.json").is_file());
+
+        // screen 1 (acme desk 0, alone there) goes to the air
+        at(&mut w, 0, 0);
+        w.command(Cmd::Pin, 0.0);
+        assert!(w.screen_state(ScreenId(1)).air.is_some());
+
+        // loading the saved arrangement puts it back exactly where it was
+        w.command(Cmd::LayoutLoad(ShortName::new("padrao")), 1.0);
+        assert_eq!(note(&w), "arranjo: padrao");
+        assert!(w.screen_state(ScreenId(1)).air.is_none());
+        assert_eq!(w.locate(ScreenId(1)), Some((1, 0, 0)));
+    }
+
+    #[test]
+    fn layout_save_rejects_an_invalid_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut w = fixture();
+        w.state_dir = Some(tmp.path().to_path_buf());
+        w.command(Cmd::LayoutSave(ShortName::new("Maiuscula")), 0.0);
+        assert!(note(&w).contains("nome do arranjo"), "{}", note(&w));
+        assert!(!tmp.path().join("layouts").exists(), "nothing was written");
+    }
+
+    #[test]
+    fn layout_load_of_a_missing_file_is_a_friendly_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut w = fixture();
+        w.state_dir = Some(tmp.path().to_path_buf());
+        let before = acme(&w);
+        w.command(Cmd::LayoutLoad(ShortName::new("fantasma")), 0.0);
+        assert!(note(&w).contains("não existe"), "{}", note(&w));
+        assert_eq!(acme(&w), before, "nothing moved");
+    }
+
+    #[test]
+    fn layout_load_with_a_screen_closed_reports_it_missing_without_crashing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut w = fixture();
+        w.state_dir = Some(tmp.path().to_path_buf());
+        w.command(Cmd::LayoutSave(ShortName::new("trio")), 0.0);
+        // acme.3 closes: it was alone on its desk, so the desk goes too
+        w.rooms[1].desks.pop();
+        w.screens.remove(&ScreenId(3));
+
+        at(&mut w, 0, 0);
+        w.command(Cmd::Pin, 0.0); // give the load something to actually move
+        w.command(Cmd::LayoutLoad(ShortName::new("trio")), 1.0);
+
+        assert!(note(&w).contains("1 de fora"), "{}", note(&w));
+        assert!(note(&w).contains("acme.3"), "{}", note(&w));
+        assert!(
+            w.screen_state(ScreenId(1)).air.is_none(),
+            "screen 1 still moved"
+        );
+    }
+
+    #[test]
+    fn layout_rename_then_delete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut w = fixture();
+        w.state_dir = Some(tmp.path().to_path_buf());
+        w.command(Cmd::LayoutSave(ShortName::new("um")), 0.0);
+
+        w.command(
+            Cmd::LayoutRename {
+                name: ShortName::new("um"),
+                to: ShortName::new("dois"),
+            },
+            0.0,
+        );
+        assert!(!tmp.path().join("layouts/acme/um.json").exists());
+        assert!(tmp.path().join("layouts/acme/dois.json").is_file());
+
+        // renaming onto an existing name is refused, not overwritten
+        w.command(Cmd::LayoutSave(ShortName::new("tres")), 0.0);
+        w.command(
+            Cmd::LayoutRename {
+                name: ShortName::new("tres"),
+                to: ShortName::new("dois"),
+            },
+            0.0,
+        );
+        assert!(note(&w).contains("já existe"), "{}", note(&w));
+        assert!(tmp.path().join("layouts/acme/tres.json").is_file());
+
+        w.command(Cmd::LayoutDelete(ShortName::new("dois")), 0.0);
+        assert!(!tmp.path().join("layouts/acme/dois.json").exists());
+        assert!(note(&w).contains("apagado"), "{}", note(&w));
+
+        w.command(Cmd::LayoutDelete(ShortName::new("dois")), 0.0);
+        assert!(note(&w).contains("não existe"), "{}", note(&w));
+    }
+
+    #[test]
+    fn layout_commands_without_a_state_dir_toast_instead_of_touching_disk() {
+        let mut w = fixture();
+        assert!(w.state_dir.is_none());
+        w.command(Cmd::LayoutSave(ShortName::new("sem-dir")), 0.0);
+        assert!(note(&w).contains("sem diretório de estado"), "{}", note(&w));
+    }
+
+    #[test]
+    fn terminal_air_makes_a_frame_and_spawns_a_real_terminal() {
+        let mut w = fixture();
+        let frames_before = w.frames.len();
+        let out = w.command(Cmd::TerminalAir, 0.0);
+        assert_eq!(w.frames.len(), frames_before + 1);
+        assert!(matches!(w.station, Station::Frame(_)));
+        assert!(
+            out.contains(&Out::Spawn(vec![
+                nkw_core::rules::DEFAULT_TERMINAL.to_string()
+            ])),
+            "{out:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // the pointer, for real mouse events (plan §2.3/§2.4, D15)
+
+    mod pointer_tests {
+        use super::*;
+        use nkw_core::pointer;
+
+        fn ptr_cfg() -> pointer::Config {
+            pointer::Config {
+                drag: true,
+                modifier: pointer::DragMod::Ctrl,
+                world: pointer::WorldKey::CtrlAlt,
+                threshold_px: 6.0,
+                double_s: 0.4,
+            }
+        }
+
+        const CTRL: pointer::Mods = pointer::Mods {
+            ctrl: true,
+            alt: false,
+            shift: false,
+            logo: false,
+        };
+        const CTRL_ALT: pointer::Mods = pointer::Mods {
+            ctrl: true,
+            alt: true,
+            shift: false,
+            logo: false,
+        };
+        const NONE: pointer::Mods = pointer::Mods {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            logo: false,
+        };
+
+        /// The output's centre, physical px: `fixture()`'s station looks
+        /// dead-on at screen 1, so this is exactly its own ray.
+        fn centre() -> Vec2 {
+            Vec2::new(OUT.width_px as f32 / 2.0, OUT.height_px as f32 / 2.0)
+        }
+
+        #[test]
+        fn pointer_hit_finds_the_screen_straight_ahead() {
+            let w = fixture();
+            assert_eq!(w.pointer_hit(centre()), pointer::Hit::Screen(ScreenId(1)));
+        }
+
+        #[test]
+        fn pointer_mode_matches_the_world_mode() {
+            let mut w = fixture();
+            assert_eq!(w.pointer_mode(), pointer::PtrMode::Nav);
+            w.command(Cmd::Focus, 0.0);
+            assert_eq!(w.pointer_mode(), pointer::PtrMode::Focus);
+            w.command(Cmd::Back, 0.0);
+            w.command(Cmd::Walk, 0.0);
+            assert_eq!(
+                w.pointer_mode(),
+                pointer::PtrMode::WalkAim,
+                "mouse_look is on by default"
+            );
+        }
+
+        /// Plan §2.3: `ctrl+arrastar em qualquer ponto da tela` moves it in
+        /// NAV — the required end-to-end case (a real mouse gesture, not a
+        /// keyboard one, changes a screen's pose).
+        #[test]
+        fn ctrl_drag_in_nav_moves_the_screen() {
+            let mut w = fixture();
+            let cfg = ptr_cfg();
+            let mut now = 0.0;
+            let id = ScreenId(1);
+            assert!(!w.is_loose(id), "starts on its desk, not in the air");
+            let start_place = w.screen_place(1, 0, 0);
+
+            w.pointer_step(pointer::PtrEv::Mods(CTRL), &cfg, now);
+            let hit = pointer::Hit::Screen(id);
+            let press_at = centre();
+            let outs = w.pointer_step(
+                pointer::PtrEv::Press {
+                    button: pointer::Button::Left,
+                    at: press_at,
+                    hit,
+                },
+                &cfg,
+                now,
+            );
+            assert!(outs.is_empty(), "a press alone is not a drag yet");
+
+            now += 0.05;
+            let move_at = press_at + Vec2::new(120.0, 0.0);
+            let outs = w.pointer_step(pointer::PtrEv::Motion { at: move_at, hit }, &cfg, now);
+            assert!(!outs.is_empty(), "past the threshold: a drag starts");
+            w.pointer_apply(&outs, now);
+            assert!(
+                w.is_loose(id),
+                "pinned loose while being dragged (like ARRUMAR)"
+            );
+            let mid_drag = w
+                .screen_state(id)
+                .air
+                .expect("a live drag pose is in the air");
+            assert!(
+                mid_drag.center.distance(start_place.center) > 0.1,
+                "the centre followed the pointer: {:?} vs {:?}",
+                mid_drag.center,
+                start_place.center
+            );
+
+            let outs = w.pointer_step(
+                pointer::PtrEv::Release {
+                    button: pointer::Button::Left,
+                    at: move_at,
+                },
+                &cfg,
+                now,
+            );
+            w.pointer_apply(&outs, now);
+            assert!(w.is_loose(id), "committed to the air, not back on the desk");
+            // a loose/air screen stays *listed* in its desk's `screens` (the
+            // module doc: "after the stack"); `is_loose` is what marks it air
+            assert_eq!(
+                acme(&w)[0],
+                vec![1],
+                "screen 1 still listed on desk 0, now loose: {:?}",
+                acme(&w)
+            );
+            let committed = w.screen_state(id).air.expect("still an air screen");
+            assert!(
+                committed.center.distance(start_place.center) > 0.1,
+                "it actually moved: {:?} vs {:?}",
+                committed.center,
+                start_place.center
+            );
+        }
+
+        /// Plan §2.3: a plain drag with no modifier never moves a screen in
+        /// NAV — the machine produces nothing at all, so nothing in `World`
+        /// changes either.
+        #[test]
+        fn release_without_the_modifier_does_nothing() {
+            let mut w = fixture();
+            let cfg = ptr_cfg();
+            let now = 0.0;
+            let id = ScreenId(1);
+            let before = w.screen_state(id);
+            let hit = pointer::Hit::Screen(id);
+            let press_at = centre();
+
+            let outs = w.pointer_step(
+                pointer::PtrEv::Press {
+                    button: pointer::Button::Left,
+                    at: press_at,
+                    hit,
+                },
+                &cfg,
+                now,
+            );
+            assert!(outs.is_empty());
+            let move_at = press_at + Vec2::new(120.0, 0.0);
+            let outs = w.pointer_step(pointer::PtrEv::Motion { at: move_at, hit }, &cfg, now);
+            assert!(outs.is_empty(), "no modifier: the machine does nothing");
+            let outs = w.pointer_step(
+                pointer::PtrEv::Release {
+                    button: pointer::Button::Left,
+                    at: move_at,
+                },
+                &cfg,
+                now,
+            );
+            assert!(
+                outs.is_empty(),
+                "no click either: it moved without a modifier"
+            );
+            let world_outs = w.pointer_apply(&outs, now);
+            assert!(world_outs.is_empty());
+            assert_eq!(w.screen_state(id), before, "nothing changed on the screen");
+            assert!(!w.is_loose(id), "still on its desk");
+        }
+
+        /// Plan §2.3: `alt`+wheel during a Move drag scales instead of
+        /// stepping depth.
+        #[test]
+        fn alt_wheel_during_a_drag_scales() {
+            let mut w = fixture();
+            let cfg = ptr_cfg();
+            let mut now = 0.0;
+            let id = ScreenId(1);
+            let hit = pointer::Hit::Screen(id);
+            let press_at = centre();
+
+            w.pointer_step(pointer::PtrEv::Mods(CTRL), &cfg, now);
+            w.pointer_step(
+                pointer::PtrEv::Press {
+                    button: pointer::Button::Left,
+                    at: press_at,
+                    hit,
+                },
+                &cfg,
+                now,
+            );
+            now += 0.05;
+            let move_at = press_at + Vec2::new(120.0, 0.0);
+            let outs = w.pointer_step(pointer::PtrEv::Motion { at: move_at, hit }, &cfg, now);
+            w.pointer_apply(&outs, now);
+            assert!(w.is_loose(id));
+            let scale_before = w.screen_state(id).air_scale();
+
+            w.pointer_step(pointer::PtrEv::Mods(CTRL_ALT), &cfg, now);
+            let outs = w.pointer_step(pointer::PtrEv::Wheel { steps: 1, hit }, &cfg, now);
+            assert_eq!(
+                outs,
+                vec![pointer::PtrOut::DragWheel {
+                    steps: 1,
+                    scale: true,
+                }]
+            );
+            w.pointer_apply(&outs, now);
+            let scale_after = w.screen_state(id).air_scale();
+            assert!(
+                scale_after > scale_before,
+                "{scale_before} -> {scale_after}"
+            );
+        }
+
+        /// Plan §2.3: `esc` during a drag cancels it; `PtrOut::DragCancel`
+        /// reaches `World::arrange_revert`, which undoes the pose and
+        /// restores the screen's slot in its desk.
+        #[test]
+        fn escape_cancels_the_drag_and_reverts_via_history() {
+            let mut w = fixture();
+            let cfg = ptr_cfg();
+            let mut now = 0.0;
+            let id = ScreenId(1);
+            let start_place = w.screen_place(1, 0, 0);
+            let hit = pointer::Hit::Screen(id);
+            let press_at = centre();
+
+            w.pointer_step(pointer::PtrEv::Mods(CTRL), &cfg, now);
+            w.pointer_step(
+                pointer::PtrEv::Press {
+                    button: pointer::Button::Left,
+                    at: press_at,
+                    hit,
+                },
+                &cfg,
+                now,
+            );
+            now += 0.05;
+            let move_at = press_at + Vec2::new(120.0, 0.0);
+            let outs = w.pointer_step(pointer::PtrEv::Motion { at: move_at, hit }, &cfg, now);
+            w.pointer_apply(&outs, now);
+            let mid = w
+                .screen_state(id)
+                .air
+                .expect("pinned loose, a live drag pose");
+            assert!(
+                mid.center.distance(start_place.center) > 0.1,
+                "moved while dragging"
+            );
+
+            let outs = w.pointer_step(pointer::PtrEv::Cancel, &cfg, now);
+            assert_eq!(outs, vec![pointer::PtrOut::DragCancel]);
+            w.pointer_apply(&outs, now);
+
+            // the screen is a plain desk screen again, back at its desk-0
+            // slot and its original place — not left `is_loose` with a
+            // leftover air pose (`arrange_revert` restores `origin_state`,
+            // captured before `arrange_start`'s `pin_loose` ever touched it):
+            assert!(
+                w.screen_state(id).air.is_none(),
+                "a plain desk screen again, not left pinned loose"
+            );
+            let back = w.screen_place(1, 0, 0);
+            assert!(
+                back.center.distance(start_place.center) < 0.01,
+                "the pose is back where it started: {:?} vs {:?}",
+                back.center,
+                start_place.center
+            );
+            assert_eq!(acme(&w)[0], vec![1], "back at desk 0's slot 0 in the list");
+            w.pointer_step(pointer::PtrEv::Mods(NONE), &cfg, now);
+        }
     }
 }

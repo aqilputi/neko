@@ -174,9 +174,20 @@ pub fn draw_list_into(
             }
             for (k, &sid) in desk.screens.iter().enumerate() {
                 let p = w.screen_place(ri, di, k);
+                let st = w.screen_state(sid);
+                // the visual scale (plan §2.1) only ever applies to a
+                // screen actually floating in the air (or on a wall, still
+                // `air`); a desk-stacked screen keeps its real size
                 let size = w.screen_logical(ri, di, k) * M_PER_PX;
+                let size = if st.air.is_some() {
+                    size * st.air_scale()
+                } else {
+                    size
+                };
                 bezel(list, &p, size);
-                if hidden == Some(sid) {
+                // a docked screen composes in 2D over the view
+                // (`render::Layer::Dock`); its 3D quad would just double it
+                if hidden == Some(sid) || st.dock.is_some() {
                     continue;
                 }
                 if let Some(t) = tex(sid) {
@@ -261,6 +272,59 @@ mod tests {
         // unit quad corner (+0.5, +0.5) → top-right of a 0.624×0.72 m screen
         let tr = q.model.transform_point3(Vec3::new(0.5, 0.5, 0.0));
         assert!((tr - p.center - Vec3::new(0.312, 0.36, 0.0)).length() < 1e-5);
+    }
+
+    /// `ScreenState::air_scale` (plan §2.1) resizes the quad (and its
+    /// bezel) of a screen floating in the air; a desk-stacked screen is
+    /// never scaled.
+    #[test]
+    fn an_air_screens_quad_and_bezel_scale_with_it() {
+        let mut w = world(&[&[1]]);
+        w.command(Cmd::Arrange, 0.0);
+        w.command(Cmd::ToTarget(crate::world::ArrangeTarget::Air), 0.0);
+        for _ in 0..5 {
+            w.command(Cmd::ScaleUp, 0.0);
+        }
+        w.command(Cmd::ArrangeDone, 0.0);
+        assert!(
+            (w.screen_state(ScreenId(1)).air_scale() - 1.5).abs() < 1e-4,
+            "5 steps of 0.1 from 1.0"
+        );
+        let l = draw_list(&w, &tex, ALL);
+        let q = &l.screens[0];
+        let p = w.screen_place(0, 0, 0);
+        let tr = q.model.transform_point3(Vec3::new(0.5, 0.5, 0.0));
+        // the unscaled corner offset (0.312, 0.36), scaled by 1.5×
+        assert!(
+            (tr - p.center - Vec3::new(0.312, 0.36, 0.0) * 1.5).length() < 1e-4,
+            "{tr:?}"
+        );
+        let bezel = l
+            .instances
+            .iter()
+            .find(|i| i.mesh == MeshId::MonitorFrame)
+            .unwrap();
+        let btr = bezel.model.transform_point3(Vec3::new(0.5, 0.5, 0.0));
+        let want = Vec3::new(0.312 * 1.5 + BEZEL, 0.36 * 1.5 + BEZEL, 0.0);
+        assert!((btr - p.center - want).length() < 1e-4, "{btr:?}");
+    }
+
+    /// A docked screen composes in 2D over the view (`render::Layer::Dock`);
+    /// its 3D quad would just double it, so the world pass skips it — the
+    /// desk still shows its monitor frame, just with nothing live on it.
+    #[test]
+    fn a_docked_screen_has_no_3d_quad() {
+        let mut w = world(&[&[1, 2]]);
+        w.command(Cmd::Dock, 0.0);
+        assert!(w.screen_state(ScreenId(1)).dock.is_some());
+        let l = draw_list(&w, &tex, ALL);
+        assert_eq!(l.screens.len(), 1, "only the other (undocked) screen");
+        assert_eq!(l.screens[0].tex.id, 102);
+        assert_eq!(
+            count(&l, MeshId::MonitorFrame),
+            2,
+            "both desks still show a monitor"
+        );
     }
 
     #[test]

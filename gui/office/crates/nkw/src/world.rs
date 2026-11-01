@@ -10,6 +10,9 @@ use nkw_core::arrange::{self, AirPose};
 use nkw_core::collide::{Aabb, Door as Gap, Grid, WalkInput, WalkParams, Walker, Wall};
 use nkw_core::history::{self, History};
 use nkw_core::layout;
+// the pointer gesture machine (plan §2.3/D15): aliased, `nkw_core::Machine`
+// below is the *mode* machine.
+use nkw_core::pointer::Machine as PointerMachine;
 use nkw_core::strip::{self, Desk, Dir, RoomSlot, Side, Spot, Station, Width};
 use nkw_core::walk_exit;
 use nkw_core::{
@@ -163,6 +166,10 @@ pub enum Cmd {
     Frame {
         at: Option<FramePose>,
     },
+    /// `world+shift+enter`: a frame where the camera points, then a real
+    /// terminal spawned into the world right away (`make_frame` placed, no
+    /// args: always "in the aim", like `Frame { at: None }`).
+    TerminalAir,
     /// `v`: ARRUMAR on the selected screen.
     Arrange,
     /// `enter` in ARRUMAR.
@@ -393,6 +400,7 @@ impl Cmd {
             "world.frame" => Cmd::Frame {
                 at: args.get("at").and_then(|s| FramePose::parse(s)),
             },
+            "world.terminal_air" => Cmd::TerminalAir,
             "world.arrange" => Cmd::Arrange,
             "world.arrange_done" => Cmd::ArrangeDone,
             "world.arrange_cancel" => Cmd::ArrangeCancel,
@@ -584,6 +592,7 @@ impl Cmd {
                 }
                 return ("world.frame", a);
             }
+            Cmd::TerminalAir => "world.terminal_air",
             Cmd::Arrange => "world.arrange",
             Cmd::ArrangeDone => "world.arrange_done",
             Cmd::ArrangeCancel => "world.arrange_cancel",
@@ -896,6 +905,22 @@ pub struct World {
     /// the last mouse wheel step that moved the station outside FOCO (niri
     /// parity: a 150 ms cooldown so one physical scroll click is one step)
     wheel_nav_at: Time,
+    /// `--state-dir` (plan §2.6, S32): where `world.layout_save` and co.
+    /// read/write `layouts/<room>/<name>.json`. `None` under `--demo` and
+    /// in every test that does not set it: those commands then show an
+    /// error toast instead of touching the filesystem. Set once, from
+    /// outside (`app.rs::run`, the same `cli.state_root()` `Wm` uses for
+    /// `world.json`) — `World` otherwise never sees the CLI.
+    pub(crate) state_dir: Option<std::path::PathBuf>,
+    /// the pointer gesture machine (plan §2.3/D15), fed real mouse events by
+    /// `nkw`'s `input.rs`; pure state, no Wayland in here
+    pointer: PointerMachine,
+    /// a live mouse drag (Move/Resize/Lasso), piggy-backed on `arrange`'s own
+    /// bookkeeping (the undo snapshot, the origin slot) so `DragCancel`/
+    /// `DragEnd` can reuse `arrange_revert`/`arrange_commit` unchanged; only
+    /// the geometry a mouse drag needs that the keyboard's discrete nudges do
+    /// not (the grab offset/depth, the resize anchor) lives here
+    pointer_drag: Option<ops::PointerDrag>,
 }
 
 impl World {
@@ -948,6 +973,9 @@ impl World {
             next_frame: 0,
             history: History::new(history::HISTORY_CAP),
             wheel_nav_at: f64::NEG_INFINITY,
+            state_dir: None,
+            pointer: PointerMachine::new(),
+            pointer_drag: None,
         };
         w.next_room = w.rooms.iter().map(|r| r.id.0 + 1).max().unwrap_or(0);
         w.station = match w.rooms.first().map(|r| r.desks.is_empty()) {
@@ -3027,6 +3055,7 @@ mod tests {
             Cmd::Frame {
                 at: FramePose::parse("-100,0,1200,0"),
             },
+            Cmd::TerminalAir,
             Cmd::Arrange,
             Cmd::ArrangeDone,
             Cmd::ArrangeCancel,
