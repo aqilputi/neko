@@ -24,14 +24,14 @@ use glam::Vec2;
 use nkw_core::hints::{ALPHABET, HintMatch, Hints};
 use nkw_core::line::Line;
 use nkw_core::palette::{Item, Palette, Step};
-use nkw_core::{Action, Base, Dir, Effect, Kind, Pick, TalkPurpose, Time, Want, Wish};
+use nkw_core::{Action, Base, Dir, Effect, Kind, Pick, Rect, TalkPurpose, Time, Want, Wish};
 use serde_json::Value;
 
 use crate::ext::{
     Ctx, DialogView, HudInput, OverlayElem, PaletteItem, Pickable, Plugin, Req, Source, ToastKind,
 };
 use crate::router::{KeyEv, names, table};
-use crate::ui::phone::{PhoneApp, PhonePage, PhoneState, PhoneView};
+use crate::ui::phone::{Act, Item as MenuItem, PhoneApp, PhonePage, PhoneState, PhoneView};
 use crate::ui::{Node, Theme};
 use cache::Cache;
 use draw::{Fonts, Px, Row, Spec};
@@ -75,6 +75,50 @@ struct Hinting {
     hints: Hints,
     /// the targets of the last frame, by id
     picks: BTreeMap<u64, Pick>,
+}
+
+/// The balloon (S31, plan §2.2): a compact page anchored at a logical
+/// point, opened on a screen's menu (`world.menu`) or, once the mouse is
+/// wired in, on empty space.
+struct Balloon {
+    page: PhonePage,
+    /// top-left, logical px
+    at: (i32, i32),
+    sel: usize,
+}
+
+/// The balloon's fixed row geometry (logical px): no live font metrics are
+/// available from `menu_rect`/`hud_reserved`'s `&self` (rasterising needs
+/// `&mut Cache`), so these are an estimate a future renderer can match or
+/// override.
+const MENU_W: i32 = 220;
+const MENU_ROW_H: i32 = 28;
+const MENU_PAD: i32 = 8;
+
+/// `world.menu`'s items on the selected screen (plan §2.2): ARRUMAR, ancorar,
+/// prender no ar, fechar. "mandar para a sala…" needs a room picker (the
+/// palette already does this, via `world.send_room`) and is left out of the
+/// balloon to keep it a one-key-per-item list; the empty-space variant
+/// ("nova tela aqui", "terminal aqui", "moldura vazia aqui", "arranjos…")
+/// needs the mouse's world-space hit point, which only the pointer machine
+/// (not wired in yet) has.
+fn screen_menu_page() -> PhonePage {
+    let item = |id: &str, title: &str, cmd: &str| MenuItem {
+        id: id.to_string(),
+        title: title.to_string(),
+        on_enter: Some(Act::new(cmd, &[], true)),
+        ..MenuItem::default()
+    };
+    PhonePage {
+        title: "tela".into(),
+        items: vec![
+            item("arrange", "ARRUMAR", "world.arrange"),
+            item("dock", "ancorar / desancorar", "world.dock"),
+            item("pin", "prender / soltar no ar", "world.pin"),
+            item("close", "fechar", "world.close"),
+        ],
+        ..PhonePage::default()
+    }
 }
 
 pub struct Overlay {
@@ -132,6 +176,8 @@ pub struct Overlay {
     focus_escape: String,
     /// `world.palette_run {name, …}`: the next palette opens on it
     palette_ask: Option<(String, BTreeMap<String, String>)>,
+    /// the balloon (S31), while it is open
+    balloon: Option<Balloon>,
 }
 
 /// What a script forces over the hub's/World's values (`null` releases).
@@ -192,6 +238,7 @@ impl Overlay {
             world_mod: cli.world_mod.name(),
             focus_escape,
             palette_ask: None,
+            balloon: None,
             fonts: None,
             cache: Cache::new(),
             hinting: None,
@@ -241,31 +288,111 @@ impl Overlay {
     /// S31: open the balloon (a compact phone page) anchored at a logical
     /// point.
     pub fn open_menu(&mut self, page: PhonePage, at: (i32, i32)) {
-        let _ = (page, at);
+        self.balloon = Some(Balloon { page, at, sel: 0 });
+        self.dirty = true;
     }
 
     /// S31: a click at logical (x, y) while the balloon is open: `Some` =
     /// it took the click (an item, or outside = close); `None` = no balloon.
     pub fn menu_click(&mut self, x: f64, y: f64, ctx: &Ctx) -> Option<Vec<Req>> {
-        let _ = (x, y, ctx);
-        None
+        let rect = self.menu_rect()?;
+        if !rect.contains(x, y) {
+            self.balloon = None;
+            self.dirty = true;
+            return Some(Vec::new());
+        }
+        let n = self.balloon.as_ref()?.page.items.len();
+        for i in 0..n {
+            if self.menu_item_rect(i).is_some_and(|r| r.contains(x, y)) {
+                return Some(self.menu_activate(i, ctx));
+            }
+        }
+        Some(Vec::new())
     }
 
     /// S31: the balloon's rect, logical px.
-    pub fn menu_rect(&self) -> Option<nkw_core::Rect> {
-        None
+    pub fn menu_rect(&self) -> Option<Rect> {
+        let b = self.balloon.as_ref()?;
+        let rows = b.page.items.len().max(1) as i32;
+        Some(Rect::new(
+            b.at.0,
+            b.at.1,
+            MENU_W,
+            MENU_PAD * 2 + MENU_ROW_H * rows,
+        ))
     }
 
-    /// S31: what is clickable in 2D (balloon, phone panel, dialogue box).
-    pub fn ui_rects(&self) -> Vec<nkw_core::Rect> {
-        Vec::new()
+    /// One item's rect within the balloon.
+    fn menu_item_rect(&self, i: usize) -> Option<Rect> {
+        let r = self.menu_rect()?;
+        (i < self.balloon.as_ref()?.page.items.len()).then(|| {
+            Rect::new(
+                r.x + MENU_PAD,
+                r.y + MENU_PAD + MENU_ROW_H * i as i32,
+                r.w - 2 * MENU_PAD,
+                MENU_ROW_H,
+            )
+        })
+    }
+
+    /// The selected item's `on_enter`, as a command request; closes the
+    /// balloon either way (every item of the screen's menu does, plan §2.2).
+    fn menu_activate(&mut self, i: usize, ctx: &Ctx) -> Vec<Req> {
+        let _ = ctx;
+        let Some(b) = self.balloon.take() else {
+            return Vec::new();
+        };
+        self.dirty = true;
+        let Some(act) = b.page.items.get(i).and_then(|it| it.on_enter.clone()) else {
+            return Vec::new();
+        };
+        vec![Req::Command {
+            name: act.name,
+            args: act.args,
+        }]
+    }
+
+    /// `j` / `k` while the balloon is open.
+    fn menu_nav(&mut self, down: bool) {
+        let Some(b) = self.balloon.as_mut() else {
+            return;
+        };
+        let n = b.page.items.len().max(1);
+        b.sel = if down {
+            (b.sel + 1) % n
+        } else {
+            (b.sel + n - 1) % n
+        };
+        self.dirty = true;
+    }
+
+    /// S31: what is clickable in 2D. The phone and the dialogue box are 2D
+    /// too, but their geometry is only known at draw time (`elements`, which
+    /// needs a mutable glyph cache); only the balloon is modelled here.
+    pub fn ui_rects(&self) -> Vec<Rect> {
+        self.menu_rect().into_iter().collect()
     }
 
     /// S31: the rects the HUD occupies on an output of `out` logical px
-    /// (docks stay off them, plan §2.7).
-    pub fn hud_reserved(&self, out: [i32; 2]) -> Vec<nkw_core::Rect> {
-        let _ = out;
-        Vec::new()
+    /// (docks stay off them, plan §2.7). An estimate: exact text metrics
+    /// need a mutable glyph cache (`Frame::size`), not available from `&self`
+    /// here; a future caller can still refine the numbers without changing
+    /// the shape of this contract.
+    pub fn hud_reserved(&self, out: [i32; 2]) -> Vec<Rect> {
+        if self.hud_hidden {
+            return Vec::new();
+        }
+        let mut v = vec![
+            // the mode label + badge chips, top-left
+            Rect::new(LABEL_POS.0, LABEL_POS.1, 260, 40),
+            // the status strip, top-right
+            Rect::new((out[0] - 280 - STRIP_MARGIN).max(0), STRIP_MARGIN, 280, 40),
+        ];
+        if self.phone.is_some() {
+            let (w, h) = ((out[0] * 3 / 4).min(520), (out[1] * 3 / 4).min(640));
+            v.push(Rect::new((out[0] - w) / 2, (out[1] - h) / 2, w, h));
+        }
+        v
     }
 
     /// The phone's state while it is open (S21, for the hub's `hud_input`).
@@ -456,6 +583,9 @@ impl Overlay {
     pub fn submode(&self) -> Option<&'static str> {
         if self.phone.is_some() {
             return Some("phone");
+        }
+        if self.balloon.is_some() {
+            return Some("menu");
         }
         self.map.map(|_| "map")
     }
@@ -1285,6 +1415,37 @@ impl Plugin for Overlay {
             "world.help" => Some(self.open_phone(Some(apps::AJUDA.into()), ctx)),
             "world.hud" => {
                 self.hud_hidden = !self.hud_hidden;
+                Some(Vec::new())
+            }
+            // S31: the balloon (plan §2.2). `world.menu` on the selected
+            // screen (keyboard, `shift+f10`/`Menu`): the mouse's "right
+            // click on empty space" / "right click on a screen" variants
+            // need the pointer machine (`nkw_core::pointer`), not wired into
+            // the compositor yet — only this keyboard path works today.
+            "world.menu" => {
+                let out = View::of(ctx.world).size;
+                let at = (
+                    ((out.x as i32 - MENU_W) / 2).max(8),
+                    (out.y as i32 / 2 - 80).max(8),
+                );
+                self.open_menu(screen_menu_page(), at);
+                Some(Vec::new())
+            }
+            "world.menu_up" => {
+                self.menu_nav(false);
+                Some(Vec::new())
+            }
+            "world.menu_down" => {
+                self.menu_nav(true);
+                Some(Vec::new())
+            }
+            "world.menu_open" => {
+                let sel = self.balloon.as_ref()?.sel;
+                Some(self.menu_activate(sel, ctx))
+            }
+            "world.menu_close" => {
+                self.balloon = None;
+                self.dirty = true;
                 Some(Vec::new())
             }
             n if n == phone::ACT_PREF => {

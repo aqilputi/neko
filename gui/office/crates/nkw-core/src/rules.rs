@@ -326,13 +326,27 @@ fn wm_tables(text: &str) -> (MouseConfig, ArrangeConfig, DockConfig, Vec<String>
     let table: toml::Table = toml::from_str(text).unwrap_or_default();
     let empty = toml::Table::new();
     let get = |name: &str| -> &toml::Table {
-        table.get(name).and_then(toml::Value::as_table).unwrap_or(&empty)
+        table
+            .get(name)
+            .and_then(toml::Value::as_table)
+            .unwrap_or(&empty)
     };
     let mut r = TableReader { notes: &mut notes };
 
     let t = get("mouse");
     let d = MouseConfig::default();
-    r.unknown("mouse", t, &["drag", "drag_modifier", "drag_threshold_px", "double_click_ms", "edge_turn", "hover_selects"]);
+    r.unknown(
+        "mouse",
+        t,
+        &[
+            "drag",
+            "drag_modifier",
+            "drag_threshold_px",
+            "double_click_ms",
+            "edge_turn",
+            "hover_selects",
+        ],
+    );
     let mouse = MouseConfig {
         drag: r.flag("mouse", "drag", t, d.drag),
         drag_modifier: match t.get("drag_modifier") {
@@ -347,8 +361,22 @@ fn wm_tables(text: &str) -> (MouseConfig, ArrangeConfig, DockConfig, Vec<String>
                 }
             },
         },
-        drag_threshold_px: r.num("mouse", "drag_threshold_px", t, (2.0, 24.0), d.drag_threshold_px as f64) as f32,
-        double_click_ms: r.num("mouse", "double_click_ms", t, (200.0, 800.0), d.double_click_ms as f64).round() as u32,
+        drag_threshold_px: r.num(
+            "mouse",
+            "drag_threshold_px",
+            t,
+            (2.0, 24.0),
+            d.drag_threshold_px as f64,
+        ) as f32,
+        double_click_ms: r
+            .num(
+                "mouse",
+                "double_click_ms",
+                t,
+                (200.0, 800.0),
+                d.double_click_ms as f64,
+            )
+            .round() as u32,
         edge_turn: r.flag("mouse", "edge_turn", t, d.edge_turn),
         hover_selects: r.flag("mouse", "hover_selects", t, d.hover_selects),
     };
@@ -357,7 +385,9 @@ fn wm_tables(text: &str) -> (MouseConfig, ArrangeConfig, DockConfig, Vec<String>
     let d = ArrangeConfig::default();
     r.unknown("arrange", t, &["history", "magnets", "sound"]);
     let arrange = ArrangeConfig {
-        history: r.num("arrange", "history", t, (10.0, 200.0), d.history as f64).round() as usize,
+        history: r
+            .num("arrange", "history", t, (10.0, 200.0), d.history as f64)
+            .round() as usize,
         magnets: r.flag("arrange", "magnets", t, d.magnets),
         sound: r.flag("arrange", "sound", t, d.sound),
     };
@@ -395,8 +425,9 @@ impl TableReader<'_> {
     fn unknown(&mut self, table: &str, t: &toml::Table, known: &[&str]) {
         for k in t.keys() {
             if !known.contains(&k.as_str()) {
-                self.notes
-                    .push(format!("world.toml: {table}.{k}: chave desconhecida (ignorada)"));
+                self.notes.push(format!(
+                    "world.toml: {table}.{k}: chave desconhecida (ignorada)"
+                ));
             }
         }
     }

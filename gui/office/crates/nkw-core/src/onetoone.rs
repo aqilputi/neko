@@ -112,7 +112,8 @@ pub fn pose_at(
     let px_per_m = out.scale / (M_PER_PX * scale);
     let off = (origin + size / 2.0 - half) / px_per_m;
     let mut p = Pose::new(place.center, place.yaw, place.pitch);
-    p.pos = place.center - p.forward() * (scale * distance(out.height_px, out.scale, fov_y))
+    p.pos = place.center
+        - p.forward() * (scale * distance(out.height_px, out.scale, fov_y))
         - p.right() * off.x
         + p.up() * off.y;
     OneToOne {

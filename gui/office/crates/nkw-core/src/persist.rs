@@ -611,7 +611,10 @@ mod tests {
         let text = to_string(&done);
         assert!(text.contains("\"tour_done\": true"), "{text}");
         assert!(parse(&text).unwrap().tour_done);
-        assert_eq!(VERSION, 1, "an additive key: no new version");
+        assert_eq!(
+            VERSION, 2,
+            "bumped by the onda 5 air/frame fields; tour_done itself stayed additive"
+        );
     }
 
     #[test]
@@ -621,7 +624,7 @@ mod tests {
         assert_eq!(parse(&text), Ok(f));
         assert!(text.ends_with('\n'));
         let v: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(v["version"], 1);
+        assert_eq!(v["version"], VERSION);
         assert_eq!(v["rooms"][1]["kind"], json!({"context": "acme"}));
         assert_eq!(v["rooms"][2]["kind"], "free");
         assert_eq!(v["places"]["demo.viewer"]["desk"], "last");

@@ -222,7 +222,10 @@ fn bare(key: &str) -> Chord {
 }
 
 fn mods_down(m: Mods) -> Vec<Cmd> {
-    mod_keys(m).into_iter().map(|k| Cmd::Down(bare(k))).collect()
+    mod_keys(m)
+        .into_iter()
+        .map(|k| Cmd::Down(bare(k)))
+        .collect()
 }
 
 fn mods_up(m: Mods) -> Vec<Cmd> {
@@ -457,10 +460,12 @@ fn parse_line(line: &str) -> Result<Vec<Cmd>, String> {
             },
             [what, app, rest @ ..] if what == "pose" => expect_pose(app, rest)?,
             _ => {
-                return Err("expect mode <M> | expect focus <app_id> | expect json <pointer> \
+                return Err(
+                    "expect mode <M> | expect focus <app_id> | expect json <pointer> \
                      <json> | expect near <pointer> <n> <tol> | expect pose <app_id> <x> <y> \
                      <z> [<yaw>] [<tol>]"
-                    .into());
+                        .into(),
+                );
             }
         },
         "pointer" => match args.as_slice() {
@@ -881,7 +886,10 @@ button right up
         let c = cmds("click left world");
         assert_eq!(&c[..2], [down("Control_L"), down("Alt_L")]);
         assert_eq!(&c[4..], [up("Alt_L"), up("Control_L")]);
-        assert_eq!(cmds("expect mode ARRUMAR"), [Cmd::ExpectMode("ARRUMAR".into())]);
+        assert_eq!(
+            cmds("expect mode ARRUMAR"),
+            [Cmd::ExpectMode("ARRUMAR".into())]
+        );
     }
 
     #[test]
@@ -958,17 +966,33 @@ button right up
             {"app_id": "acme.1", "pose": {"pos_mm": [0, 0, 0], "yaw_mdeg": 0}},
         ]});
         assert!(near_check(&doc, "/n", 1.0, 0.01).is_ok());
-        assert!(near_check(&doc, "/n", 1.0, 0.001).unwrap_err().contains("actual 1.004"));
+        assert!(
+            near_check(&doc, "/n", 1.0, 0.001)
+                .unwrap_err()
+                .contains("actual 1.004")
+        );
         assert!(near_check(&doc, "/s", 1.0, 1.0).is_err());
-        assert!(near_check(&doc, "/nope", 1.0, 1.0).unwrap_err().contains("<missing>"));
+        assert!(
+            near_check(&doc, "/nope", 1.0, 1.0)
+                .unwrap_err()
+                .contains("<missing>")
+        );
         let p = [10.0, 1200.0, -800.0];
         assert!(pose_check(&doc, "acme.1", p, None, 5.0).is_ok());
         assert!(pose_check(&doc, "acme.1", p, Some(-15000.0), 5.0).is_ok());
         assert!(pose_check(&doc, "acme.1", p, Some(-16000.0), 5.0).is_err());
         assert!(pose_check(&doc, "acme.1", p, None, 1.0).is_err());
-        assert!(pose_check(&doc, "mpv", p, None, 5.0).unwrap_err().contains("no such"));
+        assert!(
+            pose_check(&doc, "mpv", p, None, 5.0)
+                .unwrap_err()
+                .contains("no such")
+        );
         let bare = serde_json::json!({"screens": [{"app_id": "foot"}]});
-        assert!(pose_check(&bare, "foot", p, None, 5.0).unwrap_err().contains("no pose"));
+        assert!(
+            pose_check(&bare, "foot", p, None, 5.0)
+                .unwrap_err()
+                .contains("no pose")
+        );
     }
 
     #[test]

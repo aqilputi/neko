@@ -54,6 +54,11 @@ fn mode_for(keymap_mode: &str) -> (Mode, Option<&'static str>) {
         "world.palette" => palette(),
         "world.library" => return (nav(), Some("library")),
         "world.phone" => return (palette(), Some("phone")),
+        "world.arrange" => over(Kind::Arrange, Base::Nav),
+        // not a `Mode`/`Kind` of the machine (the pointer's own state, plan
+        // §2.3/S31): `Overlay::submode` stands in for it, like the library
+        "world.drag" => return (nav(), Some("drag")),
+        "world.menu" => return (nav(), Some("menu")),
         m => panic!("{m}"),
     };
     (m, None)
@@ -244,9 +249,10 @@ fn text_only_in_text_modes() {
         router.route(&hint(), None, &ev("backspace")),
         cmd("world.hint_backspace")
     );
-    // NAV, ANDAR, CONVERSA: never text
+    // NAV, ANDAR, CONVERSA: never text ("y": unbound in all three, wave 5
+    // having since claimed "v" for `world.arrange`)
     for m in [nav(), walk(), talk(false)] {
-        assert_eq!(router.route(&m, None, &ev("v")), Route::Swallow, "{m:?}");
+        assert_eq!(router.route(&m, None, &ev("y")), Route::Swallow, "{m:?}");
     }
     // the map: everything not global is the overlay's
     for k in ["h", "o", "enter", "esc"] {
@@ -575,8 +581,9 @@ fn library_submode_and_chain() {
     }
     assert_eq!(router.dump()["mode"], "world.library");
     assert_eq!(router.dump()["submode"], "library");
-    // printable keys are not text in the library
-    assert_eq!(router.route(&nav(), library(), &ev("v")), Route::Swallow);
+    // printable keys are not text in the library ("q": unbound in the
+    // library and in NAV's chain, wave 5 having since claimed "v" there)
+    assert_eq!(router.route(&nav(), library(), &ev("q")), Route::Swallow);
     // the core's normal mode is in the chain
     router.set_bindings(vec![binding("normal", &["x"], "session.stop")]);
     assert_eq!(

@@ -88,6 +88,12 @@ pub fn is_global(key: &str) -> bool {
 pub fn mode_of(mode: &Mode, sub: Option<&str>) -> &'static str {
     match sub {
         Some("map") => return "world.map",
+        // the balloon (S31, plan §2.2): its own keys only, like the map
+        Some("menu") => return "world.menu",
+        // a live mouse drag (plan §2.3): not a `Mode`/`Kind` of the machine
+        // either, but kept in the same submode mechanism so the router can
+        // resolve it once the pointer machine sets it
+        Some("drag") => return "world.drag",
         // the phone rides COMANDOS (S21): its keys only while the palette
         // mode is up
         Some("phone") if mode.kind() == Some(Kind::Palette) => return "world.phone",
@@ -117,7 +123,7 @@ pub fn submode_of(keymap_mode: &str) -> Option<&'static str> {
 }
 
 /// The world modes the router knows.
-pub const MODES: [&str; 10] = [
+pub const MODES: [&str; 13] = [
     "normal.world",
     "world.walk",
     "world.focus",
@@ -128,6 +134,9 @@ pub const MODES: [&str; 10] = [
     "world.map",
     "world.library",
     "world.phone",
+    "world.arrange",
+    "world.drag",
+    "world.menu",
 ];
 
 /// Modes whose printable keys are text.

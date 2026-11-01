@@ -9,16 +9,25 @@
 //! the scene draws every screen of a desk through `World::screen_place`.
 
 use glam::{Vec2, Vec3};
-use nkw_core::layout;
+use nkw_core::arrange::{self, AirPose};
+use nkw_core::carry;
+use nkw_core::dock::{self, DockSlot};
+use nkw_core::history;
+use nkw_core::layout::{self, FOV_Y};
+use nkw_core::magnet::{self, Strength};
 use nkw_core::persist::{
     DeskAt, DeskRec, Place, RoomKind, RoomRec, ScreenRec, StationRec, VERSION, WorldFile,
 };
 use nkw_core::strip::{self, Desk, Dir, Station, Width};
 use nkw_core::{
-    Action, Kind, Pose, RoomId, ScreenId, ScreenPlace, Target, Time, Want, Wish, onetoone,
+    Action, ClusterId, FrameId, Kind, Pose, RoomId, ScreenId, ScreenPlace, Target, Time, Want,
+    Wish, onetoone,
 };
 
-use super::{Cmd, MY_ROOM, Out, RECEPTION, World};
+use super::{
+    ArrangeSnap, ArrangeTarget, Arranging, Cluster, Cmd, FramePose, FrameRec, MY_ROOM, Out,
+    RECEPTION, World,
+};
 
 /// How far a dialog floats in front of its mother (metres).
 pub const DIALOG_FRONT: f32 = 0.05;
@@ -132,6 +141,20 @@ pub struct ScreenState {
     pub placed: bool,
     /// in the air against a wall (dropped from the hand)
     pub wall: bool,
+    /// visual scale in the air, plan §2.1 (`0.0` is the sentinel for "unset,
+    /// 1×": `ScreenState::default()` must stay `Default`-derivable)
+    pub scale: f32,
+    /// ancorada na vista (plan §2.7); `None` = not docked. Bookkeeping only:
+    /// the 2D compositing and `dock::layout` are not wired to the renderer
+    /// yet, so this does not change what is drawn.
+    pub dock: Option<nkw_core::dock::DockSlot>,
+}
+
+impl ScreenState {
+    /// The visual scale, with the `0.0` sentinel resolved to 1×.
+    pub fn air_scale(&self) -> f32 {
+        if self.scale > 0.0 { self.scale } else { 1.0 }
+    }
 }
 
 /// One `world.*` command the World runs: name, title (pt-BR), the S9 keys,
@@ -665,7 +688,17 @@ impl World {
             Cmd::Shift(dir) => self.op_shift(dir, now),
             Cmd::Consume => self.op_consume(now),
             Cmd::Expel => self.op_expel(now),
+            // the ARRUMAR context reuses these two names for the arranged
+            // screen's logical size instead of the desk's width preset
+            // (table.rs/world.go bind them in both `normal.world` and
+            // `world.arrange`)
+            Cmd::Narrower if self.arrange.is_some() => {
+                self.arrange_resize(|cur, u| arrange::step_width(cur, u, false), now)
+            }
             Cmd::Narrower => self.op_width(Width::narrower, now),
+            Cmd::Wider if self.arrange.is_some() => {
+                self.arrange_resize(|cur, u| arrange::step_width(cur, u, true), now)
+            }
             Cmd::Wider => self.op_width(Width::wider, now),
             Cmd::Maximize => self.op_maximize(now),
             Cmd::Fullscreen => match self.focus_target().or(self.selected()) {
@@ -677,6 +710,17 @@ impl World {
             },
             Cmd::Pin => self.op_pin(now),
             Cmd::SendRoom(r) => self.op_send_room(r, now),
+            // standing at an empty frame, `Q` removes it (plan §2.2); else
+            // it is the screen's close, as before
+            Cmd::Close if matches!(self.station, Station::Frame(_)) => {
+                let Station::Frame(id) = self.station else {
+                    unreachable!()
+                };
+                self.frames.remove(&id);
+                self.station = Station::Free(self.camera);
+                self.changed(now, Some("moldura removida".into()));
+                Vec::new()
+            }
             Cmd::Close => match self.focus_target().or(self.selected()) {
                 Some(s) => vec![Out::Close(s)],
                 None => Vec::new(),
@@ -707,7 +751,24 @@ impl World {
                 Vec::new()
             }
             Cmd::Grab => self.grab(now),
+            // `[` `]`: ANDAR's hand, or ARRUMAR's depth when it is on
+            Cmd::Nearer if self.arrange.is_some() => {
+                let cam = self.camera;
+                self.arrange_touch(
+                    "mais perto",
+                    move |p| arrange::nearer(&cam, p, arrange::DEPTH_STEP),
+                    now,
+                )
+            }
             Cmd::Nearer => self.hand_step(-1.0, now),
+            Cmd::Farther if self.arrange.is_some() => {
+                let cam = self.camera;
+                self.arrange_touch(
+                    "mais longe",
+                    move |p| arrange::nearer(&cam, p, -arrange::DEPTH_STEP),
+                    now,
+                )
+            }
             Cmd::Farther => self.hand_step(1.0, now),
             Cmd::Library { go } => self.library(go, now),
             Cmd::Recenter => {
@@ -716,6 +777,151 @@ impl World {
                 }
                 Vec::new()
             }
+
+            // --- wave 5: screens in space ---
+            Cmd::NewScreen { at } => {
+                let mut out = self.make_frame(at, now);
+                out.extend(self.action(Action::Palette, now));
+                out
+            }
+            Cmd::Frame { at } => self.make_frame(at, now),
+            Cmd::Arrange => self.action(Action::Arrange, now),
+            Cmd::ArrangeDone => self.action(Action::ArrangeDone, now),
+            Cmd::ArrangeCancel => self.action(Action::Back, now),
+            Cmd::ArrangeNext => self.arrange_step(true, now),
+            Cmd::ArrangePrev => self.arrange_step(false, now),
+            Cmd::Nudge(dir, step) => {
+                let cam = self.camera;
+                self.arrange_touch(
+                    "mover",
+                    move |p| arrange::nudge(&cam, p, dir, step.metres()),
+                    now,
+                )
+            }
+            Cmd::NearerBig => {
+                let cam = self.camera;
+                self.arrange_touch(
+                    "mais perto",
+                    move |p| arrange::nearer(&cam, p, arrange::DEPTH_STEP_BIG),
+                    now,
+                )
+            }
+            Cmd::FartherBig => {
+                let cam = self.camera;
+                self.arrange_touch(
+                    "mais longe",
+                    move |p| arrange::nearer(&cam, p, -arrange::DEPTH_STEP_BIG),
+                    now,
+                )
+            }
+            Cmd::YawLeft { fine } => {
+                let step = if fine {
+                    arrange::YAW_STEP_FINE
+                } else {
+                    arrange::YAW_STEP
+                };
+                self.arrange_touch("girar", move |p| arrange::yaw_by(p, -step), now)
+            }
+            Cmd::YawRight { fine } => {
+                let step = if fine {
+                    arrange::YAW_STEP_FINE
+                } else {
+                    arrange::YAW_STEP
+                };
+                self.arrange_touch("girar", move |p| arrange::yaw_by(p, step), now)
+            }
+            Cmd::PitchUp => self.arrange_touch(
+                "inclinar",
+                |p| arrange::pitch_by(p, arrange::PITCH_STEP),
+                now,
+            ),
+            Cmd::PitchDown => self.arrange_touch(
+                "inclinar",
+                |p| arrange::pitch_by(p, -arrange::PITCH_STEP),
+                now,
+            ),
+            Cmd::Shorter => self.arrange_resize(|cur, u| arrange::step_height(cur, u, false), now),
+            Cmd::Taller => self.arrange_resize(|cur, u| arrange::step_height(cur, u, true), now),
+            Cmd::SizePreset(n) => {
+                self.arrange_resize(move |cur, u| arrange::size_preset(n, cur, u), now)
+            }
+            Cmd::ReadDistance => {
+                let (cam, out) = (self.camera, self.out);
+                self.arrange_touch(
+                    "distância de leitura",
+                    move |p| arrange::read_distance(&cam, &out, FOV_Y, p),
+                    now,
+                )
+            }
+            Cmd::ScaleDown => self.arrange_touch("escala", |p| arrange::rescale(p, -1), now),
+            Cmd::ScaleUp => self.arrange_touch("escala", |p| arrange::rescale(p, 1), now),
+            Cmd::ScaleReset => self.arrange_touch("escala", arrange::scale_reset, now),
+            Cmd::SnapToggle => {
+                if let Some(a) = self.arrange.as_mut() {
+                    a.strong = !a.strong;
+                }
+                Vec::new()
+            }
+            Cmd::MagnetsToggle => {
+                if let Some(a) = self.arrange.as_mut() {
+                    a.magnets_off = !a.magnets_off;
+                }
+                Vec::new()
+            }
+            Cmd::ToTarget(target) => {
+                if let Some(a) = self.arrange.as_mut() {
+                    a.target = target;
+                    self.pending.push(Wish::world(Want::Once));
+                }
+                Vec::new()
+            }
+            Cmd::SelectToggle => {
+                let screen = self
+                    .arrange
+                    .as_ref()
+                    .map(|a| a.screen)
+                    .or_else(|| self.selected());
+                if let Some(id) = screen
+                    && !self.arrange_selection.remove(&id)
+                {
+                    self.arrange_selection.insert(id);
+                }
+                self.pending.push(Wish::world(Want::Once));
+                Vec::new()
+            }
+            Cmd::SelectClear => {
+                self.arrange_selection.clear();
+                self.pending.push(Wish::world(Want::Once));
+                Vec::new()
+            }
+            Cmd::MakeCluster(name) => self.make_cluster(name, now),
+            Cmd::Uncluster => self.uncluster(now),
+            Cmd::Dock => self.op_dock(now),
+            Cmd::LayoutSave(_)
+            | Cmd::LayoutLoad(_)
+            | Cmd::LayoutDelete(_)
+            | Cmd::LayoutRename { .. } => {
+                // arrangement files (plan §2.6) live under
+                // ~/.local/state/nekuroddo/layouts/*.json: real filesystem
+                // I/O that `World` (pure, no FS) cannot do, and that the
+                // `wm` plugin crate would own — outside this task's file
+                // scope. `s` in ARRUMAR reaches this directly, so this is a
+                // visible, honest "not yet" (a toast) rather than a
+                // `todo!()`: panicking the whole compositor on a single
+                // common keystroke would be worse than the silent no-op this
+                // task is otherwise meant to stamp out. See the final report.
+                self.note = Some((
+                    now,
+                    "arranjos: ainda sem armazenamento (onda futura)".into(),
+                ));
+                self.pending.push(Wish::compose(Want::Once));
+                Vec::new()
+            }
+            Cmd::Undo => self.history_undo(now),
+            Cmd::Redo => self.history_redo(now),
+            Cmd::MoveFirst => self.op_move_edge(true, now),
+            Cmd::MoveLast => self.op_move_edge(false, now),
+
             // phase 0's commands are the World's own (`World::command`)
             _ => Vec::new(),
         }
@@ -1126,10 +1332,7 @@ impl World {
         {
             s.size = size;
         }
-        self.wm.entry(id).or_default().air = Some(place);
-        let desk = &mut self.rooms[r].desks[d];
-        desk.screens.retain(|s| *s != id);
-        desk.screens.push(id);
+        self.pin_loose(r, d, id, place);
         let out = self.configure_desk(r, d);
         self.go_to(Station::Air(id), now, false);
         self.changed(now, Some("no ar".into()));
@@ -1141,14 +1344,34 @@ impl World {
             return Vec::new();
         };
         let n = self.stack_len(r, d);
-        self.wm.entry(id).or_default().air = None;
-        let desk = &mut self.rooms[r].desks[d];
-        desk.screens.retain(|s| *s != id);
-        desk.screens.insert(n.min(desk.screens.len()), id);
+        self.unpin_at(r, d, id, n);
         let out = self.configure_desk(r, d);
         self.set_station_desk(r, d, n);
         self.changed(now, Some(width_label(self.rooms[r].desks[d].width).into()));
         out
+    }
+
+    /// Move `id` (already at `(r, d, k)`'s desk) into the air at `place`,
+    /// loose at the end of its desk's screen list (loose screens are always
+    /// last: `place_depth`'s stack-index math assumes it).
+    pub(super) fn pin_loose(&mut self, r: usize, d: usize, id: ScreenId, place: ScreenPlace) {
+        self.wm.entry(id).or_default().air = Some(place);
+        let desk = &mut self.rooms[r].desks[d];
+        desk.screens.retain(|s| *s != id);
+        desk.screens.push(id);
+    }
+
+    /// The inverse of [`Self::pin_loose`]: `id` back into desk `(r, d)` at
+    /// `slot` (clamped), no longer air. `unpin` uses the end of the stack;
+    /// ARRUMAR's `esc` uses the screen's exact original slot.
+    pub(super) fn unpin_at(&mut self, r: usize, d: usize, id: ScreenId, slot: usize) {
+        self.wm.entry(id).or_default().air = None;
+        self.wm.entry(id).or_default().wall = false;
+        for desk in &mut self.rooms[r].desks {
+            desk.screens.retain(|s| *s != id);
+        }
+        let slot = slot.min(self.rooms[r].desks[d].screens.len());
+        self.rooms[r].desks[d].screens.insert(slot, id);
     }
 
     /// `M`: the screen (and its dialogs) goes to a new desk at the end of
@@ -1381,6 +1604,532 @@ impl World {
         }
         self.wm.entry(id).or_default().attention = Some(now + ATTENTION_S);
         self.pending.push(Wish::compose(Want::Once));
+        Vec::new()
+    }
+
+    // ---------------------------------------------------------------
+    // wave 5: screens in space (plan docs/plano-mundo-wm.md §2)
+
+    /// `N` / `ctrl+n`: an armed, empty frame where the camera points (plan
+    /// §2.2). Simplification: the plan's order is wall, desk, then 1.2 m in
+    /// the air, found by a ray from the mira; without that ray-cast wired in
+    /// here, this always uses the "1.2 m ahead of the camera" fallback. The
+    /// frame itself is real (selectable, removable with `Q`, persists in
+    /// `self.frames`); a spawned window landing in it automatically is the
+    /// placement pipeline's job (the `wm` plugin crate), not wired here.
+    fn make_frame(&mut self, at: Option<FramePose>, now: Time) -> Vec<Out> {
+        let pose = at.unwrap_or_else(|| {
+            let p = carry::hand_pose(&self.camera, carry::HAND_DEFAULT);
+            FramePose::from_pose(p.pos, p.yaw)
+        });
+        let id = FrameId(self.next_frame);
+        self.next_frame += 1;
+        let room = self.rooms[self.current_room()].id;
+        self.frames.insert(
+            id,
+            FrameRec {
+                room,
+                pose: ScreenPlace {
+                    center: pose.pos_m(),
+                    yaw: pose.yaw_rad(),
+                    pitch: 0.0,
+                },
+            },
+        );
+        self.go_to(Station::Frame(id), now, false);
+        self.changed(now, Some("moldura".into()));
+        Vec::new()
+    }
+
+    /// `v` / `Effect::ArrangeStart`: the selected screen becomes the subject
+    /// of ARRUMAR. A desk screen is pinned loose right away (like
+    /// `world.pin`), so its working pose is live from the first key; `esc`
+    /// (`arrange_revert`) puts it back exactly, including its original slot.
+    pub(super) fn arrange_start(&mut self, _now: Time) -> Vec<Out> {
+        let Some(screen) = self.selected() else {
+            return Vec::new();
+        };
+        if self.arrange.as_ref().is_some_and(|a| a.screen == screen) {
+            return Vec::new();
+        }
+        let st = self.screen_state(screen);
+        let origin_slot = self
+            .locate(screen)
+            .filter(|_| !self.is_loose(screen))
+            .map(|(r, d, k)| (self.rooms[r].id, d, k));
+        let idx = origin_slot.and_then(|(room, d, k)| self.room_index(room).map(|r| (r, d, k)));
+        let place = st.air.unwrap_or_else(|| {
+            idx.map(|(r, d, k)| self.screen_place(r, d, k))
+                .unwrap_or_else(|| {
+                    // no desk slot either (should not happen: `selected()`
+                    // only ever returns a desk or air station) — fall back
+                    // to right in front of the camera, same as a new frame
+                    let p = carry::hand_pose(&self.camera, carry::HAND_DEFAULT);
+                    ScreenPlace {
+                        center: p.pos,
+                        yaw: p.yaw,
+                        pitch: 0.0,
+                    }
+                })
+        });
+        let mut out = Vec::new();
+        if let Some((r, d, k)) = idx {
+            let size = self.screen_logical(r, d, k);
+            if let Some(s) = self.screens.get_mut(&screen)
+                && (s.size.x <= 0.0 || s.size.y <= 0.0)
+            {
+                s.size = size;
+            }
+            self.pin_loose(r, d, screen, place);
+            out = self.configure_desk(r, d);
+        }
+        let pose = AirPose {
+            pos: place.center,
+            yaw: place.yaw,
+            pitch: place.pitch,
+            scale: st.air_scale(),
+        };
+        let target = match (st.air.is_some(), st.wall) {
+            (true, true) => ArrangeTarget::Wall,
+            (true, false) => ArrangeTarget::Air,
+            (false, _) => ArrangeTarget::Desk,
+        };
+        self.arrange = Some(Arranging {
+            screen,
+            origin_slot,
+            origin_state: st,
+            pose,
+            target,
+            strong: false,
+            magnets_off: false,
+            mark: self.history.mark(),
+        });
+        self.station = Station::Air(screen);
+        self.layout_gen += 1;
+        self.pending.push(Wish::world(Want::Once));
+        out
+    }
+
+    /// `enter` / `Effect::ArrangeCommit`: settle the arranged screen at
+    /// `target`, with the magnets if any are armed (today `magnet::snap` is
+    /// a stub that returns the pose unchanged — this wiring starts working
+    /// for real once it is implemented, without needing to change here).
+    pub(super) fn arrange_commit(&mut self, now: Time) -> Vec<Out> {
+        let Some(a) = self.arrange.take() else {
+            return Vec::new();
+        };
+        let out = match a.target {
+            ArrangeTarget::Air | ArrangeTarget::Wall => {
+                let room = self.current_room();
+                let targets = magnet::Targets {
+                    walls: self.room_walls(room),
+                    desks: self.room_desk_slots(room),
+                    screens: Vec::new(),
+                    eye: self.camera,
+                    one_to_one_m: onetoone::distance(self.out.height_px, 1.0, FOV_Y),
+                    dock: None,
+                    grid_origin: Vec3::ZERO,
+                    eye_height: self.camera.pos.y,
+                };
+                let strength = if a.magnets_off {
+                    Strength::Off
+                } else if a.strong {
+                    Strength::Strong
+                } else {
+                    Strength::Soft
+                };
+                let logical = self
+                    .loose_logical(a.screen)
+                    .unwrap_or_else(|| self.usable());
+                let size_m = logical * onetoone::M_PER_PX * a.pose.scale;
+                let (pose, _snap, _guides) = magnet::snap(&a.pose, size_m, &targets, strength);
+                let st = self.wm.entry(a.screen).or_default();
+                st.air = Some(pose.place());
+                st.wall = a.target == ArrangeTarget::Wall;
+                st.scale = pose.scale;
+                self.go_to(Station::Air(a.screen), now, false);
+                Vec::new()
+            }
+            ArrangeTarget::Desk => self.send_to_nearest_desk(a.screen, a.pose.pos, now),
+        };
+        self.changed(now, Some("arrumado".into()));
+        out
+    }
+
+    /// `esc` / `Effect::ArrangeRevert`: undo back to the mark. Today
+    /// `History::undo_to` always returns empty (a stub), so the screen's own
+    /// state as captured at `arrange_start` (`origin_state`/`origin_slot`)
+    /// is what actually restores it — already correct, and it keeps working
+    /// once `undo_to` is implemented for real (its result just wins first).
+    pub(super) fn arrange_revert(&mut self, now: Time) -> Vec<Out> {
+        let Some(a) = self.arrange.take() else {
+            return Vec::new();
+        };
+        let entries = self.history.undo_to(a.mark);
+        let state = entries
+            .last()
+            .and_then(|e| e.before.get(&a.screen).copied())
+            .unwrap_or(a.origin_state);
+        let mut out = Vec::new();
+        if let Some((room, d, slot)) = a.origin_slot
+            && let Some(r) = self.room_index(room)
+        {
+            self.unpin_at(r, d, a.screen, slot);
+            self.wm.insert(a.screen, state);
+            out = self.configure_desk(r, d);
+            self.set_station_desk(r, d, slot);
+        } else {
+            self.wm.insert(a.screen, state);
+            if let Some(st) = self.station_of(a.screen) {
+                self.station = st;
+            }
+        }
+        self.changed(now, Some("desfeito".into()));
+        out
+    }
+
+    /// `tab` / `shift+tab`: commit the current screen and start arranging
+    /// the next/previous one of the room, without leaving ARRUMAR.
+    fn arrange_step(&mut self, next: bool, now: Time) -> Vec<Out> {
+        let Some(a) = self.arrange.as_ref() else {
+            return Vec::new();
+        };
+        let room = self.current_room();
+        let mut ids: Vec<ScreenId> = self.rooms[room]
+            .desks
+            .iter()
+            .flat_map(|d| d.screens.iter().copied())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        if ids.len() < 2 {
+            return Vec::new();
+        }
+        let Some(i) = ids.iter().position(|id| *id == a.screen) else {
+            return Vec::new();
+        };
+        let j = if next {
+            (i + 1) % ids.len()
+        } else {
+            (i + ids.len() - 1) % ids.len()
+        };
+        let target = ids[j];
+        let mut out = self.arrange_commit(now);
+        if let Some(st) = self.station_of(target) {
+            self.station = st;
+        }
+        out.extend(self.arrange_start(now));
+        out
+    }
+
+    /// Apply `f` to ARRUMAR's working pose (move/rotate/scale/depth), clamp
+    /// it, keep it at a comfortable distance, and push an undo entry when it
+    /// actually changed. A no-op outside ARRUMAR.
+    fn arrange_touch(
+        &mut self,
+        label: &str,
+        f: impl FnOnce(&AirPose) -> AirPose,
+        now: Time,
+    ) -> Vec<Out> {
+        let Some(screen) = self.arrange.as_ref().map(|a| a.screen) else {
+            return Vec::new();
+        };
+        let cam = self.camera;
+        let before = self.wm.get(&screen).copied().unwrap_or_default();
+        let Some(a) = self.arrange.as_mut() else {
+            return Vec::new();
+        };
+        let mut pose = f(&a.pose).clamped();
+        pose = arrange::comfort(&cam, pose);
+        a.pose = pose;
+        if a.target == ArrangeTarget::Desk {
+            a.target = ArrangeTarget::Air;
+        }
+        let st = self.wm.entry(screen).or_default();
+        st.air = Some(pose.place());
+        st.scale = pose.scale;
+        let after = *self.wm.get(&screen).expect("just inserted");
+        if before != after {
+            self.history.push(history::Entry {
+                kind: history::OpKind::Move,
+                label: label.to_string(),
+                subjects: vec![screen.0 as u64],
+                before: ArrangeSnap::from([(screen, before)]),
+                after: ArrangeSnap::from([(screen, after)]),
+                at: now,
+            });
+        }
+        self.layout_gen += 1;
+        self.pending.push(Wish::world(Want::Once));
+        Vec::new()
+    }
+
+    /// `-` `=` `_` `+` `1`..`4` in ARRUMAR: the arranged screen's logical
+    /// size (a `configure`, not a pose). Not undoable yet: the history
+    /// snapshot used by `arrange_touch` is `ScreenState`, which does not
+    /// carry the client's committed size.
+    fn arrange_resize(&mut self, f: impl FnOnce(Vec2, Vec2) -> Vec2, _now: Time) -> Vec<Out> {
+        let usable = self.usable();
+        let Some(screen) = self.arrange.as_ref().map(|a| a.screen) else {
+            return Vec::new();
+        };
+        let cur = self.loose_logical(screen).unwrap_or(usable);
+        let new = f(cur, usable);
+        if new == cur {
+            return Vec::new();
+        }
+        if let Some(a) = self.arrange.as_mut()
+            && a.target == ArrangeTarget::Desk
+        {
+            a.target = ArrangeTarget::Air;
+        }
+        self.layout_gen += 1;
+        self.pending.push(Wish::world(Want::Once));
+        vec![Out::Configure {
+            screen,
+            size: Some(new),
+            fullscreen: None,
+            maximized: None,
+        }]
+    }
+
+    /// The room's back and side walls, for `to_wall` and the magnet target
+    /// (plan §2.8). The hall-facing wall has a door and is left out.
+    fn room_walls(&self, room: usize) -> Vec<carry::WallSeg> {
+        let s = self.slots()[room];
+        let (z0, z1) = match s.side {
+            strip::Side::North => (
+                -(super::HALL_W / 2.0 + super::ROOM_DEPTH),
+                -super::HALL_W / 2.0,
+            ),
+            strip::Side::South => (super::HALL_W / 2.0, super::HALL_W / 2.0 + super::ROOM_DEPTH),
+        };
+        let (back_z, back_normal) = match s.side {
+            strip::Side::North => (z0, Vec2::new(0.0, 1.0)),
+            strip::Side::South => (z1, Vec2::new(0.0, -1.0)),
+        };
+        vec![
+            carry::WallSeg {
+                a: Vec2::new(s.x0, back_z),
+                b: Vec2::new(s.x0 + s.len, back_z),
+                normal: back_normal,
+            },
+            carry::WallSeg {
+                a: Vec2::new(s.x0, z0),
+                b: Vec2::new(s.x0, z1),
+                normal: Vec2::new(1.0, 0.0),
+            },
+            carry::WallSeg {
+                a: Vec2::new(s.x0 + s.len, z0),
+                b: Vec2::new(s.x0 + s.len, z1),
+                normal: Vec2::new(-1.0, 0.0),
+            },
+        ]
+    }
+
+    /// The room's desks as drop targets (plan §2.8, `to_desk`'s nearest
+    /// search).
+    fn room_desk_slots(&self, room: usize) -> Vec<carry::DeskSlot> {
+        let s = self.slots()[room];
+        let room_id = self.rooms[room].id;
+        self.desk_local_xs(room)
+            .into_iter()
+            .enumerate()
+            .map(|(d, x)| {
+                let (pos, _) = layout::desk_root(&s, x);
+                carry::DeskSlot {
+                    room: room_id,
+                    desk: d,
+                    pos,
+                }
+            })
+            .collect()
+    }
+
+    /// `d` (`to_desk`) on commit: the nearest desk of the current room: no
+    /// desk there (an empty room) leaves it in the air, honestly, rather
+    /// than pretending.
+    fn send_to_nearest_desk(&mut self, screen: ScreenId, pos: Vec3, now: Time) -> Vec<Out> {
+        let room = self.current_room();
+        let slots = self.room_desk_slots(room);
+        let Some(best) = slots
+            .iter()
+            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
+            .copied()
+        else {
+            let st = self.wm.entry(screen).or_default();
+            let yaw = st.air.map_or(0.0, |p| p.yaw);
+            st.air = Some(ScreenPlace {
+                center: pos,
+                yaw,
+                pitch: 0.0,
+            });
+            st.wall = false;
+            self.go_to(Station::Air(screen), now, false);
+            return Vec::new();
+        };
+        let Some(r) = self.room_index(best.room) else {
+            return Vec::new();
+        };
+        let d = best.desk;
+        let n = self.stack_len(r, d);
+        self.unpin_at(r, d, screen, n);
+        let out = self.configure_desk(r, d);
+        self.set_station_desk(r, d, n);
+        out
+    }
+
+    /// `c`: group the selection (plus the screen in hand, if any) into a
+    /// named cluster. `h`/`l`/`j`/`k` do not stop at it yet (plan §2.11):
+    /// this only models the membership, real enough for the phone/dump to
+    /// list and for `C` to undo.
+    fn make_cluster(&mut self, name: Option<ShortName>, now: Time) -> Vec<Out> {
+        let current = self
+            .arrange
+            .as_ref()
+            .map(|a| a.screen)
+            .or_else(|| self.selected());
+        let mut screens: Vec<ScreenId> = self.arrange_selection.iter().copied().collect();
+        if let Some(id) = current
+            && !screens.contains(&id)
+        {
+            screens.push(id);
+        }
+        screens.sort();
+        if screens.len() < 2 {
+            self.note = Some((now, "seleciona pelo menos duas telas".into()));
+            self.pending.push(Wish::compose(Want::Once));
+            return Vec::new();
+        }
+        let label = name.map(|n| n.as_str().to_string()).unwrap_or_else(|| {
+            screens
+                .iter()
+                .filter_map(|id| self.screens.get(id))
+                .map(|s| s.app_id.clone())
+                .collect::<Vec<_>>()
+                .join(" + ")
+        });
+        let id = ClusterId(self.next_cluster);
+        self.next_cluster += 1;
+        self.clusters.insert(
+            id,
+            Cluster {
+                name: label.clone(),
+                screens,
+            },
+        );
+        self.arrange_selection.clear();
+        self.station = Station::Cluster(id);
+        self.changed(now, Some(format!("grupo: {label}")));
+        Vec::new()
+    }
+
+    /// `C`: dissolve the cluster the station is at.
+    fn uncluster(&mut self, now: Time) -> Vec<Out> {
+        let Station::Cluster(id) = self.station else {
+            return Vec::new();
+        };
+        let Some(c) = self.clusters.remove(&id) else {
+            return Vec::new();
+        };
+        self.station = c
+            .screens
+            .first()
+            .and_then(|s| self.station_of(*s))
+            .unwrap_or(Station::Free(self.camera));
+        self.changed(now, Some("grupo desfeito".into()));
+        Vec::new()
+    }
+
+    /// `P` (NAV) / `p` (ARRUMAR): toggles docking (plan §2.7). Bookkeeping
+    /// only — `dock::layout` and the 2D compositing of a docked screen are
+    /// not wired to the renderer yet (another wave), so this only records
+    /// the intent and frees/claims a slot.
+    fn op_dock(&mut self, now: Time) -> Vec<Out> {
+        let Some(screen) = self
+            .arrange
+            .as_ref()
+            .map(|a| a.screen)
+            .or_else(|| self.selected())
+        else {
+            return Vec::new();
+        };
+        if self.screen_state(screen).dock.is_some() {
+            self.wm.entry(screen).or_default().dock = None;
+            self.changed(now, Some("desancorada".into()));
+            return Vec::new();
+        }
+        let used: std::collections::BTreeSet<DockSlot> =
+            self.wm.values().filter_map(|s| s.dock).collect();
+        if used.len() >= dock::DOCK_MAX {
+            self.note = Some((now, "máximo de telas ancoradas".into()));
+            self.pending.push(Wish::compose(Want::Once));
+            return Vec::new();
+        }
+        const ORDER: [DockSlot; 8] = [
+            DockSlot::TopLeft,
+            DockSlot::Top,
+            DockSlot::TopRight,
+            DockSlot::Right,
+            DockSlot::BottomRight,
+            DockSlot::Bottom,
+            DockSlot::BottomLeft,
+            DockSlot::Left,
+        ];
+        let Some(slot) = ORDER.into_iter().find(|s| !used.contains(s)) else {
+            return Vec::new();
+        };
+        self.wm.entry(screen).or_default().dock = Some(slot);
+        self.changed(now, Some("ancorada".into()));
+        Vec::new()
+    }
+
+    /// `u`: also outside ARRUMAR (plan §2.9).
+    fn history_undo(&mut self, now: Time) -> Vec<Out> {
+        let Some(e) = self.history.undo() else {
+            return Vec::new();
+        };
+        let (snap, label) = (e.before.clone(), e.label.clone());
+        for (id, st) in &snap {
+            self.wm.insert(*id, *st);
+        }
+        self.changed(now, Some(format!("desfeito: {label}")));
+        Vec::new()
+    }
+
+    /// `ctrl+r`.
+    fn history_redo(&mut self, now: Time) -> Vec<Out> {
+        let Some(e) = self.history.redo() else {
+            return Vec::new();
+        };
+        let (snap, label) = (e.after.clone(), e.label.clone());
+        for (id, st) in &snap {
+            self.wm.insert(*id, *st);
+        }
+        self.changed(now, Some(format!("refeito: {label}")));
+        Vec::new()
+    }
+
+    /// niri's `move-column-to-first/last`: the whole desk at the station
+    /// moves to the front/back of its room's queue (not a `world.*` name
+    /// Go registers yet; see the Rust fallback keymap, `router/table.rs`).
+    fn op_move_edge(&mut self, first: bool, now: Time) -> Vec<Out> {
+        let Some((r, d)) = self.station_desk() else {
+            return Vec::new();
+        };
+        let n = self.rooms[r].desks.len();
+        let target = if first { 0 } else { n - 1 };
+        if d == target {
+            return Vec::new();
+        }
+        let slot = match self.station {
+            Station::Desk { slot, .. } => slot,
+            _ => 0,
+        };
+        let desk = self.rooms[r].desks.remove(d);
+        self.rooms[r].desks.insert(target, desk);
+        self.set_station_desk(r, target, slot);
+        self.changed(now, None);
         Vec::new()
     }
 }

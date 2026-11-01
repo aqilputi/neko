@@ -615,7 +615,11 @@ impl Nkw {
                         Kind::Unspecified,
                     )));
                 }
-                Layer::Dock { id, rect, scale: ds } => {
+                Layer::Dock {
+                    id,
+                    rect,
+                    scale: ds,
+                } => {
                     // 2D at its rect: the window's geometry (not its CSD
                     // shadow) lands on the rect's top-left; at 1× the
                     // buffer is copied 1:1 (the FOCO pixel rule)

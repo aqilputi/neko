@@ -12,7 +12,7 @@ use smithay::input::keyboard::{FilterResult, Keycode};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 
-use nkw_core::{CatId, Target};
+use nkw_core::{CatId, Dir, Target};
 
 use crate::router::{KeyEv, KeyMods, Route};
 use crate::state::Nkw;
@@ -59,6 +59,30 @@ impl Nkw {
                 self.pointer_button(event.button_code(), event.state(), Event::time(&event));
             }
             InputEvent::PointerAxis { event } => {
+                // niri parity: outside FOCO, the wheel steps to the next/
+                // previous desk (`Mod+WheelScrollDown/Up`) instead of
+                // reaching a client — there is no client under the pointer
+                // there anyway (NAV/ANDAR/etc. render the 3D world, not a 2D
+                // surface). The sign is a best guess (the common "wheel down
+                // = forward" convention); flip the comparison below if it
+                // turns out backwards on real hardware. A 150 ms cooldown
+                // (`World::wheel_nav_ready`) keeps one physical click to one
+                // step.
+                let vertical = event.amount(Axis::Vertical).unwrap_or_else(|| {
+                    event.amount_v120(Axis::Vertical).unwrap_or(0.0) * 15.0 / 120.0
+                });
+                if self.world.mode().focus().is_none() && vertical.abs() > 0.1 {
+                    let now = self.now();
+                    if self.world.wheel_nav_ready(now) {
+                        let dir = if vertical > 0.0 {
+                            Dir::Right
+                        } else {
+                            Dir::Left
+                        };
+                        self.run_cmd(Cmd::Move(dir));
+                    }
+                    return;
+                }
                 let source = event.source();
                 let mut frame = AxisFrame::new(Event::time(&event)).source(source);
                 for axis in [Axis::Horizontal, Axis::Vertical] {
@@ -217,6 +241,9 @@ impl Nkw {
             && counts
         {
             match t {
+                Taken::Command(name, _args) if name == "world.screenshot" => {
+                    self.take_screenshot();
+                }
                 Taken::Command(name, args) => self.dispatch(&name, &args),
                 Taken::Text(ev) => {
                     let now = self.now();
@@ -243,6 +270,36 @@ impl Nkw {
         let now = self.now();
         let outs = self.world.command(c, now);
         self.apply(outs);
+        self.wake();
+    }
+
+    /// `world.screenshot` (plan §1.3): saves the composed frame as a PNG,
+    /// reusing `--shot`'s own mechanism (`Nkw::shots`, `frame.rs`'s
+    /// read-back + `shot::write_png`). A simplification: this always
+    /// captures the whole output, like `--shot`; cropping to just the
+    /// selected screen's texture (the plan's "screen" target) is separate,
+    /// bigger work — nothing exports a single screen's texture today, only
+    /// the composed frame. No Go-side keybinding exists for this yet (it is
+    /// phase B of the plan, not registered in `internal/app/world.go`): only
+    /// the Rust fallback keymap (`router/table.rs`) binds a key to it so far.
+    pub fn take_screenshot(&mut self) {
+        let dir = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("Imagens/nekuroddo");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let path = dir.join(format!("nkw-{stamp}.png"));
+        self.shots.push(path.clone());
+        let now = self.now();
+        self.ext.overlay.toast(
+            &format!("captura: {}", path.display()),
+            crate::ext::ToastKind::Info,
+            2000,
+            now,
+        );
         self.wake();
     }
 }

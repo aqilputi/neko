@@ -6,13 +6,16 @@
 use std::collections::BTreeMap;
 
 use glam::{Vec2, Vec3};
+use nkw_core::arrange::{self, AirPose};
 use nkw_core::collide::{Aabb, Door as Gap, Grid, WalkInput, WalkParams, Walker, Wall};
+use nkw_core::history::{self, History};
 use nkw_core::layout;
 use nkw_core::strip::{self, Desk, Dir, RoomSlot, Side, Spot, Station, Width};
 use nkw_core::walk_exit;
 use nkw_core::{
-    Action, CatId, Effect, Machine, Mode, ObjectAction, ObjectId, OneToOne, Output, Pose, RoomId,
-    ScreenId, ScreenPlace, TalkPurpose, Target, Time, Tween, TweenOpts, Want, Wish, onetoone,
+    Action, CatId, ClusterId, Effect, FrameId, Machine, Mode, ObjectAction, ObjectId, OneToOne,
+    Output, Pose, RoomId, ScreenId, ScreenPlace, TalkPurpose, Target, Time, Tween, TweenOpts, Want,
+    Wish, onetoone,
 };
 use serde::Serialize;
 
@@ -150,6 +153,163 @@ pub enum Cmd {
         key: ShortName,
         value: ShortName,
     },
+
+    // --- wave 5: screens in space (plan docs/plano-mundo-wm.md §2) ---
+    /// `N`: an armed frame where the camera points, then opens COMANDOS.
+    NewScreen {
+        at: Option<FramePose>,
+    },
+    /// `ctrl+n`: just the frame, no palette.
+    Frame {
+        at: Option<FramePose>,
+    },
+    /// `v`: ARRUMAR on the selected screen.
+    Arrange,
+    /// `enter` in ARRUMAR.
+    ArrangeDone,
+    /// `esc` in ARRUMAR: undo back to the mark.
+    ArrangeCancel,
+    /// `tab` / `shift+tab` in ARRUMAR: arrange the next/previous screen of
+    /// the room without leaving the mode.
+    ArrangeNext,
+    ArrangePrev,
+    /// `h j k l` (+ `H J K L` big, `alt+h/j/k/l` fine) in ARRUMAR.
+    Nudge(Dir, NudgeStep),
+    /// `{` `}` in ARRUMAR (`[` `]` reuse `Cmd::Nearer`/`Cmd::Farther`, which
+    /// already exist for the screen in hand).
+    NearerBig,
+    FartherBig,
+    /// `q` / `e` (+ `alt+q` / `alt+e` fine) in ARRUMAR.
+    YawLeft {
+        fine: bool,
+    },
+    YawRight {
+        fine: bool,
+    },
+    /// `ctrl+k` / `ctrl+j` in ARRUMAR.
+    PitchUp,
+    PitchDown,
+    /// `_` / `+` in ARRUMAR (height presets; width reuses `Cmd::Narrower`/
+    /// `Cmd::Wider`).
+    Shorter,
+    Taller,
+    /// `1`..`4` in ARRUMAR.
+    SizePreset(u8),
+    /// `0` in ARRUMAR.
+    ReadDistance,
+    /// `ctrl+-` `ctrl+=` `ctrl+0` in ARRUMAR.
+    ScaleDown,
+    ScaleUp,
+    ScaleReset,
+    /// `g` / `x` in ARRUMAR (and during a mouse drag, once that exists).
+    SnapToggle,
+    MagnetsToggle,
+    /// `w` `d` `a` in ARRUMAR.
+    ToTarget(ArrangeTarget),
+    /// `space` in ARRUMAR.
+    SelectToggle,
+    /// `world.select_clear` (NAV).
+    SelectClear,
+    /// `c` / `C` in ARRUMAR.
+    MakeCluster(Option<ShortName>),
+    Uncluster,
+    /// `P` (NAV) / `p` (ARRUMAR): ancora na vista / desancora.
+    Dock,
+    /// `s` in ARRUMAR, and the palette/phone's Arranjos app.
+    LayoutSave(ShortName),
+    LayoutLoad(ShortName),
+    LayoutDelete(ShortName),
+    LayoutRename {
+        name: ShortName,
+        to: ShortName,
+    },
+    /// `u` / `ctrl+r`: also outside ARRUMAR, in NAV.
+    Undo,
+    Redo,
+    /// niri's `move-column-to-first/last`: the selected desk to the front or
+    /// the back of its room's queue (not a Go-registered name yet: no
+    /// default key ships from the core's keymap, only the Rust fallback).
+    MoveFirst,
+    MoveLast,
+}
+
+/// `h j k l` in ARRUMAR: how far one press moves (plan §2.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NudgeStep {
+    Normal,
+    Big,
+    Fine,
+}
+
+impl NudgeStep {
+    fn metres(self) -> f32 {
+        match self {
+            NudgeStep::Normal => arrange::NUDGE,
+            NudgeStep::Big => arrange::NUDGE_BIG,
+            NudgeStep::Fine => arrange::NUDGE_FINE,
+        }
+    }
+}
+
+/// `w` `d` `a` in ARRUMAR: where the arranged screen rests when confirmed
+/// (plan §2.1, §2.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrangeTarget {
+    Air,
+    Wall,
+    Desk,
+}
+
+/// `world.new_screen`/`world.frame`'s `at` argument: `x_mm,y_mm,z_mm,yaw_mdeg`
+/// (the same units as `persist::Air`, so it round-trips with scripts and the
+/// palette). Kept as integers (not metres/radians) so `Cmd` can still derive
+/// `Eq` — `f32` cannot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FramePose {
+    pos_mm: [i32; 3],
+    yaw_mdeg: i32,
+}
+
+impl FramePose {
+    pub(crate) fn from_pose(pos: Vec3, yaw: f32) -> FramePose {
+        let mm = |v: f32| (v * 1000.0).round() as i32;
+        FramePose {
+            pos_mm: [mm(pos.x), mm(pos.y), mm(pos.z)],
+            yaw_mdeg: (yaw.to_degrees() * 1000.0).round() as i32,
+        }
+    }
+
+    fn parse(s: &str) -> Option<FramePose> {
+        let mut it = s.split(',').map(str::trim);
+        let n = |s: &str| s.parse::<i32>().ok();
+        let pos_mm = [n(it.next()?)?, n(it.next()?)?, n(it.next()?)?];
+        let yaw_mdeg = n(it.next()?)?;
+        if it.next().is_some() {
+            return None;
+        }
+        Some(FramePose { pos_mm, yaw_mdeg })
+    }
+
+    fn arg(&self) -> String {
+        format!(
+            "{},{},{},{}",
+            self.pos_mm[0], self.pos_mm[1], self.pos_mm[2], self.yaw_mdeg
+        )
+    }
+
+    /// Metres.
+    pub(crate) fn pos_m(&self) -> Vec3 {
+        Vec3::new(
+            self.pos_mm[0] as f32 / 1000.0,
+            self.pos_mm[1] as f32 / 1000.0,
+            self.pos_mm[2] as f32 / 1000.0,
+        )
+    }
+
+    /// Radians.
+    pub(crate) fn yaw_rad(&self) -> f32 {
+        (self.yaw_mdeg as f32 / 1000.0).to_radians()
+    }
 }
 
 impl Cmd {
@@ -226,6 +386,74 @@ impl Cmd {
                 value: ShortName::new(args.get("value")?.trim()),
             },
             GOTO_SCREEN => Cmd::GotoScreen(ScreenId(args.get("screen")?.parse().ok()?)),
+            // --- wave 5: screens in space ---
+            "world.new_screen" => Cmd::NewScreen {
+                at: args.get("at").and_then(|s| FramePose::parse(s)),
+            },
+            "world.frame" => Cmd::Frame {
+                at: args.get("at").and_then(|s| FramePose::parse(s)),
+            },
+            "world.arrange" => Cmd::Arrange,
+            "world.arrange_done" => Cmd::ArrangeDone,
+            "world.arrange_cancel" => Cmd::ArrangeCancel,
+            "world.arrange_next" => Cmd::ArrangeNext,
+            "world.arrange_prev" => Cmd::ArrangePrev,
+            "world.nudge_left" => Cmd::Nudge(Dir::Left, NudgeStep::Normal),
+            "world.nudge_right" => Cmd::Nudge(Dir::Right, NudgeStep::Normal),
+            "world.nudge_up" => Cmd::Nudge(Dir::Up, NudgeStep::Normal),
+            "world.nudge_down" => Cmd::Nudge(Dir::Down, NudgeStep::Normal),
+            "world.nudge_left_big" => Cmd::Nudge(Dir::Left, NudgeStep::Big),
+            "world.nudge_right_big" => Cmd::Nudge(Dir::Right, NudgeStep::Big),
+            "world.nudge_up_big" => Cmd::Nudge(Dir::Up, NudgeStep::Big),
+            "world.nudge_down_big" => Cmd::Nudge(Dir::Down, NudgeStep::Big),
+            "world.nudge_left_fine" => Cmd::Nudge(Dir::Left, NudgeStep::Fine),
+            "world.nudge_right_fine" => Cmd::Nudge(Dir::Right, NudgeStep::Fine),
+            "world.nudge_up_fine" => Cmd::Nudge(Dir::Up, NudgeStep::Fine),
+            "world.nudge_down_fine" => Cmd::Nudge(Dir::Down, NudgeStep::Fine),
+            "world.nearer_big" => Cmd::NearerBig,
+            "world.farther_big" => Cmd::FartherBig,
+            "world.yaw_left" => Cmd::YawLeft { fine: false },
+            "world.yaw_right" => Cmd::YawRight { fine: false },
+            "world.yaw_left_fine" => Cmd::YawLeft { fine: true },
+            "world.yaw_right_fine" => Cmd::YawRight { fine: true },
+            "world.pitch_up" => Cmd::PitchUp,
+            "world.pitch_down" => Cmd::PitchDown,
+            "world.shorter" => Cmd::Shorter,
+            "world.taller" => Cmd::Taller,
+            "world.size_preset_1" => Cmd::SizePreset(1),
+            "world.size_preset_2" => Cmd::SizePreset(2),
+            "world.size_preset_3" => Cmd::SizePreset(3),
+            "world.size_preset_4" => Cmd::SizePreset(4),
+            "world.read_distance" => Cmd::ReadDistance,
+            "world.scale_down" => Cmd::ScaleDown,
+            "world.scale_up" => Cmd::ScaleUp,
+            "world.scale_reset" => Cmd::ScaleReset,
+            "world.snap_toggle" => Cmd::SnapToggle,
+            "world.magnets_toggle" => Cmd::MagnetsToggle,
+            "world.to_wall" => Cmd::ToTarget(ArrangeTarget::Wall),
+            "world.to_desk" => Cmd::ToTarget(ArrangeTarget::Desk),
+            "world.to_air" => Cmd::ToTarget(ArrangeTarget::Air),
+            "world.select_toggle" => Cmd::SelectToggle,
+            "world.select_clear" => Cmd::SelectClear,
+            "world.cluster" => Cmd::MakeCluster(
+                args.get("name")
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(ShortName::new),
+            ),
+            "world.uncluster" => Cmd::Uncluster,
+            "world.dock" => Cmd::Dock,
+            "world.layout_save" => Cmd::LayoutSave(ShortName::new(args.get("name")?.trim())),
+            "world.layout_load" => Cmd::LayoutLoad(ShortName::new(args.get("name")?.trim())),
+            "world.layout_delete" => Cmd::LayoutDelete(ShortName::new(args.get("name")?.trim())),
+            "world.layout_rename" => Cmd::LayoutRename {
+                name: ShortName::new(args.get("name")?.trim()),
+                to: ShortName::new(args.get("to")?.trim()),
+            },
+            "world.undo" => Cmd::Undo,
+            "world.redo" => Cmd::Redo,
+            "world.move_first" => Cmd::MoveFirst,
+            "world.move_last" => Cmd::MoveLast,
             n => {
                 if let Some(k) = n.strip_prefix("world.room_") {
                     let k: u8 = k.parse().ok().filter(|k| (1..=9).contains(k))?;
@@ -341,6 +569,110 @@ impl Cmd {
                     ]),
                 );
             }
+            // --- wave 5: screens in space ---
+            Cmd::NewScreen { at } => {
+                let mut a = BTreeMap::new();
+                if let Some(p) = at {
+                    a.insert("at".to_string(), p.arg());
+                }
+                return ("world.new_screen", a);
+            }
+            Cmd::Frame { at } => {
+                let mut a = BTreeMap::new();
+                if let Some(p) = at {
+                    a.insert("at".to_string(), p.arg());
+                }
+                return ("world.frame", a);
+            }
+            Cmd::Arrange => "world.arrange",
+            Cmd::ArrangeDone => "world.arrange_done",
+            Cmd::ArrangeCancel => "world.arrange_cancel",
+            Cmd::ArrangeNext => "world.arrange_next",
+            Cmd::ArrangePrev => "world.arrange_prev",
+            Cmd::Nudge(Dir::Left, NudgeStep::Normal) => "world.nudge_left",
+            Cmd::Nudge(Dir::Right, NudgeStep::Normal) => "world.nudge_right",
+            Cmd::Nudge(Dir::Up, NudgeStep::Normal) => "world.nudge_up",
+            Cmd::Nudge(Dir::Down, NudgeStep::Normal) => "world.nudge_down",
+            Cmd::Nudge(Dir::Left, NudgeStep::Big) => "world.nudge_left_big",
+            Cmd::Nudge(Dir::Right, NudgeStep::Big) => "world.nudge_right_big",
+            Cmd::Nudge(Dir::Up, NudgeStep::Big) => "world.nudge_up_big",
+            Cmd::Nudge(Dir::Down, NudgeStep::Big) => "world.nudge_down_big",
+            Cmd::Nudge(Dir::Left, NudgeStep::Fine) => "world.nudge_left_fine",
+            Cmd::Nudge(Dir::Right, NudgeStep::Fine) => "world.nudge_right_fine",
+            Cmd::Nudge(Dir::Up, NudgeStep::Fine) => "world.nudge_up_fine",
+            Cmd::Nudge(Dir::Down, NudgeStep::Fine) => "world.nudge_down_fine",
+            Cmd::NearerBig => "world.nearer_big",
+            Cmd::FartherBig => "world.farther_big",
+            Cmd::YawLeft { fine: false } => "world.yaw_left",
+            Cmd::YawRight { fine: false } => "world.yaw_right",
+            Cmd::YawLeft { fine: true } => "world.yaw_left_fine",
+            Cmd::YawRight { fine: true } => "world.yaw_right_fine",
+            Cmd::PitchUp => "world.pitch_up",
+            Cmd::PitchDown => "world.pitch_down",
+            Cmd::Shorter => "world.shorter",
+            Cmd::Taller => "world.taller",
+            Cmd::SizePreset(n) => {
+                return (
+                    match *n {
+                        1 => "world.size_preset_1",
+                        2 => "world.size_preset_2",
+                        3 => "world.size_preset_3",
+                        _ => "world.size_preset_4",
+                    },
+                    BTreeMap::new(),
+                );
+            }
+            Cmd::ReadDistance => "world.read_distance",
+            Cmd::ScaleDown => "world.scale_down",
+            Cmd::ScaleUp => "world.scale_up",
+            Cmd::ScaleReset => "world.scale_reset",
+            Cmd::SnapToggle => "world.snap_toggle",
+            Cmd::MagnetsToggle => "world.magnets_toggle",
+            Cmd::ToTarget(ArrangeTarget::Wall) => "world.to_wall",
+            Cmd::ToTarget(ArrangeTarget::Desk) => "world.to_desk",
+            Cmd::ToTarget(ArrangeTarget::Air) => "world.to_air",
+            Cmd::SelectToggle => "world.select_toggle",
+            Cmd::SelectClear => "world.select_clear",
+            Cmd::MakeCluster(name) => {
+                let mut a = BTreeMap::new();
+                if let Some(n) = name {
+                    a.insert("name".to_string(), n.as_str().to_string());
+                }
+                return ("world.cluster", a);
+            }
+            Cmd::Uncluster => "world.uncluster",
+            Cmd::Dock => "world.dock",
+            Cmd::LayoutSave(name) => {
+                return (
+                    "world.layout_save",
+                    BTreeMap::from([("name".to_string(), name.as_str().to_string())]),
+                );
+            }
+            Cmd::LayoutLoad(name) => {
+                return (
+                    "world.layout_load",
+                    BTreeMap::from([("name".to_string(), name.as_str().to_string())]),
+                );
+            }
+            Cmd::LayoutDelete(name) => {
+                return (
+                    "world.layout_delete",
+                    BTreeMap::from([("name".to_string(), name.as_str().to_string())]),
+                );
+            }
+            Cmd::LayoutRename { name, to } => {
+                return (
+                    "world.layout_rename",
+                    BTreeMap::from([
+                        ("name".to_string(), name.as_str().to_string()),
+                        ("to".to_string(), to.as_str().to_string()),
+                    ]),
+                );
+            }
+            Cmd::Undo => "world.undo",
+            Cmd::Redo => "world.redo",
+            Cmd::MoveFirst => "world.move_first",
+            Cmd::MoveLast => "world.move_last",
         };
         (n, BTreeMap::new())
     }
@@ -453,6 +785,50 @@ pub struct Opts {
     pub reduced_motion: bool,
 }
 
+/// ARRUMAR's live state (plan §2.5): the screen being arranged, where it
+/// came from (so `esc` puts it back exactly), its working pose and where it
+/// is headed.
+#[derive(Clone, Debug, PartialEq)]
+struct Arranging {
+    screen: ScreenId,
+    /// `Some`: it was part of a desk's stack at this slot before ARRUMAR
+    /// pinned it loose; `None`: it was already air/wall
+    origin_slot: Option<(RoomId, usize, usize)>,
+    /// its `ScreenState` before ARRUMAR touched it (for `esc`)
+    origin_state: ScreenState,
+    pose: AirPose,
+    target: ArrangeTarget,
+    /// `g`: strong snap armed
+    strong: bool,
+    /// `x`: no magnets while true
+    magnets_off: bool,
+    /// `history.mark()` at entry (for a future `undo_to`-based revert, once
+    /// `nkw_core::history::History::undo_to` does more than return empty)
+    mark: u64,
+}
+
+/// A rigid group of air screens: one station (`Station::Cluster`). Only the
+/// membership is modelled here; `h`/`l`/`j`/`k` do not yet stop at it or walk
+/// its members (plan §2.11, not in this wave's scope).
+#[derive(Clone, Debug, PartialEq)]
+struct Cluster {
+    name: String,
+    screens: Vec<ScreenId>,
+}
+
+/// An empty frame (plan §2.2): a placeholder in the world, selectable and
+/// removable. The placement pipeline that would make the next spawned
+/// window land here lives in the `wm` plugin crate, outside `World`; this
+/// only models the frame object itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct FrameRec {
+    room: RoomId,
+    pose: ScreenPlace,
+}
+
+/// The screens touched by one undo/redo-able operation (plan §2.9).
+type ArrangeSnap = BTreeMap<ScreenId, ScreenState>;
+
 /// The world.
 #[derive(Clone, Debug)]
 pub struct World {
@@ -505,6 +881,21 @@ pub struct World {
     last_frame: Time,
     /// the walls of `line_of_sight`, per layout (S22)
     los: sight::LosCache,
+    /// ARRUMAR (wave 5), while it is on
+    arrange: Option<Arranging>,
+    /// `space` / `world.select_clear`: screens marked for the next cluster
+    arrange_selection: std::collections::BTreeSet<ScreenId>,
+    /// rigid groups of air screens
+    clusters: BTreeMap<ClusterId, Cluster>,
+    next_cluster: u32,
+    /// empty frames (plan §2.2)
+    frames: BTreeMap<FrameId, FrameRec>,
+    next_frame: u32,
+    /// undo/redo of layout operations (plan §2.9)
+    history: History<ArrangeSnap>,
+    /// the last mouse wheel step that moved the station outside FOCO (niri
+    /// parity: a 150 ms cooldown so one physical scroll click is one step)
+    wheel_nav_at: Time,
 }
 
 impl World {
@@ -549,6 +940,14 @@ impl World {
             vignette: (f64::NEG_INFINITY, false, 0.0),
             last_frame: f64::NEG_INFINITY,
             los: Default::default(),
+            arrange: None,
+            arrange_selection: Default::default(),
+            clusters: BTreeMap::new(),
+            next_cluster: 0,
+            frames: BTreeMap::new(),
+            next_frame: 0,
+            history: History::new(history::HISTORY_CAP),
+            wheel_nav_at: f64::NEG_INFINITY,
         };
         w.next_room = w.rooms.iter().map(|r| r.id.0 + 1).max().unwrap_or(0);
         w.station = match w.rooms.first().map(|r| r.desks.is_empty()) {
@@ -697,6 +1096,27 @@ impl World {
             Station::Door(room) => Some(self.room_entry_pose(self.room_index(room)?)),
             // a screen in the air: its 1:1 pose, aligned to its normal
             Station::Air(s) => self.one_to_one(s).map(|o| o.pose),
+            // an empty frame (plan §2.2): stand HAND_DEFAULT back from it,
+            // facing it (the mirror of `carry::hand_pose`)
+            Station::Frame(id) => self.frames.get(&id).map(|f| {
+                let facing = Pose::new(f.pose.center, f.pose.yaw, 0.0).heading() * HAND_DEFAULT;
+                Pose::new(
+                    f.pose.center - Vec3::new(facing.x, 0.0, facing.y),
+                    f.pose.yaw,
+                    0.0,
+                )
+            }),
+            // a cluster (plan §2.11): not a station of its own yet (`h`/`l`
+            // do not stop here), so this just looks at its first member —
+            // best-effort, used only when something navigates here directly
+            Station::Cluster(id) => self
+                .clusters
+                .get(&id)
+                .and_then(|c| c.screens.first())
+                .and_then(|s| self.one_to_one(*s))
+                .map(|o| o.pose),
+            // a docked screen: the camera does not move (it is at you)
+            Station::Dock(_) => None,
             _ => None,
         }
     }
@@ -1125,6 +1545,11 @@ impl World {
                     }
                 }
                 Effect::Object(id, a) => out.push(Out::Object(id, a)),
+                // ARRUMAR (wave 5): derived effects the World settles itself
+                // (the WM has no business with 3D poses)
+                Effect::ArrangeStart => out.extend(self.arrange_start(now)),
+                Effect::ArrangeCommit => out.extend(self.arrange_commit(now)),
+                Effect::ArrangeRevert => out.extend(self.arrange_revert(now)),
                 other => out.push(Out::Effect(other)),
             }
         }
@@ -1327,6 +1752,19 @@ impl World {
     /// Ask for a frame (a commit, the HUD …).
     pub fn want(&mut self, w: Wish) {
         self.pending.push(w);
+    }
+
+    /// niri parity: the mouse wheel outside FOCO steps to the next/previous
+    /// desk (like `Mod+WheelScrollDown/Up`). At most one step per 150 ms, so
+    /// one physical scroll click is one step, not a handful. `true`: the
+    /// caller should act on this tick; `false`: too soon, ignore it.
+    pub fn wheel_nav_ready(&mut self, now: Time) -> bool {
+        const COOLDOWN_S: Time = 0.15;
+        if now - self.wheel_nav_at < COOLDOWN_S {
+            return false;
+        }
+        self.wheel_nav_at = now;
+        true
     }
 
     /// Everything that wants frames now.
@@ -2573,6 +3011,172 @@ mod tests {
             None,
             "the cats'"
         );
+    }
+
+    /// Wave 5 (screens in space): every new `Cmd` round-trips through its S9
+    /// name, independent of whatever `nkw-core`'s still-stub geometry
+    /// (`arrange`/`magnet`/`history`) does with it.
+    #[test]
+    fn wave5_command_names_round_trip() {
+        let all = [
+            Cmd::NewScreen { at: None },
+            Cmd::NewScreen {
+                at: FramePose::parse("100,200,300,45000"),
+            },
+            Cmd::Frame { at: None },
+            Cmd::Frame {
+                at: FramePose::parse("-100,0,1200,0"),
+            },
+            Cmd::Arrange,
+            Cmd::ArrangeDone,
+            Cmd::ArrangeCancel,
+            Cmd::ArrangeNext,
+            Cmd::ArrangePrev,
+            Cmd::Nudge(Dir::Left, NudgeStep::Normal),
+            Cmd::Nudge(Dir::Right, NudgeStep::Big),
+            Cmd::Nudge(Dir::Up, NudgeStep::Fine),
+            Cmd::Nudge(Dir::Down, NudgeStep::Normal),
+            Cmd::NearerBig,
+            Cmd::FartherBig,
+            Cmd::YawLeft { fine: false },
+            Cmd::YawRight { fine: true },
+            Cmd::PitchUp,
+            Cmd::PitchDown,
+            Cmd::Shorter,
+            Cmd::Taller,
+            Cmd::SizePreset(1),
+            Cmd::SizePreset(4),
+            Cmd::ReadDistance,
+            Cmd::ScaleDown,
+            Cmd::ScaleUp,
+            Cmd::ScaleReset,
+            Cmd::SnapToggle,
+            Cmd::MagnetsToggle,
+            Cmd::ToTarget(ArrangeTarget::Wall),
+            Cmd::ToTarget(ArrangeTarget::Desk),
+            Cmd::ToTarget(ArrangeTarget::Air),
+            Cmd::SelectToggle,
+            Cmd::SelectClear,
+            Cmd::MakeCluster(None),
+            Cmd::MakeCluster(Some(ShortName::new("firefox + foot"))),
+            Cmd::Uncluster,
+            Cmd::Dock,
+            Cmd::LayoutSave(ShortName::new("bravo")),
+            Cmd::LayoutLoad(ShortName::new("bravo")),
+            Cmd::LayoutDelete(ShortName::new("bravo")),
+            Cmd::LayoutRename {
+                name: ShortName::new("bravo"),
+                to: ShortName::new("charlie"),
+            },
+            Cmd::Undo,
+            Cmd::Redo,
+            Cmd::MoveFirst,
+            Cmd::MoveLast,
+        ];
+        for c in all {
+            let (n, a) = c.name();
+            assert_eq!(Cmd::from_name(n, &a), Some(c), "{n}");
+        }
+    }
+
+    /// Entering ARRUMAR pins a desk screen loose right away (so its working
+    /// pose is live); asking for the desk target and confirming puts it back
+    /// on a desk — true regardless of whatever `arrange::nudge`/`rescale`
+    /// end up doing to the pose itself.
+    #[test]
+    fn arrange_pins_loose_and_to_desk_commits_back() {
+        let mut w = three();
+        let now = 0.0;
+        assert!(!w.is_loose(ScreenId(1)));
+        w.command(Cmd::Arrange, now);
+        assert_eq!(w.mode().label(), "ARRUMAR");
+        assert_eq!(w.station, Station::Air(ScreenId(1)));
+        assert!(w.is_loose(ScreenId(1)), "pinned loose on entry");
+        assert_eq!(
+            w.rooms[0].desks[0].screens,
+            [ScreenId(1)],
+            "stays on its own desk, just loose"
+        );
+        w.command(Cmd::ToTarget(ArrangeTarget::Desk), now);
+        w.command(Cmd::ArrangeDone, now);
+        assert_eq!(w.mode().label(), "NAVEGAR");
+        assert!(!w.is_loose(ScreenId(1)), "back on a desk");
+        assert!(
+            w.rooms[0]
+                .desks
+                .iter()
+                .any(|d| d.screens.contains(&ScreenId(1)))
+        );
+    }
+
+    /// `esc` undoes the whole ARRUMAR session: the screen goes back to its
+    /// exact original slot.
+    #[test]
+    fn arrange_cancel_restores_the_exact_slot() {
+        let mut w = three();
+        let now = 0.0;
+        w.command(Cmd::Arrange, now);
+        w.command(Cmd::ToTarget(ArrangeTarget::Air), now);
+        w.command(Cmd::ArrangeCancel, now);
+        assert_eq!(w.mode().label(), "NAVEGAR");
+        assert!(!w.is_loose(ScreenId(1)), "esc restores the desk slot");
+        assert_eq!(w.rooms[0].desks[0].screens, [ScreenId(1)]);
+    }
+
+    /// niri's `move-column-to-first/last`.
+    #[test]
+    fn move_first_and_last_reorder_the_desk() {
+        let mut w = three();
+        let now = 0.0;
+        let ids = |w: &World| -> Vec<Vec<u32>> {
+            w.rooms[0]
+                .desks
+                .iter()
+                .map(|d| d.screens.iter().map(|s| s.0).collect())
+                .collect()
+        };
+        w.command(Cmd::MoveLast, now);
+        assert_eq!(ids(&w), [vec![2], vec![3], vec![1]]);
+        assert_eq!(
+            w.station,
+            Station::Desk {
+                room: w.rooms[0].id,
+                desk: 2,
+                slot: 0
+            }
+        );
+        w.command(Cmd::MoveFirst, now);
+        assert_eq!(ids(&w), [vec![1], vec![2], vec![3]]);
+        assert_eq!(
+            w.station,
+            Station::Desk {
+                room: w.rooms[0].id,
+                desk: 0,
+                slot: 0
+            }
+        );
+    }
+
+    /// `c` groups the selection (plus the current screen) into a cluster;
+    /// `C` dissolves it.
+    #[test]
+    fn cluster_groups_the_selection_and_uncluster_undoes_it() {
+        let mut w = three();
+        let now = 0.0;
+        w.command(Cmd::Move(Dir::Right), now); // desk 1: screen 2
+        w.command(Cmd::SelectToggle, now);
+        w.command(Cmd::Move(Dir::Left), now); // back to desk 0: screen 1
+        w.command(Cmd::MakeCluster(Some(ShortName::new("grupo"))), now);
+        let Station::Cluster(id) = w.station else {
+            panic!("{:?}", w.station)
+        };
+        assert_eq!(
+            w.clusters.get(&id).map(|c| c.screens.clone()),
+            Some(vec![ScreenId(1), ScreenId(2)])
+        );
+        w.command(Cmd::Uncluster, now);
+        assert!(w.clusters.is_empty());
+        assert!(matches!(w.station, Station::Desk { .. }));
     }
 
     fn names(w: &World) -> Vec<String> {
