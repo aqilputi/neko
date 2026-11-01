@@ -259,9 +259,8 @@ pub const FALLBACK: &[(&str, &str, &str)] = &[
     ("world.menu", "enter", "world.menu_open"),
     ("world.menu", "space", "world.menu_open"),
     ("world.menu", "esc", "world.menu_close"),
-    // niri parity, not Go-registered names yet (see the task's final
-    // report): move the selected desk to the front/back of its room, and a
-    // real screenshot command
+    // niri parity: move the selected desk to the front/back of its room,
+    // and a real screenshot command (also registered in internal/app/world.go)
     ("world", "world+ctrl+home", "world.move_first"),
     ("world", "world+ctrl+end", "world.move_last"),
     ("normal.world", "Print", "world.screenshot"),
@@ -476,7 +475,7 @@ pub const TITLES: &[(&str, &str)] = &[
     ("world.menu_down", "item de baixo"),
     ("world.menu_open", "abre o item"),
     ("world.menu_close", "fecha o menu"),
-    // niri parity, not Go-registered names yet (see the task's final report)
+    // niri parity (also registered in internal/app/world.go)
     ("world.move_first", "mesa para o início da fila"),
     ("world.move_last", "mesa para o fim da fila"),
     ("world.screenshot", "captura de tela"),
