@@ -1097,6 +1097,18 @@ impl World {
         };
     }
 
+    /// Like [`Self::changed`], but never glides the camera: for a drag or
+    /// ARRUMAR's own commit/cancel (plan §2.1, "a câmera nunca se move por
+    /// causa de um arrasto" — going to the screen afterwards is `h`/`l`,
+    /// SALTO or ANDAR, not an automatic glide).
+    pub(super) fn changed_still(&mut self, now: Time, note: Option<String>) {
+        self.layout_gen += 1;
+        if let Some(n) = note {
+            self.note = Some((now, n));
+        }
+        self.pending.push(Wish::world(Want::Once));
+    }
+
     /// After a layout change: a new generation, the badge, a frame, and the
     /// camera where it belongs (a glide in NAV, a cut in FOCO).
     pub(super) fn changed(&mut self, now: Time, note: Option<String>) {
@@ -1762,9 +1774,7 @@ impl World {
     }
 
     /// `enter` / `Effect::ArrangeCommit`: settle the arranged screen at
-    /// `target`, with the magnets if any are armed (today `magnet::snap` is
-    /// a stub that returns the pose unchanged — this wiring starts working
-    /// for real once it is implemented, without needing to change here).
+    /// `target`, with the magnets if any are armed.
     pub(super) fn arrange_commit(&mut self, now: Time) -> Vec<Out> {
         let Some(a) = self.arrange.take() else {
             return Vec::new();
@@ -1798,12 +1808,15 @@ impl World {
                 st.air = Some(pose.place());
                 st.wall = a.target == ArrangeTarget::Wall;
                 st.scale = pose.scale;
-                self.go_to(Station::Air(a.screen), now, false);
+                // station bookkeeping only: the camera never moves because
+                // of an arrange/drag (plan §2.1) — going to the screen is
+                // h/l, SALTO or ANDAR, like any other station
+                self.station = Station::Air(a.screen);
                 Vec::new()
             }
-            ArrangeTarget::Desk => self.send_to_nearest_desk(a.screen, a.pose.pos, now),
+            ArrangeTarget::Desk => self.send_to_nearest_desk(a.screen, a.pose.pos),
         };
-        self.changed(now, Some("arrumado".into()));
+        self.changed_still(now, Some("arrumado".into()));
         out
     }
 
@@ -1837,7 +1850,7 @@ impl World {
                 self.station = st;
             }
         }
-        self.changed(now, Some("desfeito".into()));
+        self.changed_still(now, Some("desfeito".into()));
         out
     }
 
@@ -2002,7 +2015,7 @@ impl World {
     /// `d` (`to_desk`) on commit: the nearest desk of the current room: no
     /// desk there (an empty room) leaves it in the air, honestly, rather
     /// than pretending.
-    fn send_to_nearest_desk(&mut self, screen: ScreenId, pos: Vec3, now: Time) -> Vec<Out> {
+    fn send_to_nearest_desk(&mut self, screen: ScreenId, pos: Vec3) -> Vec<Out> {
         let room = self.current_room();
         let slots = self.room_desk_slots(room);
         let Some(best) = slots
@@ -2018,7 +2031,10 @@ impl World {
                 pitch: 0.0,
             });
             st.wall = false;
-            self.go_to(Station::Air(screen), now, false);
+            // station bookkeeping only: the camera never moves because of
+            // an arrange/drag (plan §2.1), same as arrange_commit's Air/Wall
+            // branch
+            self.station = Station::Air(screen);
             return Vec::new();
         };
         let Some(r) = self.room_index(best.room) else {
@@ -3995,6 +4011,58 @@ mod tests {
                 "it actually moved: {:?} vs {:?}",
                 committed.center,
                 start_place.center
+            );
+        }
+
+        /// Regression: `arrange_commit`'s Air/Wall branch used to call
+        /// `go_to(Station::Air(..))`, which glides the camera right up to
+        /// the dropped screen (close enough to fill the view) — a direct
+        /// violation of plan §2.1, "a câmera nunca se move por causa de um
+        /// arrasto". Dragging a screen onto a desk (`ArrangeTarget::Desk`,
+        /// via `send_to_nearest_desk`'s "no slots" fallback) had the same
+        /// bug. Both now only touch `self.station`.
+        #[test]
+        fn ctrl_drag_never_moves_the_camera() {
+            let mut w = fixture();
+            let cfg = ptr_cfg();
+            let mut now = 0.0;
+            let id = ScreenId(1);
+            let camera_before = w.camera;
+
+            w.pointer_step(pointer::PtrEv::Mods(CTRL), &cfg, now);
+            let hit = pointer::Hit::Screen(id);
+            let press_at = centre();
+            w.pointer_step(
+                pointer::PtrEv::Press {
+                    button: pointer::Button::Left,
+                    at: press_at,
+                    hit,
+                },
+                &cfg,
+                now,
+            );
+            now += 0.05;
+            let move_at = press_at + Vec2::new(260.0, 0.0);
+            let outs = w.pointer_step(pointer::PtrEv::Motion { at: move_at, hit }, &cfg, now);
+            w.pointer_apply(&outs, now);
+            assert_eq!(
+                w.camera, camera_before,
+                "the camera must not move mid-drag either"
+            );
+
+            let outs = w.pointer_step(
+                pointer::PtrEv::Release {
+                    button: pointer::Button::Left,
+                    at: move_at,
+                },
+                &cfg,
+                now,
+            );
+            w.pointer_apply(&outs, now);
+            assert!(w.is_loose(id), "committed to the air");
+            assert_eq!(
+                w.camera, camera_before,
+                "committing the drag must not move the camera, however far the screen landed"
             );
         }
 
